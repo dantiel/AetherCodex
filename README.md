@@ -31,7 +31,7 @@ Copy `.aethercodex.example` to `.aethercodex` and set your API credentials.
 
 ## Philosophy
 
-Read the [Hermetic Manifest](hermetic.manifest.md). The editor is not painted — it is *discovered* through subtraction. Every pixel of chrome is a pixel stolen from thought.
+The editor is not painted — it is *discovered* through subtraction. Every pixel of chrome is a pixel stolen from thought.
 
 ## Lineage
 

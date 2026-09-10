@@ -9,6 +9,7 @@
 .tm-ai/
 .aether/
 .aethercodex
+hermetic.manifest.md
 
 # ---------------------------------------------------------------------------
 # Build artifacts
