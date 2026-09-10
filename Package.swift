@@ -1,0 +1,72 @@
+// swift-tools-version:5.9
+import PackageDescription
+
+let package = Package(
+    name: "AetherCodex",
+    platforms: [.macOS("26.0")],
+    products: [
+        .executable(name: "AetherCodex", targets: ["AetherCodex"])
+    ],
+    dependencies: [],
+    targets: [
+        .target(
+            name: "CTreeSitter",
+            path: "AetherCodex/Vendor/CTreeSitter",
+            sources: [
+                "core/lib.c",
+                "bridge.c",
+                "grammars/swift/swift_parser.c",
+                "grammars/python/python_parser.c",
+                "grammars/python/python_scanner.c",
+                "grammars/javascript/javascript_parser.c",
+                "grammars/javascript/javascript_scanner.c",
+                "grammars/ruby/ruby_parser.c",
+                "grammars/ruby/ruby_scanner.c",
+                "grammars/rust/rust_parser.c",
+                "grammars/rust/rust_scanner.c",
+                "grammars/go/go_parser.c",
+                "grammars/html/html_parser.c",
+                "grammars/html/html_scanner.c",
+                "grammars/css/css_parser.c",
+                "grammars/css/css_scanner.c",
+                "grammars/json/json_parser.c",
+                "grammars/bash/bash_parser.c",
+                "grammars/bash/bash_scanner.c",
+                "grammars/c/c_parser.c",
+                "grammars/php/php_parser.c",
+                "grammars/php/php_scanner.c",
+                "grammars/markdown/markdown_parser.c",
+                "grammars/markdown/markdown_scanner.c",
+                "grammars/markdown_inline/markdown_inline_parser.c",
+                "grammars/markdown_inline/markdown_inline_scanner.c",
+            ],
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("_POSIX_C_SOURCE", to: "200112L"),
+                .unsafeFlags(["-Wno-ambiguous-macro", "-Wno-macro-redefined"]),
+            ]
+        ),
+        .target(
+            name: "CSafeLayout",
+            path: "AetherCodex/Vendor/CSafeLayout",
+            sources: ["SafeLayoutBridge.m"],
+            publicHeadersPath: "include"
+        ),
+        .executableTarget(
+            name: "AetherCodex",
+            dependencies: ["CTreeSitter", "CSafeLayout"],
+            path: "AetherCodex",
+            exclude: ["Vendor", "Info.plist", "AetherCodex.entitlements"],
+            sources: ["App", "Bridge"],
+            resources: [
+                .process("Resources")
+            ]
+        ),
+        .testTarget(
+            name: "AetherCodexTests",
+            dependencies: ["AetherCodex"],
+            path: "Tests",
+            resources: []
+        )
+    ]
+)

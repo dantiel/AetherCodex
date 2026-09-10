@@ -1,0 +1,28 @@
+# ÆtherCodex configuration template
+#
+# Copy this file to `.aethercodex` (or `~/.aethercodex`) and fill in your own
+# credentials. The real `.aethercodex` is git-ignored and never committed.
+#
+# Load precedence (highest wins):
+#   1. current project directory
+#   2. user home directory (~/.aethercodex)
+#   3. bundle support directory
+
+name: aethercodex-editor
+
+# ---------------------------------------------------------------------------
+# Provider — one active block. Supported api-type values:
+#   deepseek | openai | anthropic | google | ...
+# ---------------------------------------------------------------------------
+api-type:         deepseek
+api-key:          YOUR_API_KEY_HERE
+api-url:          https://api.deepseek.com/v1/chat/completions
+model:            deepseek-chat
+fast-model:       deepseek-chat
+reasoning-model:  yes
+
+# ---------------------------------------------------------------------------
+# Daemon
+# ---------------------------------------------------------------------------
+port:             4557
+allowed-commands: "*"

@@ -1,0 +1,411 @@
+import Cocoa
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    var mainWindowController: MainWindowController?
+    
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        RubyBridge.shared.initialize()
+        mainWindowController = MainWindowController()
+        restoreSession()
+        // Capture the intended frame before the SwiftUI hosting view collapses the
+        // window to its content's ideal size during the first layout pass.
+        let intendedFrame = mainWindowController?.window?.frame
+        mainWindowController?.showWindow(self)
+        mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        // Re-assert the intended frame after layout settles. Reading the saved
+        // frame here would be wrong — the collapse already re-saved the collapsed
+        // size — so we use the value captured above.
+        let reassertFrame = { [weak self] in
+            guard let self, let window = self.mainWindowController?.window,
+                  let frame = intendedFrame else { return }
+            window.setFrame(frame, display: true, animate: false)
+        }
+        // The SwiftUI hosting view collapses the window to its content's ideal
+        // size (the document height) during its first layout pass, at a
+        // non-deterministic moment. Re-assert the intended frame several times
+        // so one of them lands after the collapse and sticks.
+        for delay in [0.5, 1.0, 1.5, 2.0, 2.5, 3.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: reassertFrame)
+        }
+        setupMenu()
+        NSApp.activate(ignoringOtherApps: true)
+        
+        // Open files passed on command line
+        let args = CommandLine.arguments.dropFirst() // drop executable path
+        for arg in args {
+            let url = URL(fileURLWithPath: arg)
+            if FileManager.default.fileExists(atPath: arg) {
+                mainWindowController?.editorViewController?.openFile(url)
+            }
+        }
+    }
+    
+    func applicationWillTerminate(_ notification: Notification) {
+        saveSession()
+        RubyBridge.shared.cleanup()
+    }
+    
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        let url = URL(fileURLWithPath: filename)
+        if FileManager.default.fileExists(atPath: filename) {
+            mainWindowController?.editorViewController?.openFile(url)
+            NSApp.activate(ignoringOtherApps: true)
+            return true
+        }
+        return false
+    }
+    
+    // MARK: - Session Persistence
+    
+    private func restoreSession() {
+        let s = SessionState.shared
+        guard let mwc = mainWindowController else { return }
+        
+        // Force-load window so it exists for frame/file restore
+        _ = mwc.window
+        guard let window = mwc.window else { return }
+        
+        // Restore window frame
+        if let frame = s.windowFrame {
+            let rect = NSRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
+            window.setFrame(rect, display: true)
+        }
+        
+        // Restore open file FIRST (before folder, so editor is ready)
+        if let path = s.lastOpenFile {
+            let url = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: path) {
+                mwc.editorViewController?.openFile(url)
+            }
+        }
+        
+        // Restore project folder
+        if let path = s.lastProjectFolder {
+            let url = URL(fileURLWithPath: path)
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+                mwc.fileBrowser?.openFolder(url)
+            }
+        }
+        
+        // Restore sidebar width if stored
+        if let w = s.sidebarWidth {
+            mwc.restoreSidebarWidth(CGFloat(w))
+        }
+        if let w = s.pythiaWidth {
+            mwc.restorePythiaWidth(CGFloat(w))
+        }
+
+        // Restore overlay mode
+        if s.fileBrowserOverlay {
+            ThemeSettings.shared.fileBrowserOverlay = true
+            mwc.syncOverlayMode()
+        }
+
+        // Restore active theme
+        if let themeName = s.activeThemeName,
+           let index = ThemeRegistry.shared.themes.firstIndex(where: { $0.name == themeName }) {
+            ThemeRegistry.shared.activate(index: index)
+        }
+    }
+    
+    // Window lifecycle — called by MainWindowController when closing
+    func windowControllerWillClose(_ controller: MainWindowController) {
+        saveSession()
+        if mainWindowController === controller {
+            mainWindowController = nil
+        }
+    }
+    
+    // MARK: - Menu Actions
+    
+    @objc func newDocument(_ sender: Any?) {
+        let mwc = MainWindowController()
+        mainWindowController = mwc
+        mwc.showWindow(nil)
+        mwc.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    @objc func openDocument(_ sender: Any?) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            let mwc = self.mainWindowController ?? {
+                let wc = MainWindowController()
+                self.mainWindowController = wc
+                wc.showWindow(nil)
+                return wc
+            }()
+            mwc.editorViewController?.openFile(url)
+            mwc.saveSessionState()
+        }
+    }
+    
+    private func saveSession() {
+        guard let mwc = mainWindowController else { return }
+        mwc.saveSessionState()
+        SessionState.shared.flush()  // no-op kept for API compatibility; UserDefaults syncs automatically
+    }
+    
+    private func setupMenu() {
+        let mainMenu = NSMenu()
+        
+        // ── App ──
+        let appMenuItem = NSMenuItem()
+        appMenuItem.submenu = NSMenu(title: "AetherCodex")
+        appMenuItem.submenu?.addItem(withTitle: "About", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenuItem.submenu?.addItem(NSMenuItem.separator())
+        appMenuItem.submenu?.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        mainMenu.addItem(appMenuItem)
+        
+        // ── File ──
+        let fileMenuItem = NSMenuItem()
+        fileMenuItem.submenu = NSMenu(title: "File")
+        fileMenuItem.submenu?.addItem(withTitle: "New", action: #selector(AppDelegate.newDocument(_:)), keyEquivalent: "n")
+        fileMenuItem.submenu?.addItem(withTitle: "Open…", action: #selector(AppDelegate.openDocument(_:)), keyEquivalent: "o")
+        fileMenuItem.submenu?.addItem(withTitle: "Open Folder…", action: #selector(MainWindowController.openFolder(_:)), keyEquivalent: "O")
+        fileMenuItem.submenu?.addItem(withTitle: "Save", action: #selector(MainWindowController.saveDocument(_:)), keyEquivalent: "s")
+        mainMenu.addItem(fileMenuItem)
+
+        // ── Edit ──
+        let editMenuItem = NSMenuItem()
+        editMenuItem.submenu = NSMenu(title: "Edit")
+        editMenuItem.submenu?.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenuItem.submenu?.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenuItem.submenu?.addItem(NSMenuItem.separator())
+        editMenuItem.submenu?.addItem(withTitle: "Cut", action: #selector(NSTextView.cut(_:)), keyEquivalent: "x")
+        editMenuItem.submenu?.addItem(withTitle: "Copy", action: #selector(NSTextView.copy(_:)), keyEquivalent: "c")
+        editMenuItem.submenu?.addItem(withTitle: "Paste", action: #selector(NSTextView.paste(_:)), keyEquivalent: "v")
+        editMenuItem.submenu?.addItem(withTitle: "Delete", action: #selector(NSTextView.delete(_:)), keyEquivalent: "\u{8}")
+        editMenuItem.submenu?.addItem(NSMenuItem.separator())
+        editMenuItem.submenu?.addItem(withTitle: "Select All", action: #selector(NSTextView.selectAll(_:)), keyEquivalent: "a")
+        editMenuItem.submenu?.addItem(NSMenuItem.separator())
+        // Find submenu
+        let findMenu = NSMenu(title: "Find")
+        findMenu.addItem(withTitle: "Find…", action: #selector(EditorViewController.toggleIncrementalSearch), keyEquivalent: "s")
+        findMenu.item(at: 0)?.keyEquivalentModifierMask = .control
+        findMenu.addItem(withTitle: "Find Next", action: #selector(EditorViewController.searchNavigateForward), keyEquivalent: "s")
+        findMenu.item(at: 1)?.keyEquivalentModifierMask = [.control, .shift]
+        let findItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
+        findItem.submenu = findMenu
+        editMenuItem.submenu?.addItem(findItem)
+        mainMenu.addItem(editMenuItem)
+
+        // ── View ──
+        let viewMenuItem = NSMenuItem()
+        viewMenuItem.submenu = NSMenu(title: "View")
+        viewMenuItem.submenu?.addItem(withTitle: "Toggle File Browser", action: #selector(MainWindowController.toggleFileBrowser(_:)), keyEquivalent: "1")
+        viewMenuItem.submenu?.addItem(withTitle: "Toggle Pythia", action: #selector(MainWindowController.togglePythia(_:)), keyEquivalent: "2")
+        viewMenuItem.submenu?.addItem(NSMenuItem.separator())
+        let biggerItem = NSMenuItem(title: "Bigger", action: #selector(AppDelegate.biggerFont), keyEquivalent: "+")
+        biggerItem.keyEquivalentModifierMask = .command
+        viewMenuItem.submenu?.addItem(biggerItem)
+        let smallerItem = NSMenuItem(title: "Smaller", action: #selector(AppDelegate.smallerFont), keyEquivalent: "-")
+        smallerItem.keyEquivalentModifierMask = .command
+        viewMenuItem.submenu?.addItem(smallerItem)
+        let resetItem = NSMenuItem(title: "Reset Size", action: #selector(AppDelegate.resetFontSize), keyEquivalent: "0")
+        resetItem.keyEquivalentModifierMask = .command
+        viewMenuItem.submenu?.addItem(resetItem)
+        mainMenu.addItem(viewMenuItem)
+
+        // ── Theme ──
+        let themeMenuItem = NSMenuItem()
+        themeMenuItem.submenu = NSMenu(title: "Theme")
+        for (i, name) in ThemeRegistry.shared.themes.map({ $0.name }).enumerated() {
+            let item = NSMenuItem(title: name, action: #selector(AppDelegate.selectTheme(_:)), keyEquivalent: "")
+            item.tag = i
+            item.state = (i == ThemeRegistry.shared.activeIndex) ? .on : .off
+            themeMenuItem.submenu?.addItem(item)
+        }
+        themeMenuItem.submenu?.addItem(NSMenuItem.separator())
+        themeMenuItem.submenu?.addItem(withTitle: "Next Theme", action: #selector(AppDelegate.nextTheme(_:)), keyEquivalent: "]")
+        themeMenuItem.submenu?.addItem(withTitle: "Previous Theme", action: #selector(AppDelegate.previousTheme(_:)), keyEquivalent: "[")
+        themeMenuItem.submenu?.addItem(NSMenuItem.separator())
+        themeMenuItem.submenu?.addItem(withTitle: "Theme Settings…", action: #selector(AppDelegate.openThemeSettings(_:)), keyEquivalent: ",")
+        mainMenu.addItem(themeMenuItem)
+        
+        // ── Æther ──
+        let aetherMenuItem = NSMenuItem()
+        aetherMenuItem.submenu = NSMenu(title: "Æther")
+        aetherMenuItem.submenu?.addItem(withTitle: "Start Ruby Daemon", action: #selector(AppDelegate.startRubyDaemon), keyEquivalent: "")
+        aetherMenuItem.submenu?.addItem(withTitle: "Stop Ruby Daemon", action: #selector(AppDelegate.stopRubyDaemon), keyEquivalent: "")
+        aetherMenuItem.submenu?.addItem(NSMenuItem.separator())
+        aetherMenuItem.submenu?.addItem(withTitle: "Test Mnemosyne", action: #selector(AppDelegate.testMnemosyne), keyEquivalent: "")
+        aetherMenuItem.submenu?.addItem(withTitle: "Test Aegis", action: #selector(AppDelegate.testAegis), keyEquivalent: "")
+        aetherMenuItem.submenu?.addItem(NSMenuItem.separator())
+        aetherMenuItem.submenu?.addItem(withTitle: "Daemon Status", action: #selector(AppDelegate.daemonStatus), keyEquivalent: "")
+        aetherMenuItem.submenu?.addItem(NSMenuItem.separator())
+        let debugItem = NSMenuItem(title: "Show Æther Debug", action: #selector(AppDelegate.toggleAetherDebug), keyEquivalent: "d")
+        debugItem.keyEquivalentModifierMask = [.command, .shift]
+        aetherMenuItem.submenu?.addItem(debugItem)
+        mainMenu.addItem(aetherMenuItem)
+        
+        
+        NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func selectTheme(_ sender: NSMenuItem) {
+        ThemeRegistry.shared.activate(index: sender.tag)
+        updateThemeMenu()
+    }
+
+    @objc private func nextTheme(_ sender: NSMenuItem) {
+        ThemeRegistry.shared.next()
+        updateThemeMenu()
+    }
+
+    @objc private func previousTheme(_ sender: NSMenuItem) {
+        ThemeRegistry.shared.previous()
+        updateThemeMenu()
+    }
+
+    @objc private func openThemeSettings(_ sender: NSMenuItem) {
+        ThemeSettingsViewController.open()
+    }
+
+    private func updateThemeMenu() {
+        guard let themeMenu = NSApp.mainMenu?.item(withTitle: "Theme")?.submenu else { return }
+        for item in themeMenu.items {
+            item.state = (item.tag == ThemeRegistry.shared.activeIndex) ? .on : .off
+        }
+    }
+
+    // MARK: - Font Size
+
+    @objc func biggerFont() {
+        ThemeSettings.shared.fontSize = min(48, ThemeSettings.shared.fontSize + 1)
+    }
+
+    @objc func smallerFont() {
+        ThemeSettings.shared.fontSize = max(6, ThemeSettings.shared.fontSize - 1)
+    }
+
+    @objc func resetFontSize() {
+        ThemeSettings.shared.fontSize = 13
+    }
+    
+    // MARK: - Æther Ruby Bridge
+    
+    @objc func startRubyDaemon() {
+        NSLog("[AppDelegate] startRubyDaemon called")
+        Task {
+            NSLog("[AppDelegate] Inside Task, calling RubyBridge.shared.start()")
+            do {
+                try await RubyBridge.shared.start()
+                NSLog("[AppDelegate] RubyBridge.start() succeeded")
+                await MainActor.run {
+                    showAlert(title: "Æther Daemon", message: "Ruby daemon started successfully")
+                }
+            } catch {
+                NSLog("[AppDelegate] RubyBridge.start() failed: \(error)")
+                await MainActor.run {
+                    showAlert(title: "Error", message: "Failed to start daemon: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+    
+    @objc func stopRubyDaemon() {
+        RubyBridge.shared.stop()
+        showAlert(title: "Æther Daemon", message: "Ruby daemon stopped")
+    }
+    
+    @objc func testMnemosyne() {
+        NSLog("[AppDelegate] testMnemosyne called")
+        Task {
+            do {
+                NSLog("[AppDelegate] Starting daemon check...")
+                // First ensure daemon is running
+                if !RubyBridge.shared.isRunning {
+                    NSLog("[AppDelegate] Daemon not running, starting...")
+                    try await RubyBridge.shared.start()
+                    NSLog("[AppDelegate] Daemon started")
+                }
+                
+                NSLog("[AppDelegate] Sending remember...")
+                // Store a test note
+                let noteResult = try await RubyBridge.shared.remember(
+                    content: "Test note from Swift at \(Date())",
+                    tags: ["test", "swift", "aethercodex"],
+                    links: []
+                )
+                NSLog("[AppDelegate] Remember result: \(noteResult ?? [:])")
+                
+                NSLog("[AppDelegate] Recalling notes...")
+                // Recall notes
+                let notes = try await RubyBridge.shared.recallNotes(query: "test", limit: 5)
+                NSLog("[AppDelegate] Recalled \(notes.count) notes")
+                
+                await MainActor.run {
+                    let notesText = notes.map { note in
+                        guard let content = note["content"] as? String,
+                              let id = note["id"] as? Int else { return "" }
+                        return "[\(id)] \(content)"
+                    }.joined(separator: "\n")
+                    
+                    let storedId = noteResult?["id"] as? Int ?? -1
+                    showAlert(title: "Mnemosyne Test", message: "Stored note ID: \(storedId)\n\nRecall results:\n\(notesText)")
+                }
+            } catch {
+                NSLog("[AppDelegate] Error: \(error)")
+                await MainActor.run {
+                    showAlert(title: "Error", message: error.localizedDescription)
+                }
+            }
+        }
+    }
+    
+    @objc func testAegis() {
+        Task {
+            do {
+                // First ensure daemon is running
+                if !RubyBridge.shared.isRunning {
+                    try await RubyBridge.shared.start()
+                }
+                
+                // Update Aegis
+                let updateResult = try await RubyBridge.shared.updateAegis(
+                    summary: "Testing Aegis from Swift at \(Date())",
+                    tags: ["swift", "test"]
+                )
+                
+                // Get Aegis state
+                let aegis = try await RubyBridge.shared.getAegis()
+                
+                await MainActor.run {
+                    let summary = aegis?["summary"] as? String ?? "none"
+                    let tags: [String] = {
+                        if let arr = aegis?["tags"] as? [String] { return arr }
+                        if let str = aegis?["tags"] as? String, !str.isEmpty { return str.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) } }
+                        return []
+                    }()
+                    showAlert(title: "Aegis Test", message: "Updated: \(updateResult ?? "failed")\n\nCurrent state:\nSummary: \(summary)\nTags: \(tags.joined(separator: ", "))")
+                }
+            } catch {
+                await MainActor.run {
+                    showAlert(title: "Error", message: error.localizedDescription)
+                }
+            }
+        }
+    }
+    
+    @objc func toggleAetherDebug() {
+        AetherDebugWindowController.shared.toggle()
+    }
+
+    @objc func daemonStatus() {
+        let isRunning = RubyBridge.shared.isRunning
+        showAlert(title: "Daemon Status", message: isRunning ? "Ruby daemon is running" : "Ruby daemon is stopped")
+    }
+    
+    private func showAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+}

@@ -1,0 +1,12 @@
+projectDirectory = "$CWD"
+
+[ *.swift ]
+fileType = "source.swift"
+
+[ *.rb ]
+fileType = "source.ruby"
+
+exclude = "{*.xcodeproj,*.xcworkspace,build/,DerivedData/}"
+windowTitle = "AetherCodex Native — $CWD"
+softTabs = true
+tabSize = 4
