@@ -1,65 +1,42 @@
-# ÆtherCodex — Hermetic Native Editor
+# ÆtherCodex
 
-> *"Precision in code plane mirrors precision in astral plane."*
+> *The window is a glass athanor — an alchemical furnace for the AI century.*
 
-Native macOS editor with embedded AI oracle — a liminal bridge between code and the arcane.
+ÆtherCodex is a native macOS code editor with an embedded AI oracle — **Pythia** — attended by a council of ten companions. It is the direct descendant of the [ÆtherCodex TextMate plugin](https://github.com/dantiel/AetherCodex-TextMate), reborn as a standalone native application.
 
-## Quick Start
+**Status: Alpha — v0.1.0.** Born from the ashes, still rising.
 
-```bash
-swift build && .build/debug/AetherCodex
-```
+## What it is
 
-Requires: **macOS 26 (Tahoe)**, Swift 5.9+, Xcode Command Line Tools.
-
-## Architecture
-
-```
-AetherCodex (native SwiftUI/AppKit hybrid)
-├── Editor            NSTextView-based code editor (AppKit surface)
-├── Sidebar           FileBrowserScrollContent — file tree + PathBreadcrumbHeader (SwiftUI)
-├── Pythia            PythiaPanel — pure SwiftUI chat (companions, streaming, tools)
-└── RubyBridge        singleton — framed JSON protocol over pipes to Ruby/standalone_daemon.rb
-```
-
-All chrome (top bar, sidebar, Pythia pane) is expressed in SwiftUI via the
-macOS 26 `safeAreaBar(edge:)` / `.scrollEdgeEffectStyle` / `.glassEffect` APIs.
-The only AppKit bridge is `AppKitViewHost` (`NSViewRepresentable`) hosting the
-editor surface and the sidebar container.
-
-## Files
-
-| Path | Role |
-|------|------|
-| `Package.swift` | SPM manifest, macOS .v13, swift-tools-version 5.9 |
-| `AetherCodex/App/AppDelegate.swift` | `@main` entry, menu bar, Ruby daemon lifecycle |
-| `AetherCodex/App/MainWindowController.swift` | Window + `EditorContainerView` host |
-| `AetherCodex/App/SafeAreaBarHost.swift` | `EditorContainerView`, `safeAreaBar` chrome, `AppKitViewHost` |
-| `AetherCodex/App/EditorViewController.swift` | NSTextView editor + AppKit surface |
-| `AetherCodex/App/FileBrowserViewController.swift` | Sidebar + `PathBreadcrumbHeader` (glass breadcrumb) |
-| `AetherCodex/App/PythiaPanel.swift` | Pure SwiftUI Pythia (`PythiaChatModel` + `PythiaPanel`) |
-| `AetherCodex/Bridge/RubyBridge.swift` | Singleton for Ruby daemon interop |
-| `Ruby/` | Ruby backend daemon (`standalone_daemon.rb`) |
-| `docs/phase-iii-glass-breadcrumb-swiftui-pythia.md` | Phase III architecture + maintenance |
-| `docs/phase-x-companion-omnipresence-riss-makro.md` | Companion-Omnipräsenz + Riss-Makro (Task #17) |
-| `docs/phase-xi-flash-neufenser-aether-debug.md` | Flash-AI-Neufenser + Æther-Debug-Fenster (Task #18) |
+- **Native** — Swift + AppKit. No Electron. The editor *is* the æther.
+- **Pythia** — embedded AI via WKWebView, with a Ruby daemon (`standalone_daemon.rb`) as its soul: oracle, conjuration, live CLI session, memory (Mnemosyne / Aegis), and a companion council (🦉 Eule, 🦊 Kitsune, 🔥 Phönix, 🐍 Ouroboros, 🐈 Bastet, 🐺 Fenrir, 🌊 Undine, 🦢 Schwan, 🐉 Drache, 🐦‍⬛ Corax).
+- **Glass athanor** — progressive blur, depth over decoration, invisible chrome. The interface dissolves into the work.
+- **Syntax highlighting** — tree-sitter via embedded grammars.
+- **Markdown rendering** — live, with syntax themes.
+- **Æther Debug window** — floating glass log with progressive scroll-edge blur and auto-scroll lock.
 
 ## Build
 
 ```bash
-swift build                          # Debug
-swift build -c release               # Release optimized
-./bundle_app.sh                      # Bundle into AetherCodex.app
-open AetherCodex.app                 # Launch
+open Package.swift
+# or: xcodebuild -scheme AetherCodex build
+# bundle: ./bundle_app.sh
 ```
 
-## Roadmap (Hermetic Rhythm)
+Requires Xcode and Ruby.
 
-**Scaffold → Bridge → Polish → Ship**
+## Configure Pythia
 
-1. ✅ Ruby daemon bridged (framed JSON protocol)
-2. ✅ Syntax highlighting, line numbers, themes
-3. ✅ Single-pane glass architecture (`docs/single-pane-architecture.md`)
-4. ✅ Phase III: glass breadcrumb nav + pure SwiftUI Pythia (`docs/phase-iii-glass-breadcrumb-swiftui-pythia.md`)
-5. ⬜ Inline terminal / REPL (vision state 4)
-6. ⬜ Distraction-free quick peek polish
+Copy `.aethercodex.example` to `.aethercodex` and set your API credentials.
+
+## Philosophy
+
+Read the [Hermetic Manifest](hermetic.manifest.md). The editor is not painted — it is *discovered* through subtraction. Every pixel of chrome is a pixel stolen from thought.
+
+## Lineage
+
+This project descends from the [ÆtherCodex TextMate plugin](https://github.com/dantiel/AetherCodex-TextMate) — same patterns, new body. The plugin repo remains as archive.
+
+## License
+
+[MIT](LICENSE) — © 2026 darographix
