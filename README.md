@@ -5,6 +5,8 @@
 ÆtherCodex is a native macOS code editor with an embedded AI oracle — **Pythia** — attended by a council of ten companions. It is the direct descendant of the [ÆtherCodex TextMate plugin](https://github.com/dantiel/AetherCodex-TextMate), reborn as a standalone native application.
 
 **Status: Alpha — v0.1.0.** Born from the ashes, still rising.
+**Cover art:** [The Iridescent Black Square — by Kashmiri Malewitch](docs/the-iridescent-black-square.html)
+
 
 ## What it is
 
