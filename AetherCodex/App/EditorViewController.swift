@@ -18,6 +18,9 @@ private final class HermeticTextView: NSTextView {
 extension Notification.Name {
     /// Posted when the titlebar chrome (mask + traffic lights) becomes visible or hidden.
     static let editorTitlebarVisibilityDidChange = Notification.Name("editorTitlebarVisibilityDidChange")
+
+    /// Posted when a memory card's file link is tapped — opens the file in the editor.
+    static let openFileInEditor = Notification.Name("openFileInEditor")
 }
 
 /// Glass-effect drag handle for the titlebar zone.
@@ -60,9 +63,19 @@ class EditorViewController: NSViewController {
     var isDirty = false
     var sidebarVisible = false
     let richDocument = RichTextDocument()
+    let imagePreview = ImagePreviewModel()
+    let htmlPreview = HTMLPreviewModel()
+
+    /// File URL whose source is currently resident in the text view (HTML mode).
+    /// Lets source→preview→source round-trips preserve unsaved edits.
+    private var htmlSourceLoadedFor: URL?
 
     var supportsRichText: Bool {
         ["md", "markdown", "mdown", "rtf"].contains(currentFile?.pathExtension.lowercased() ?? "")
+    }
+
+    var supportsHTML: Bool {
+        HTMLFileType.isHTML(currentFile ?? URL(fileURLWithPath: "/"))
     }
 
     func showRichText() {
@@ -1114,6 +1127,7 @@ class EditorViewController: NSViewController {
     func newDocument() {
         guard confirmReplacingRichDocument() else { return }
         richDocument.active = false
+        imagePreview.clear()
         guard let tv = textView else {
             print("[EditorViewController] textView nil — view not loaded")
             return
@@ -1122,10 +1136,15 @@ class EditorViewController: NSViewController {
         backgroundParseProgress = 0.0
         isLargeFile = false
         foldState.clear()
-        currentLanguageName = "Swift"
-        SyntaxOracle.shared.setLanguage(forExtension: "swift")
+
+        // New-window contract (GeneralSettings): a blank pane or a flash
+        // conjuration. Blank = truly empty, plain text; flash = placeholder
+        // that the Oracle replaces asynchronously.
+        let mode = GeneralSettings.shared.newFileMode
+        currentLanguageName = mode == .blank ? "Plain Text" : "Swift"
+        SyntaxOracle.shared.setLanguage(forExtension: mode == .blank ? "text" : "swift")
         // suppressTextDidChange managed by caller
-        tv.string = exampleCode
+        tv.string = mode == .blank ? "" : exampleCode
         currentFile = nil
         isDirty = false
         layoutManager?.ghostSuggestion = nil
@@ -1139,7 +1158,9 @@ class EditorViewController: NSViewController {
         // ZIEL A — the window never stays a mere placeholder: a fresh hermetic
         // "hello æther" script is conjured asynchronously. The synchronous
         // path above remains the fallback — fail-soft, never blocking.
-        scheduleFlashConjuration()
+        if mode == .flash {
+            scheduleFlashConjuration()
+        }
     }
 
     /// ZIEL A — Flash-AI-Neufenser. The synchronous placeholder is already in
@@ -1151,7 +1172,7 @@ class EditorViewController: NSViewController {
         let generation = flashGeneration
         let root = RubyBridge.shared.projectRoot
         flashTask = Task.detached(priority: .utility) { [weak self] in
-            let language = FlashAetherConjurer.pickLanguage(root: root)
+            let language = GeneralSettings.shared.resolvedLanguage(root: root)
             let code: String
             do {
                 code = try await FlashAetherConjurer.summon(language: language)
@@ -1188,6 +1209,20 @@ class EditorViewController: NSViewController {
     func openFile(_ url: URL) {
             Task { @MainActor in AetherContext.shared.activate(for: url) }
             guard confirmReplacingRichDocument() else { return }
+           
+            // ── Image preview: raster files route to the viewer, not the text path ──
+            if ImageFileType.isImage(url) {
+                presentImage(url)
+                return
+            }
+            // ── HTML preview: web documents route to the WebKit viewer ──
+            if HTMLFileType.isHTML(url) {
+                presentHTML(url)
+                return
+            }
+            imagePreview.clear()
+            htmlPreview.clear()
+           
             guard let tv = textView else {
                 print("[EditorViewController] textView nil — view not loaded")
                 return
@@ -1277,7 +1312,107 @@ class EditorViewController: NSViewController {
             return data.contains(0)
         }
 
+    /// Routes an image file into the raster viewer, leaving text/rich-text
+    /// state clean so the SwiftUI surface swaps back without stale text.
+    private func presentImage(_ url: URL) {
+        backgroundParseWork?.cancel()
+        foldState.clear()
+        richDocument.active = false
+        imagePreview.onDirtyChange = { [weak self] dirty in
+            guard let self else { return }
+            self.isDirty = dirty
+            self.updateTitle()
+        }
+        imagePreview.load(url: url)
+        currentFile = url
+        currentLanguageName = "Image"
+        isDirty = false
+        updateTitle()
+        updateStatusBar()
+    }
+
+    /// Routes an HTML file into the WebKit preview, leaving text/rich-text
+    /// state clean so the SwiftUI surface swaps back without stale text.
+    private func presentHTML(_ url: URL) {
+        backgroundParseWork?.cancel()
+        foldState.clear()
+        richDocument.active = false
+        imagePreview.clear()
+        htmlSourceLoadedFor = nil
+        htmlPreview.loadFile(url: url)
+        currentFile = url
+        currentLanguageName = "HTML"
+        isDirty = false
+        updateTitle()
+        updateStatusBar()
+    }
+
+    /// Leaves the WebKit preview and shows the raw HTML source in the code editor.
+    /// If the source is already resident in the text view (e.g. after editing then
+    /// previewing), it is preserved rather than re-read from disk.
+    func showHTMLSource() {
+        guard let url = htmlPreview.url ?? currentFile else { return }
+        if htmlSourceLoadedFor == url, let tv = textView, !tv.string.isEmpty {
+            htmlPreview.clear()
+            currentLanguageName = "HTML"
+            updateTitle()
+            updateStatusBar()
+            return
+        }
+        guard let tv = textView else { return }
+        do {
+            let hlm = layoutManager as? HighlightingLayoutManager
+            hlm?.lineHighlightColor = nil
+            foldState.clear()
+            SyntaxOracle.shared.setLanguage(forExtension: url.pathExtension)
+            currentLanguageName = "HTML"
+            richDocument.active = false
+            let source = try String(contentsOf: url, encoding: .utf8)
+            suppressTextDidChange = true
+            tv.string = source
+            suppressTextDidChange = false
+            lineNumberGutter?.needsDisplay = true
+            currentFile = url
+            isDirty = false
+            updateTitle()
+            applyThemeChrome()
+            highlightFullDocument()
+            detectFolds()
+            notifyDocumentChange()
+            htmlSourceLoadedFor = url
+        } catch { NSApp.presentError(error) }
+    }
+
+    /// Re-enters WebKit preview from source mode, rendering the *current* editor
+    /// contents (so unsaved edits are reflected) with the file's directory as the
+    /// base URL for relative assets.
+    func previewHTML() {
+        guard let url = currentFile, HTMLFileType.isHTML(url) else { return }
+        backgroundParseWork?.cancel()
+        richDocument.active = false
+        imagePreview.clear()
+        let source = textView?.string ?? ""
+        htmlSourceLoadedFor = url
+        htmlPreview.loadHTML(source, baseURL: url)
+        currentFile = url
+        currentLanguageName = "HTML"
+        isDirty = false
+        updateTitle()
+        updateStatusBar()
+    }
+
     func saveDocument() {
+        if imagePreview.isActive {
+            let dims = imagePreview.pixelSize.map { "\(Int($0.width))×\(Int($0.height)) px" } ?? "—"
+            let format = imagePreview.originalFormat.displayName
+            onStatusChange?(dims, format, "Image", isDirty)
+            return
+        }
+        if htmlPreview.isActive {
+            onStatusChange?("Web Preview", "HTML", "HTML", isDirty)
+            return
+        }
+        if htmlPreview.isActive { return }
         guard let url = currentFile else { return }
         do {
             if richDocument.active {
@@ -1293,7 +1428,8 @@ class EditorViewController: NSViewController {
     }
 
     private func confirmReplacingRichDocument() -> Bool {
-        guard isDirty, richDocument.active || supportsRichText else { return true }
+        let imageDirty = imagePreview.isActive && imagePreview.isDirty
+        guard isDirty, richDocument.active || supportsRichText || imageDirty else { return true }
         let alert = NSAlert()
         alert.messageText = "Save changes to \(currentFile?.lastPathComponent ?? "this document")?"
         alert.informativeText = "Opening another document will replace the current text."
@@ -1322,6 +1458,12 @@ class EditorViewController: NSViewController {
 
     /// Post status bar info via callback so MainWindowController can update the glass bar.
     private func updateStatusBar() {
+        if imagePreview.isActive {
+            let dims = imagePreview.pixelSize.map { "\(Int($0.width))×\(Int($0.height)) px" } ?? "—"
+            let format = imagePreview.originalFormat.displayName
+            onStatusChange?(dims, format, "Image", isDirty)
+            return
+        }
         let lineCol: String = {
             guard let tv = textView, tv.string.count > 0 else {
                 return "Ln 1, Col 1"

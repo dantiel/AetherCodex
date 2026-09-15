@@ -116,9 +116,11 @@ module AetherLink
 
     # Send a prompt or task to a peer context — only if it's not busy.
     # Returns { ok: true, answer:, html: } or { ok: false, error:, busy: }.
-    def invoke(context_name, prompt:, type: 'chat', from_context: own_name)
+    def invoke(context_name, prompt:, type: 'chat', from_context: own_name,
+               memory: nil, metempsychosis: false)
       response = query(context_name, '/aether/invoke',
-                       { prompt: prompt, type: type, from_context: from_context })
+                       { prompt: prompt, type: type, from_context: from_context,
+                         memory: memory, metempsychosis: metempsychosis })
       return { ok: false, error: 'No response', busy: nil } unless response
       if response[:error]
         { ok: false, error: response[:error], busy: response[:busy] }

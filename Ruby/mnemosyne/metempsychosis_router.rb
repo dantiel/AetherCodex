@@ -9,14 +9,19 @@ class Mnemosyne
 
 
     # Metempsychosis — the transmigration of memory between contexts.
+    # Normalize DB-stored comma-joined strings into clean arrays for cross-context payloads.
+    def normalize_list(value) = Array(value).flat_map { |v| v.is_a?(String) ? v.split(',') : v }.map(&:strip).reject(&:empty?)
+
     # Queries another task's notes (or global memory) as if recalling a past life.
     # +from_task+ : integer task ID whose memory to consult; nil for global notes only.
     # +from_context+ : remote context name — queries peer via ÆtherLink instead of local DB.
     # +to_context+ : remote context name — pushes matching notes into peer's memory.
     # +create_task_in+ : remote context name — spawns a task on peer, using +query+ as title.
+    # +invoke_in+      : remote context name - execute +query+ as a prompt there; the peer
+    #                    works with the combined memories of both contexts.
     # Returns matching notes plus a summary of the target task's state (plan, status, phase results).
     def metempsychosis(query:, from_task: nil, limit: 3, subscribe: false, unsubscribe: false,
-                       from_context: nil, to_context: nil, create_task_in: nil, link: false)
+                       from_context: nil, to_context: nil, create_task_in: nil, invoke_in: nil, link: false)
       # Cross-context: query remote context's memory
       if from_context
         result = AetherLink.query(from_context, '/aether/metempsychosis',
@@ -32,24 +37,43 @@ class Mnemosyne
         local_result = metempsychosis(query: query, from_task: from_task, limit: limit)
         notes = local_result[:notes] || []
         endpoint = link ? '/aether/link_note' : '/aether/transmigrate'
-        notes.each do |note|
-          payload = { tags: note[:tags], links: note[:links], source_context: AetherLink.own_name }
+        confirmed_ids = notes.filter_map do |note|
+          payload = { tags: normalize_list(note[:tags]), links: normalize_list(note[:links]),
+                      source_context: AetherLink.own_name }
           if link
             payload[:source_note_id] = note[:id]
           else
             payload[:content] = note[:content]
           end
-          AetherLink.query(to_context, endpoint, payload)
+          response = AetherLink.query(to_context, endpoint, payload)
+          response[:id] if response.is_a?(Hash) && response[:ok] && response[:id]
         end
         verb = link ? 'linked' : 'transmigrated'
-        return local_result.merge("#{verb}_to": to_context, "#{verb}_count": notes.size)
+        return local_result.merge("#{verb}_to": to_context,
+                                  "#{verb}_count": confirmed_ids.size,
+                                  "#{verb}_ids": confirmed_ids,
+                                  "#{verb}_attempted": notes.size)
       end
 
       # Cross-context: spawn a task on remote context
       if create_task_in
         result = AetherLink.query(create_task_in, '/aether/create_task',
                                   { title: query, plan: query, source_context: AetherLink.own_name })
-        return result || { error: "Context '#{create_task_in}' unreachable" }
+        if result.is_a?(Hash) && result[:ok] && result[:id]
+          return result
+        end
+        return { error: result&.dig(:error) || "Context '#{create_task_in}' unreachable or rejected spawn" }
+      end
+
+      # Cross-context: execute +query+ as a prompt in the remote context. The origin's
+      # relevant memories are transmitted so the peer works with both contexts combined.
+      if invoke_in
+        origin_memory = Mnemosyne.recall_notes(query, limit: limit)
+        result = AetherLink.invoke(invoke_in, prompt: query, type: 'chat',
+                                             from_context: AetherLink.own_name,
+                                             memory: origin_memory, metempsychosis: true)
+        return { invoked_in: invoke_in, via_metempsychosis: true,
+                 source_context: AetherLink.own_name }.merge(result || { error: "Context '#{invoke_in}' unreachable" })
       end
 
       query_tokens = Mnemosyne.tokenize(query.to_s)

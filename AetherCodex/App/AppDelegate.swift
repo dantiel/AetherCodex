@@ -157,6 +157,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         appMenuItem.submenu = NSMenu(title: "AetherCodex")
         appMenuItem.submenu?.addItem(withTitle: "About", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenuItem.submenu?.addItem(NSMenuItem.separator())
+        appMenuItem.submenu?.addItem(withTitle: "Settings…", action: #selector(AppDelegate.openSettings(_:)), keyEquivalent: ",")
+        appMenuItem.submenu?.addItem(NSMenuItem.separator())
         appMenuItem.submenu?.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         mainMenu.addItem(appMenuItem)
         
@@ -166,6 +168,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         fileMenuItem.submenu?.addItem(withTitle: "New", action: #selector(AppDelegate.newDocument(_:)), keyEquivalent: "n")
         fileMenuItem.submenu?.addItem(withTitle: "Open…", action: #selector(AppDelegate.openDocument(_:)), keyEquivalent: "o")
         fileMenuItem.submenu?.addItem(withTitle: "Open Folder…", action: #selector(MainWindowController.openFolder(_:)), keyEquivalent: "O")
+        fileMenuItem.submenu?.addItem(NSMenuItem.separator())
+        fileMenuItem.submenu?.addItem(withTitle: "Project Settings…", action: #selector(AppDelegate.openProjectSettings(_:)), keyEquivalent: "")
         fileMenuItem.submenu?.addItem(withTitle: "Save", action: #selector(MainWindowController.saveDocument(_:)), keyEquivalent: "s")
         mainMenu.addItem(fileMenuItem)
 
@@ -198,6 +202,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenuItem.submenu = NSMenu(title: "View")
         viewMenuItem.submenu?.addItem(withTitle: "Toggle File Browser", action: #selector(MainWindowController.toggleFileBrowser(_:)), keyEquivalent: "1")
         viewMenuItem.submenu?.addItem(withTitle: "Toggle Pythia", action: #selector(MainWindowController.togglePythia(_:)), keyEquivalent: "2")
+        viewMenuItem.submenu?.addItem(withTitle: "Oracle Only", action: #selector(MainWindowController.toggleOracleOnly(_:)), keyEquivalent: "3")
         viewMenuItem.submenu?.addItem(NSMenuItem.separator())
         let biggerItem = NSMenuItem(title: "Bigger", action: #selector(AppDelegate.biggerFont), keyEquivalent: "+")
         biggerItem.keyEquivalentModifierMask = .command
@@ -223,7 +228,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         themeMenuItem.submenu?.addItem(withTitle: "Next Theme", action: #selector(AppDelegate.nextTheme(_:)), keyEquivalent: "]")
         themeMenuItem.submenu?.addItem(withTitle: "Previous Theme", action: #selector(AppDelegate.previousTheme(_:)), keyEquivalent: "[")
         themeMenuItem.submenu?.addItem(NSMenuItem.separator())
-        themeMenuItem.submenu?.addItem(withTitle: "Theme Settings…", action: #selector(AppDelegate.openThemeSettings(_:)), keyEquivalent: ",")
+        themeMenuItem.submenu?.addItem(withTitle: "Theme Settings…", action: #selector(AppDelegate.openThemeSettings(_:)), keyEquivalent: "")
         mainMenu.addItem(themeMenuItem)
         
         // ── Æther ──
@@ -261,8 +266,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateThemeMenu()
     }
 
+    @objc private func openSettings(_ sender: NSMenuItem) {
+        SettingsViewController.open(section: .newFile)
+    }
+
     @objc private func openThemeSettings(_ sender: NSMenuItem) {
-        ThemeSettingsViewController.open()
+        SettingsViewController.open(section: .appearance)
+    }
+
+    @objc private func openProjectSettings(_ sender: NSMenuItem) {
+        ProjectSettingsViewController.open()
+    }
+
+    /// Disable Project Settings when no folder/context is open (not in project
+    /// mode) — the dialog itself also shows an empty state as a fallback.
+    @MainActor @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(openProjectSettings(_:)) {
+            return AetherContext.shared.root != nil
+        }
+        return true
     }
 
     private func updateThemeMenu() {

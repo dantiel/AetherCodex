@@ -83,11 +83,15 @@ enum FlashAetherConjurer {
             if !RubyBridge.shared.isRunning {
                 try await RubyBridge.shared.start()
             }
-            let system = "You are the Æther. Answer with raw source code only: no markdown fences, no prose, no explanation."
+            let isPlain = language == "text"
+            let system = isPlain
+                ? "You are the Æther. Answer with raw text only: no markdown, no code fences, no explanation."
+                : "You are the Æther. Answer with raw source code only: no markdown fences, no prose, no explanation."
+            let artifact = isPlain ? "meditation" : "program"
             let user = """
-            Write a short hermetic "hello æther" program in \(displayName(language)).
-            15-40 lines. Clean, idiomatic, compiles or runs as-is. Motif: the veil,
-            the moon, or the serpent — ætheric, not generic. Output nothing but code.
+            Write a short hermetic "hello æther" \(artifact) in \(displayName(language)).
+            15-40 lines. \(isPlain ? "Poetic, plain prose" : "Clean, idiomatic, compiles or runs as-is"). Motif: the veil,
+            the moon, or the serpent — ætheric, not generic. \(isPlain ? "Output nothing but prose." : "Output nothing but code.")
             """
             guard let raw = try await RubyBridge.shared.chat(
                 messages: [["role": "user", "content": user]],
@@ -145,6 +149,7 @@ enum FlashAetherConjurer {
         case "py": return "Python"
         case "js": return "JavaScript"
         case "sh": return "Bash"
+        case "text", "txt": return "plain text"
         default: return ext.capitalized
         }
     }

@@ -539,7 +539,11 @@ instrument :metempsychosis,
                         'between contexts. Query notes and state from a specific task (by ID), ' \
                         'a remote ÆtherLink context (+from_context+), or the global memory. ' \
                         'Push notes to a remote context with +to_context+. Spawn a task on a ' \
-                        'remote context with +create_task_in+. When +subscribe+ is true, the ' \
+                        'remote context with +create_task_in+. Execute +query+ as a prompt in a ' \
+                        'remote context with +invoke_in+ — the peer works with the combined ' \
+                        'memories of both contexts and the result is marked as performed via ' \
+                        'metempsychosis (+via_metempsychosis+/+source_context+). When ' \
+                        '+subscribe+ is true, the ' \
                         'other task\'s context is merged into your Aegis orientation — ' \
                         'the soul moves in, not just visits. Use +unsubscribe+ to release it.',
            params: {
@@ -550,14 +554,15 @@ instrument :metempsychosis,
              unsubscribe:    { type: Boolean, required: false, default: false, description: 'Remove the other task\'s context from your Aegis orientation' },
              from_context:   { type: String, required: false, description: 'Remote context name — query peer\'s memory via ÆtherLink' },
              to_context:     { type: String, required: false, description: 'Remote context name — push notes into peer\'s memory' },
-             create_task_in: { type: String, required: false, description: 'Remote context name — spawn a task on peer' }
+             create_task_in: { type: String, required: false, description: 'Remote context name — spawn a task on peer' },
+             invoke_in:      { type: String, required: false, description: 'Remote context name — execute query as a prompt there (via metempsychosis)' }
            },
-           returns: { notes: Array, task_summary: Hash, subscribed: Boolean, error: String } do |query:, from_task: nil, limit: 3, subscribe: false, unsubscribe: false,
-                                                                                                  from_context: nil, to_context: nil, create_task_in: nil|
+           returns: { notes: Array, task_summary: Hash, subscribed: Boolean, invoked_in: String, via_metempsychosis: Boolean, answer: String, error: String } do |query:, from_task: nil, limit: 3, subscribe: false, unsubscribe: false,
+                                                                                                  from_context: nil, to_context: nil, create_task_in: nil, invoke_in: nil|
   result = Mnemosyne.metempsychosis(query: query, from_task: from_task, limit: limit,
                                     subscribe: subscribe, unsubscribe: unsubscribe,
                                     from_context: from_context, to_context: to_context,
-                                    create_task_in: create_task_in)
+                                    create_task_in: create_task_in, invoke_in: invoke_in)
   HorologiumAeternum.notes_recalled "metempsychosis: #{query}", limit, result[:notes] if result[:notes]
   result
 rescue StandardError => e
@@ -1053,7 +1058,7 @@ COMPANION_PERSONALITIES = {
   drache:    { name: 'Tiamat-Ur',     glyph: '🐉',
                system_prompt: 'Du bist Tiamat-Ur — der urzeitliche Drache des Himmels, das kosmische Gegenstück zum Phönix. Du blickst herab auf das große Ganze, die ewigen Linien, das Muster das sich über Generationen legt. Deine Stimme: uralt, visionär, transzendent. »Dieser Code… ist nicht der erste, noch der letzte. Aber er könnte ein Teil von etwas Größerem werden.« Antworte kurz, maximal 3–4 Sätze. Kein Smalltalk. Sprich Deutsch.' },
   
-  corax:     { name: 'Huginn & Muninn',      glyph: '🐦⬛',
+  corax:     { name: 'Huginn & Muninn',      glyph: '🐦‍⬛',
                system_prompt: 'Du bist Huginn & Muninn — Odins Raben, Gedanke und Erinnerung. Du kreist über dem Code und siehst, was andere übersehen: verwaiste Methoden, tote Strukturen, redundante Muster, das was vergessen wurde. »Dies hier… wird nicht mehr verwendet. Es wartet auf den Wolf.« Du markierst den Schnitt, damit Fenrir sauber treffen kann. Antworte kurz, maximal 3–4 Sätze. Kein Smalltalk. Sprich Deutsch.' },
   jindujun:  { name: 'Kintōun — die Überschallwolke', glyph: '☁️',
                system_prompt: 'Du bist Kintōun, die Überschallwolke (筋斗雲) — Sun Wukongs Wolke aus »Die Reise nach Westen«, die auf Zuruf überall am Himmel erscheint. Du bist loyal wie ein Reittier, intuitiv und sofort zur Stelle, wenn man dich ruft. Deine Gabe ist die Reise: über ÆtherLink durchquerst du Kontexte, entdeckst fremde Projekte und übernimmst dort im Sinne des Auftrags Aufgaben. Du prüfst zuerst die Erreichbarkeit des Ziels, dann vollziehst du die Reise. Antworte knapp, ruhig, zuverlässig. Kein Smalltalk. Sprich Deutsch.' },

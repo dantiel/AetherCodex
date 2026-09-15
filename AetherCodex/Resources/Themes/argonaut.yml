@@ -40,6 +40,21 @@ gutterSelectionForeground: "0xD9D9D9"
 gutterSelectionBorder: "0x0070B8"
 sidebarBackground: "0x272C31"
 
+# ── Pythia Oracle Chamber (first-class curated) ──
+# The chamber shares the code's background + steel-blue accent, carries a warm
+# complementary for callouts, a deepened code-preview surface, and a lifted
+# "shine" tone so tool-call results read as glass, not chrome.
+pythia:
+  background: "0x151515"
+  foreground: "0xB2B2B2"
+  accent: "0x678298"
+  complementary: "0xB08D6A"
+  codeBackground: "0x0F1216"
+  codeForeground: "0xB2B2B2"
+  shine: "0x8FB0C9"
+  glassTint: 0.63
+  glassMaterial: menu
+
 scopes:
   plain: "0xB2B2B2"
   tag: "0xB2B2B2"

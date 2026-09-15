@@ -68,7 +68,7 @@ final class ThemeSettings {
     // ── Dark / Light Theme Picks ──
 
     var darkThemeName: String {
-        get { defaults.string(forKey: Key.darkThemeName.rawValue) ?? "Hermetic" }
+        get { defaults.string(forKey: Key.darkThemeName.rawValue) ?? "Aethernaut" }
         set { defaults.set(newValue, forKey: Key.darkThemeName.rawValue); postChange() }
     }
 

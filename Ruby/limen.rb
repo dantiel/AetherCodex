@@ -137,6 +137,8 @@ post '/aether/invoke' do
     prompt = payload[:prompt].to_s.strip
     type   = (payload[:type] || 'chat').to_s
     from   = payload[:from_context] || 'unknown'
+    via_metempsychosis = payload[:metempsychosis] == true
+    memory = Array(payload[:memory]).reject(&:nil?)
 
     unless prompt.length.positive?
       status 400
@@ -149,13 +151,18 @@ post '/aether/invoke' do
       HorologiumAeternum.system_message "🔮 ÆtherLink task spawned by <b>#{from}</b>: #{result[:id]}"
       result.to_json
     else # chat
-      HorologiumAeternum.system_message "🔮 <b>#{from}</b> asks via Æther: #{prompt.truncate(120)}"
-      ctx = Coniunctio.build({ 'prompt' => prompt, 'attachments' => [] })
+      tag = via_metempsychosis ? 'via Metempsychose' : 'via Æther'
+      HorologiumAeternum.system_message "🔮 <b>#{from}</b> asks #{tag}: #{prompt.truncate(120)}"
+      ctx = Coniunctio.build({ 'prompt' => prompt, 'attachments' => [],
+                               'injected_notes' => memory })
       answer, _arts, _tool_results = Oracle.divination(prompt, ctx) do |name, args|
         PrimaMateria.handle(tool: name, args:)
       end
       HorologiumAeternum.system_message "✨ Response to <b>#{from}</b>: #{answer.to_s.truncate(150)}"
-      { answer: answer, html: Scriptorium.html_with_syntax_highlight(answer.to_s) }.to_json
+      { answer: answer,
+        html: Scriptorium.html_with_syntax_highlight(answer.to_s),
+        via_metempsychosis: via_metempsychosis,
+        source_context: from }.to_json
     end
   rescue StandardError => e
     status 500
@@ -221,12 +228,14 @@ post '/aether/link_note' do
       status 422
       return { error: 'source_context and source_note_id are required' }.to_json
     end
+    tags = Array(payload[:tags]).flat_map { |t| t.is_a?(String) ? t.split(',') : t }.map(&:strip).reject(&:empty?)
+    links = Array(payload[:links]).flat_map { |l| l.is_a?(String) ? l.split(',') : l }.map(&:strip).reject(&:empty?)
     id = Mnemosyne.link_note(
       source_context:  source_context,
       source_note_id:  source_note_id,
       content:         payload[:content],
-      tags:            payload[:tags],
-      links:           payload[:links]
+      tags:            tags,
+      links:           links
     )
     note = Mnemosyne.get_note(id)
     HorologiumAeternum.note_added(note) if note
@@ -246,12 +255,13 @@ post '/aether/transmigrate' do
       status 422
       return { error: 'content is required and must be a non-empty string' }.to_json
     end
-    tags = Array(payload[:tags])
+    tags = Array(payload[:tags]).flat_map { |t| t.is_a?(String) ? t.split(',') : t }.map(&:strip).reject(&:empty?)
     tags << "source_context:#{payload[:source_context]}" if payload[:source_context]
+    links = Array(payload[:links]).flat_map { |l| l.is_a?(String) ? l.split(',') : l }.map(&:strip).reject(&:empty?)
     id = Mnemosyne.remember(
       content: content,
       tags:    tags,
-      links:   payload[:links]
+      links:   links
     )
     note = Mnemosyne.get_note(id)
     HorologiumAeternum.note_added(note) if note

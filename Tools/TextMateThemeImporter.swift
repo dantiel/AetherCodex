@@ -339,6 +339,7 @@ func importTheme(from path: String, themeTags: [String] = []) -> String {
     yaml += "# Source: \(path)\n"
     yaml += "name: \(name)\n"
     yaml += "kind: \(kind)\n"
+    yaml += "class: theme.\(kind).\(name)\n"
     if !themeTags.isEmpty { yaml += "tags: [\(themeTags.joined(separator: ", "))]\n" }
     yaml += "glassTint: \(kind == "dark" ? "0.70" : "0.30")\n"
     yaml += "editorBackgroundOpacity: \(opacityFromBackground(globalBg, kind: kind))\n"
@@ -350,6 +351,14 @@ func importTheme(from path: String, themeTags: [String] = []) -> String {
     yaml += "  caret: \"\(caret)\"\n"
     yaml += "  selection: \"\(selection)\"\n"
     yaml += "  lineHighlight: \"\(lineHighlight)\"\n"
+    yaml += "\n"
+    yaml += "# ── Pythia Oracle Chamber (auto-derived; refine per theme) ──\n"
+    yaml += "pythia:\n"
+    yaml += "  background: \"\(globalBg)\"\n"
+    yaml += "  foreground: \"\(globalFg)\"\n"
+    yaml += "  accent: \"\(selection)\"\n"
+    yaml += "  glassTint: \(kind == "dark" ? "0.70" : "0.30")\n"
+    yaml += "  glassMaterial: \(kind == "dark" ? "menu" : "sidebar")\n"
     yaml += "\n"
     yaml += "scopes:\n"
     

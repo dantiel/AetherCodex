@@ -207,6 +207,9 @@ protocol SyntaxTheme {
     var glassBlurStrength: CGFloat { get }
     /// Sidebar glass material name (e.g. "sidebar", "menu", "tooltip").
     var sidebarGlassMaterialName: String? { get }
+    /// The Pythia oracle chamber palette — derived from the chrome when not
+    /// explicitly declared via a first-class `pythia:` block.
+    var pythia: PythiaPalette { get }
 
     // ── Deprecated pre-Liquid-Glass materials (kept for compatibility) ──
     @available(macOS, deprecated: 26.0, message: "Liquid Glass uses glassTintColor")
@@ -263,6 +266,18 @@ extension SyntaxTheme {
     var rootBlurMaterial: NSVisualEffectView.Material { .fullScreenUI }
     var rootBlendingMode: NSVisualEffectView.BlendingMode { .behindWindow }
     var pythiaGlassMaterial: NSVisualEffectView.Material { .menu }
+
+    // ── Pythia palette (derived) ──
+    var pythia: PythiaPalette {
+        PythiaPalette.derive(
+            background: sidebarBackground ?? editorBackground,
+            foreground: editorForeground,
+            accent: sidebarAccent,
+            kind: kind,
+            glassTint: glassTint,
+            glassMaterialName: sidebarGlassMaterialName
+        )
+    }
 }
 
 // ────────────────────────────────────────────────────────────

@@ -41,4 +41,46 @@ final class MarkdownRenderingTests: XCTestCase {
         let style = read.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
         XCTAssertTrue(style?.textBlocks.first is NSTextTableBlock)
     }
+
+    // MARK: - Round-trip (byte-exact)
+
+    /// The core guarantee: `render` → `source()` reconstructs the *exact* Markdown
+    /// bytes for untouched structural content. Headings and fenced code blocks are
+    /// hidden from the visible text (native `headerLevel` / `NSTextBlock`), yet the
+    /// original source survives because each block carries its pristine bytes as
+    /// metadata (`originalLine` / `originalBlock`) that `source()` replays verbatim.
+    func testHeadingAndCodeBlockRoundTripByteExact() {
+        _ = NSApplication.shared
+        let source = "# Title\n\nIntro paragraph.\n\n## Section\n\n```swift\nlet n = 1\nprint(n)\n```\n"
+        let rendered = MarkdownRichCodec.render(source)
+        XCTAssertEqual(MarkdownRichCodec.source(rendered), source)
+    }
+
+    /// The full editing vocabulary round-trips byte-exact when unmodified: inline
+    /// emphasis, lists (bullet/ordered/task), block quotes, native tables, fenced
+    /// code, and horizontal rules all survive `render` → `source()` untouched.
+    func testFullVocabularyRoundTripByteExact() {
+        _ = NSApplication.shared
+        let source = "# Heading One\n\n**Bold** and *italic* and `inline code` and ~~strike~~ and [link](https://example.com).\n\n## Heading Two\n\n- bullet one\n- bullet two\n\n1. first\n2. second\n\n- [x] done\n- [ ] todo\n\n> quoted **thought**\n\n| Name | Value |\n| --- | --- |\n| A | B |\n\n```swift\nlet n = 1\n```\n\n---\n\nThe end.\n"
+        let rendered = MarkdownRichCodec.render(source)
+        XCTAssertEqual(MarkdownRichCodec.source(rendered), source)
+    }
+
+    /// The box model: structural blocks (quote + fenced code) carry a native
+    /// `NSTextBlock` whose width is an explicit 100% of the text column — the
+    /// simplified HTML box model (`RichTextBlockStyle`) rather than content-hugging.
+    func testBlockElementsSpanFullColumnViaBoxModel() {
+        _ = NSApplication.shared
+        let source = "> quote\n\n```swift\nlet n = 1\n```\n"
+        let rendered = MarkdownRichCodec.render(source)
+        var blocksFound = 0
+        rendered.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: rendered.length)) { value, _, _ in
+            guard let style = value as? NSParagraphStyle,
+                  let block = style.textBlocks.first as? NSTextBlock else { return }
+            XCTAssertEqual(block.value(for: .width), 100)
+            XCTAssertEqual(block.valueType(for: .width), .percentageValueType)
+            blocksFound += 1
+        }
+        XCTAssertGreaterThanOrEqual(blocksFound, 2)
+    }
 }

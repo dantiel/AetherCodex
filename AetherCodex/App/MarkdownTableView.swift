@@ -13,7 +13,7 @@ struct MarkdownTableView: View {
                     ForEach(header.indices, id: \.self) { column in
                         cell(header[column], header: true)
                     }
-                }.background(Color(nsColor: theme.sidebarAccent).opacity(0.14))
+                }.background(Color(nsColor: headerBackground))
                 ForEach(rows.indices, id: \.self) { row in
                     GridRow {
                         ForEach(0..<max(header.count, rows[row].count), id: \.self) { column in
@@ -28,10 +28,19 @@ struct MarkdownTableView: View {
     }
 
     private func cell(_ text: String, header: Bool) -> some View {
-        Text(renderInline(text))
+        let theme = ThemeRegistry.shared.current
+        let headerStyle = theme.style(forScope: "markup.table.th")
+        return Text(renderInline(text))
             .font(.system(size: ThemeSettings.shared.proportionalFontSize, weight: header ? .semibold : .regular))
+            .foregroundStyle(Color(nsColor: header ? (headerStyle.foreground ?? theme.sidebarForeground) : theme.sidebarForeground))
             .textSelection(.enabled)
             .frame(minWidth: 88, maxWidth: 220, alignment: .leading)
             .padding(.horizontal, 10).padding(.vertical, 7)
+    }
+
+    private var headerBackground: NSColor {
+        let theme = ThemeRegistry.shared.current
+        let headerStyle = theme.style(forScope: "markup.table.th")
+        return headerStyle.background ?? headerStyle.foreground?.withAlphaComponent(0.16) ?? theme.sidebarAccent.withAlphaComponent(0.14)
     }
 }

@@ -288,8 +288,17 @@ class Aetherflux
         r = tr[:result]
         next unless r.is_a?(Hash) && r[:say].is_a?(Hash)
 
-        say = r[:say].merge(message: Scriptorium.html_with_syntax_highlight(r[:say][:message].to_s))
-        { type: 'say', data: say, companion: name.sub(/_(say|ask)$/, '') }
+        companion = name.sub(/_(say|ask)$/, '')
+        say = r[:say].dup
+        # Keep the plain markdown for the Swift chat flow; carry the highlighted
+        # HTML alongside for any future rich renderer.
+        say[:html] = Scriptorium.html_with_syntax_highlight(say[:message].to_s)
+        glyph = begin
+          COMPANION_PERSONALITIES[companion.to_sym]&.dig(:glyph)
+        rescue StandardError
+          nil
+        end
+        { type: 'say', data: say, companion: companion, glyph: glyph || '✦' }
       end
     end
 

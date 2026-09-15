@@ -119,6 +119,29 @@ enum ThemeLoader {
         let glassBlurStrength = parseAlphaValue(dict["glassBlurStrength"]) ?? 0.50
         let sideMat    = dict["sidebarGlassMaterial"] as? String
 
+        // Pythia oracle chamber palette — merge first-class `pythia:` block over
+        // the hermetically derived per-theme fallback (same/complementary colors).
+        let pythiaDict = dict["pythia"] as? [String: Any]
+        let pythiaBase = PythiaPalette.derive(
+            background: sideBg ?? editorBackground,
+            foreground: editorForeground,
+            accent: parseColor(dict["sidebarAccent"]) ?? selectionColor,
+            kind: kind,
+            glassTint: glassTintStrength,
+            glassMaterialName: sideMat
+        )
+        let pythia = PythiaPalette(
+            background: parseColor(pythiaDict?["background"]) ?? pythiaBase.background,
+            foreground: parseColor(pythiaDict?["foreground"]) ?? pythiaBase.foreground,
+            accent: parseColor(pythiaDict?["accent"]) ?? pythiaBase.accent,
+            complementary: parseColor(pythiaDict?["complementary"]) ?? pythiaBase.complementary,
+            codeBackground: parseColor(pythiaDict?["codeBackground"]) ?? pythiaBase.codeBackground,
+            codeForeground: parseColor(pythiaDict?["codeForeground"]) ?? pythiaBase.codeForeground,
+            shine: parseColor(pythiaDict?["shine"]) ?? pythiaBase.shine,
+            glassTint: parseAlphaValue(pythiaDict?["glassTint"]) ?? pythiaBase.glassTint,
+            glassMaterialName: (pythiaDict?["glassMaterial"] as? String) ?? pythiaBase.glassMaterialName
+        )
+
         let tags = (dict["tags"] as? [Any]).flatMap { $0 as? [String] } ?? []
         let themeClass = dict["class"] as? String
 
@@ -152,6 +175,7 @@ enum ThemeLoader {
             rootBlendingMode: blendMode,
             pythiaGlassMaterial: pythiaMat,
             sidebarGlassMaterialName: sideMat,
+            pythia: pythia,
             rulerForeground: parseColor(dict["rulerForeground"]) ?? editorForeground.withAlphaComponent(0.65),
             sidebarAccent: parseColor(dict["sidebarAccent"]) ?? selectionColor.withAlphaComponent(1),
             sidebarForeground: parseColor(dict["sidebarForeground"]) ?? editorForeground
@@ -354,6 +378,7 @@ private struct LoadedTheme: SyntaxTheme {
     let rootBlendingMode: NSVisualEffectView.BlendingMode
     let pythiaGlassMaterial: NSVisualEffectView.Material
     let sidebarGlassMaterialName: String?
+    let pythia: PythiaPalette
     var rulerForeground: NSColor = .secondaryLabelColor
     var sidebarAccent: NSColor = .controlAccentColor
     var sidebarForeground: NSColor = .labelColor
@@ -460,7 +485,15 @@ extension ThemeLoader {
             rootBlurMaterial: .fullScreenUI,
             rootBlendingMode: .behindWindow,
             pythiaGlassMaterial: .menu,
-            sidebarGlassMaterialName: nil
+            sidebarGlassMaterialName: nil,
+            pythia: PythiaPalette.derive(
+                background: NSColor(white: 0.08, alpha: 1.0),
+                foreground: NSColor(white: 0.70, alpha: 1.0),
+                accent: NSColor(red: 0.00, green: 0.18, blue: 0.33, alpha: 1.0),
+                kind: .dark,
+                glassTint: 0.70,
+                glassMaterialName: nil
+            )
         )
     }
 

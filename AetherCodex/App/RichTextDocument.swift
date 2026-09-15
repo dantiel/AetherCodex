@@ -223,14 +223,28 @@ final class RichTextDocument: NSObject, ObservableObject, NSTextViewDelegate {
     }
 
     func insertList(kind: MarkdownRichCodec.ListKind) {
+        let selection = textView.selectedRange()
+        let range = (textView.string as NSString).paragraphRange(for: selection)
+        if !markdown {
+            let list: NSTextList
+            switch kind {
+            case .bullet: list = NSTextList(markerFormat: .disc, options: 0)
+            case .ordered: list = NSTextList(markerFormat: .decimal, options: 0)
+            case .task: list = NSTextList(markerFormat: .box, options: 0)
+            }
+            applyBlockStyle(to: range) { style in
+                style.textLists = [list]
+                style.headIndent = 24
+                style.firstLineHeadIndent = 16
+            }
+            return
+        }
         let marker: String
         switch kind {
         case .bullet: marker = "- "
         case .ordered: marker = "1. "
         case .task: marker = "- [ ] "
         }
-        let selection = textView.selectedRange()
-        let range = (textView.string as NSString).paragraphRange(for: selection)
         let selected = (textView.string as NSString).substring(with: range)
         let text = marker + selected.replacingOccurrences(of: "\n", with: "\n" + marker)
         textView.insertText(NSAttributedString(string: text, attributes: MarkdownRichCodec.baseAttributes), replacementRange: range)
@@ -238,9 +252,21 @@ final class RichTextDocument: NSObject, ObservableObject, NSTextViewDelegate {
     }
 
     func insertQuote() {
-        let marker = "> "
         let selection = textView.selectedRange()
         let range = (textView.string as NSString).paragraphRange(for: selection)
+        if !markdown {
+            let theme = ThemeRegistry.shared.current
+            applyBlockStyle(to: range) { style in
+                style.textBlocks = [RichTextBlockStyle(
+                    padding: .init(leading: 12),
+                    border: .init(leading: 3),
+                    borderColor: theme.sidebarAccent.withAlphaComponent(0.7),
+                    backgroundColor: theme.sidebarAccent.withAlphaComponent(0.06)
+                ).makeBlock()]
+            }
+            return
+        }
+        let marker = "> "
         let selected = (textView.string as NSString).substring(with: range)
         let text = marker + selected.replacingOccurrences(of: "\n", with: "\n" + marker)
         textView.insertText(NSAttributedString(string: text, attributes: MarkdownRichCodec.baseAttributes), replacementRange: range)
@@ -250,6 +276,21 @@ final class RichTextDocument: NSObject, ObservableObject, NSTextViewDelegate {
     func insertCodeBlock() {
         let selection = textView.selectedRange()
         let range = (textView.string as NSString).paragraphRange(for: selection)
+        if !markdown {
+            let theme = ThemeRegistry.shared.current
+            transform(range) { content in
+                let all = NSRange(location: 0, length: content.length)
+                content.addAttribute(.font, value: ThemeSettings.shared.resolvedMonoFont, range: all)
+                let style = RichTextBlockStyle(
+                    padding: .init(uniform: 12),
+                    border: .init(uniform: 1),
+                    borderColor: theme.rulerSeparator.withAlphaComponent(0.4),
+                    backgroundColor: theme.style(for: .codeBlock).background ?? theme.editorBackground
+                ).makeParagraphStyle(paragraphSpacing: 6)
+                content.addAttribute(.paragraphStyle, value: style, range: all)
+            }
+            return
+        }
         let selected = (textView.string as NSString).substring(with: range)
         let text = "```\n" + selected + "\n```"
         textView.insertText(NSAttributedString(string: text, attributes: MarkdownRichCodec.baseAttributes), replacementRange: range)
@@ -262,10 +303,33 @@ final class RichTextDocument: NSObject, ObservableObject, NSTextViewDelegate {
         transform(range) { content in
             let all = NSRange(location: 0, length: content.length)
             content.addAttribute(.font, value: MarkdownRichCodec.font(level: level), range: all)
-            let scope = TokenScope(rawValue: "markup.heading.\(level)") ?? .markup
-            content.addAttribute(.foregroundColor, value: ThemeRegistry.shared.current.style(for: scope).foreground
-                                 ?? ThemeRegistry.shared.current.editorForeground, range: all)
-            content.addAttribute(MarkdownRichCodec.prefix, value: level == 0 ? "" : String(repeating: "#", count: level) + " ", range: all)
+            if markdown {
+                let scope = TokenScope(rawValue: "markup.heading.\(level)") ?? .markup
+                content.addAttribute(.foregroundColor, value: ThemeRegistry.shared.current.style(for: scope).foreground
+                                     ?? ThemeRegistry.shared.current.editorForeground, range: all)
+                content.addAttribute(MarkdownRichCodec.prefix, value: level == 0 ? "" : String(repeating: "#", count: level) + " ", range: all)
+            } else if level > 0 {
+                let style = NSMutableParagraphStyle()
+                style.headerLevel = level
+                style.lineSpacing = 2
+                style.paragraphSpacing = 4
+                content.addAttribute(.paragraphStyle, value: style, range: all)
+            }
+        }
+    }
+
+    /// Applies a paragraph-style mutation to the selected paragraph(s) without
+    /// clobbering an existing style — used by native block insertion in RTF mode.
+    private func applyBlockStyle(to range: NSRange, mutate: (NSMutableParagraphStyle) -> Void) {
+        guard range.length > 0 else { return }
+        transform(range) { content in
+            let all = NSRange(location: 0, length: content.length)
+            let existing = content.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+            let style = (existing?.mutableCopy() as? NSMutableParagraphStyle) ?? NSMutableParagraphStyle()
+            style.lineSpacing = 2
+            style.paragraphSpacing = 2
+            mutate(style)
+            content.addAttribute(.paragraphStyle, value: style, range: all)
         }
     }
 
@@ -337,6 +401,10 @@ struct RichTextSurface: View {
     @ObservedObject var document: RichTextDocument
     let theme: SyntaxTheme
     let showSource: () -> Void
+    /// Whether the file-browser sidebar is closed — when true, the ruler is the
+    /// leftmost surface and fades in under the transparent titlebar, matching
+    /// the code editor's gutter.
+    var sidebarClosed: Bool = false
 
     /// Real scroll-content breathing room below the floating controls bar.
     /// It scrolls away with the text (like the source surface), so the native
@@ -360,12 +428,11 @@ struct RichTextSurface: View {
 
             ZStack(alignment: .topLeading) {
                 (document.markdown ? theme.editorBackgroundColor : Color(nsColor: document.paperColor))
-                    .ignoresSafeArea()
 
                 // Fixed gutter surface — pinned BEHIND the scroll content. It never
                 // scrolls, so it must never blur; only the measure ticks (which sit
                 // above it inside the scroll) participate in the top scroll-edge blur.
-                RichTextRulerBackground(theme: theme, width: rulerWidth)
+                RichTextRulerBackground(theme: theme, width: rulerWidth, sidebarClosed: sidebarClosed)
                     .frame(width: rulerWidth, height: proxy.size.height,
                            alignment: .topLeading)
                     .allowsHitTesting(false)
@@ -393,7 +460,7 @@ struct RichTextSurface: View {
         }
         .overlay(alignment: .top) {
             chrome
-                .padding(.top, 48)
+                .padding(.top, 36)
         }
     }
 
@@ -442,47 +509,59 @@ struct RichTextSurface: View {
 
     private var controls: some View {
         HStack(spacing: 5) {
-            // Font family + size — the TextEdit heart, in liquid glass.
-            Menu {
-                ForEach(Self.fontFamilies, id: \.self) { family in
-                    Button(family) { document.setFontFamily(family) }
+            // Format-aware chrome: only the capabilities the output document
+            // actually serializes are offered. Markdown hides typographic controls
+            // (font family/size, underline, colour) because they have no Markdown
+            // syntax and would not survive the round-trip; RTF shows them all.
+            if !document.markdown {
+                // Font family + size — the TextEdit heart, in liquid glass.
+                Menu {
+                    ForEach(Self.fontFamilies, id: \.self) { family in
+                        Button(family) { document.setFontFamily(family) }
+                    }
+                    Divider()
+                    Button("Show Fonts…", action: openFontPanel)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "textformat")
+                        Text(currentFamily).lineLimit(1)
+                    }
+                    .frame(minWidth: 104, alignment: .leading)
                 }
-                Divider()
-                Button("Show Fonts…", action: openFontPanel)
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "textformat")
-                    Text(currentFamily).lineLimit(1)
-                }
-                .frame(minWidth: 104, alignment: .leading)
-            }
-            .buttonStyle(LiquidGlassButtonStyle())
-            .help("Font family")
+                .buttonStyle(LiquidGlassButtonStyle())
+                .help("Font family")
 
-            Menu {
-                ForEach(Self.fontSizes, id: \.self) { size in
-                    Button("\(Int(size))") { document.setFontSize(size) }
+                Menu {
+                    ForEach(Self.fontSizes, id: \.self) { size in
+                        Button("\(Int(size))") { document.setFontSize(size) }
+                    }
+                } label: {
+                    Text("\(Int(document.currentFont.pointSize))").frame(minWidth: 20)
                 }
-            } label: {
-                Text("\(Int(document.currentFont.pointSize))").frame(minWidth: 20)
-            }
-            .buttonStyle(LiquidGlassButtonStyle())
-            .help("Font size")
+                .buttonStyle(LiquidGlassButtonStyle())
+                .help("Font size")
 
-            Divider().frame(height: 16)
+                Divider().frame(height: 16)
+            }
 
             GlyphToggle(system: "bold", active: isBold, help: "Bold") { document.trait(.boldFontMask) }
             GlyphToggle(system: "italic", active: isItalic, help: "Italic") { document.trait(.italicFontMask) }
-            GlyphToggle(system: "underline", active: isUnderline, help: "Underline") { document.toggleAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue) }
+            if !document.markdown {
+                GlyphToggle(system: "underline", active: isUnderline, help: "Underline") { document.toggleAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue) }
+            }
             GlyphToggle(system: "strikethrough", active: isStrikethrough, help: "Strikethrough") { document.toggleAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue) }
-            GlyphToggle(system: "paintpalette", active: false, help: "Text color", action: openColorPanel)
+            if !document.markdown {
+                GlyphToggle(system: "paintpalette", active: false, help: "Text color", action: openColorPanel)
+            }
 
             Divider().frame(height: 16)
 
             GlyphToggle(system: "list.bullet", active: false, help: "Bullet list") { document.insertList(kind: .bullet) }
             GlyphToggle(system: "list.number", active: false, help: "Numbered list") { document.insertList(kind: .ordered) }
             GlyphToggle(system: "checklist", active: false, help: "Task list") { document.insertList(kind: .task) }
-            GlyphToggle(system: "checkmark.square", active: false, help: "Toggle task") { document.toggleTask() }
+            if document.markdown {
+                GlyphToggle(system: "checkmark.square", active: false, help: "Toggle task") { document.toggleTask() }
+            }
             GlyphToggle(system: "text.quote", active: false, help: "Block quote") { document.insertQuote() }
             GlyphToggle(system: "chevron.left.forwardslash.chevron.right", active: false, help: "Code block") { document.insertCodeBlock() }
 
@@ -691,6 +770,7 @@ private struct RichTextRuler: View {
 private struct RichTextRulerBackground: View {
     let theme: SyntaxTheme
     let width: CGFloat
+    var sidebarClosed: Bool = false
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -701,6 +781,24 @@ private struct RichTextRulerBackground: View {
         }
         .frame(width: width)
         .frame(maxHeight: .infinity)
+        .mask { edgeMask }
         .allowsHitTesting(false)
+    }
+
+    /// Matches the code editor's gutter: with the file browser closed the ruler
+    /// becomes the leftmost surface and fades in beneath the transparent titlebar;
+    /// with the sidebar open it stays solid for continuity with that surface.
+    @ViewBuilder
+    private var edgeMask: some View {
+        if sidebarClosed {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: 28)
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 44)
+                Color.black
+            }
+        } else {
+            Color.black
+        }
     }
 }

@@ -49,7 +49,7 @@ class Argonaut
                if l0 > all_lines.count
                  { error: "line range #{l0}-#{l1} exceeds lines in file = #{all_lines.count}" }
                else
-                 lines = all_lines[l0..l1] || []
+                 lines = all_lines[l0...l1] || []
                  content = lines.join
                  content = with_line_numbers(content, l0 + 1) if line_numbers
                  { content: content, range: [l0, l1] }
@@ -249,7 +249,8 @@ class Argonaut
     fullpath = File.join project_root, path
 
     # Get notes count for statistics only
-    notes_count = Mnemosyne.fetch_notes_by_links(path).size
+    notes = Mnemosyne.fetch_notes_by_links(path)
+    notes_count = notes.size
 
     line_count = 0
     File.foreach(fullpath) { |_line| line_count += 1 }
@@ -283,14 +284,25 @@ class Argonaut
 
     # Generate hermetic symbolic overview from Mnemosyne notes
     hermetic_overview = begin
-      notes = Mnemosyne.fetch_notes_by_links path
       LexiconResonantia.generate_from_notes notes, min_count: 1, top_k: 5
     rescue StandardError => e
       { error: "Hermetic overview failed: #{e.message}" }
     end
 
+    # Related echoes — a short surface excerpt per note so the file mirror can
+    # show what Mnemosyne holds about this file without dragging the deep up.
+    notes_preview = notes.first(max_notes).map do |note|
+      {
+        id:      note[:id],
+        tags:    (note[:tags] || '').to_s.split(',').map(&:strip).reject(&:empty?),
+        excerpt: (note[:content] || '').to_s[0, max_content_length],
+        links:   (note[:links] || '').to_s.split(',').map(&:strip).reject(&:empty?)
+      }
+    end
+
     {
-      notes_count:       notes_count,
+      notes_count:,
+      notes_preview:,
       file_info:,
       symbolic_overview:,
       hermetic_overview:

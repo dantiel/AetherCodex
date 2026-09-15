@@ -75,6 +75,14 @@ module Coniunctio
 
       aegis_notes = Mnemosyne.recall_aegis_notes max_tokens: MAX_AEGIS_TOKENS
 
+      # Metempsychosis: merge the origin context's transmitted memories so the oracle
+      # works with the combined memories of both contexts.
+      injected = params[:injected_notes]
+      if injected.present?
+        injected = [injected] if injected.is_a?(Hash)
+        aegis_notes = (aegis_notes + injected).reject(&:nil?).uniq
+      end
+
       ctx = { history:       prepend_summaries(history),
               extra_context: build_extra_context(attachments, project_summary, aegis_notes,
                                                  params[:context]).merge(flash_auto: params[:flash_auto]) }

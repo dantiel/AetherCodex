@@ -389,6 +389,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             }
         }
 
+        // Fold away the AppKit overlays (status bar, collapsed tab bar) when the
+        // window flips into oracle-only — Pythia stands alone on the reverse face.
+        chromeState.onOracleOnlyChange = { [weak self] oracleOnly in
+            guard let self else { return }
+            self.statusBar.isHidden = oracleOnly
+            // The tab bar is only normally visible when the sidebar is collapsed;
+            // preserve that condition when the card flips back.
+            self.topTabBarHost.isHidden = oracleOnly || self.chromeState.sidebarVisible
+        }
+
         documentModel = EditorDocumentModel()
         editorViewController.onDocumentChange = { [weak self] attributedString in
             self?.documentModel.attributedString = attributedString
@@ -405,7 +415,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             editorViewController.newDocument()
         }
 
-        let containerView = EditorContainerView(
+        let containerView = OracleFlipRoot(
             editor: editorViewController,
             sidebar: sidebarContainer.view,
             pythiaModel: pythiaModel,
@@ -470,6 +480,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             forName: NSWindow.didMoveNotification, object: window, queue: .main
         ) { [weak self] _ in
             self?.saveSessionState()
+        }
+        NotificationCenter.default.addObserver(
+            forName: .openFileInEditor, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let url = note.object as? URL else { return }
+            self?.editorViewController?.openFile(url)
         }
         // Restore saved session state
         if let lastFolder = SessionState.shared.lastProjectFolder {
@@ -879,6 +895,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             self?.isAnimatingPythia = false
         }
         saveSessionState()
+    }
+
+    /// Toggle Oracle-only mode. Instead of sliding a panel wider, the whole
+    /// window turns over like a card — Pythia alone on the reverse face.
+    @objc func toggleOracleOnly(_ sender: Any?) {
+        guard let chrome = chromeState else { return }
+        // Folding the side panel away keeps only the reverse-face Pythia alive,
+        // so the shared chat model is never observed twice at rest.
+        if !chrome.oracleOnly {
+            chrome.pythiaVisible = false
+        }
+        withAnimation(.easeInOut(duration: 0.62)) {
+            chrome.oracleOnly.toggle()
+        }
     }
 }
 

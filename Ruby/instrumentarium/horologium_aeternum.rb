@@ -43,11 +43,13 @@ module HorologiumAeternum
     return unless @websocket
 
     begin
-      uuid ||= SecureRandom.uuid
+      uuid ||= Thread.current[:aether_tool_uuid] || SecureRandom.uuid
+
+      result = { type: type, data: data, timestamp: Time.now.to_f, uuid: uuid }
 
       payload = {
         method: method,
-        result: { type: type, data: data, timestamp: Time.now.to_f, uuid: }
+        result: result
       }.to_json
       @websocket.send payload
       # Force immediate WebSocket flush

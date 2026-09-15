@@ -137,6 +137,13 @@ enum MarkdownRichCodec {
                 let scope = TokenScope(rawValue: "markup.heading.\(level)") ?? .heading
                 text.addAttribute(.foregroundColor, value: ThemeRegistry.shared.current.style(for: scope).foreground
                                   ?? ThemeRegistry.shared.current.sidebarAccent, range: full)
+                // Real native heading block — `headerLevel` makes the document a
+                // structured rich-text outline, not just a larger font.
+                let heading = NSMutableParagraphStyle()
+                heading.headerLevel = level
+                heading.lineSpacing = 2
+                heading.paragraphSpacing = 4
+                text.addAttribute(.paragraphStyle, value: heading, range: full)
             }
             inline(text, pattern: #"`([^`\n]+)`"#, kind: "code")
             inline(text, pattern: #"\[([^\]\n]+)\]\(([^\s)]+)\)"#, kind: "link")
@@ -196,7 +203,7 @@ enum MarkdownRichCodec {
         ps.paragraphSpacing = 2
         ps.headIndent = 24
         ps.firstLineHeadIndent = 16
-        text.addAttribute(.paragraphStyle, value: ps, range: full)
+        text.addAttribute(.paragraphStyle, value: ps, range: NSRange(location: 0, length: text.length))
         if !last { text.append(NSAttributedString(string: "\n", attributes: baseAttributes)) }
         let all = NSRange(location: 0, length: text.length)
         text.addAttribute(prefix, value: marker, range: all)
@@ -231,16 +238,13 @@ enum MarkdownRichCodec {
         inline(text, pattern: #"\*\*([^*\n]+)\*\*"#, kind: "bold")
         inline(text, pattern: #"(?<!\*)\*([^*\n]+)\*(?!\*)"#, kind: "italic")
         inline(text, pattern: #"~~([^~\n]+)~~"#, kind: "strikethrough")
-        let block = NSTextBlock()
-        block.setWidth(3, type: .absoluteValueType, for: .border, edge: .minX)
-        block.setWidth(12, type: .absoluteValueType, for: .padding, edge: .minX)
-        block.setBorderColor(theme.sidebarAccent.withAlphaComponent(0.7), for: .minX)
-        block.backgroundColor = theme.sidebarAccent.withAlphaComponent(0.06)
-        let ps = NSMutableParagraphStyle()
-        ps.textBlocks = [block]
-        ps.lineSpacing = 2
-        ps.paragraphSpacing = 2
-        text.addAttribute(.paragraphStyle, value: ps, range: full)
+        let ps = RichTextBlockStyle(
+            padding: .init(leading: 12),
+            border: .init(leading: 3),
+            borderColor: theme.sidebarAccent.withAlphaComponent(0.7),
+            backgroundColor: theme.sidebarAccent.withAlphaComponent(0.06)
+        ).makeParagraphStyle()
+        text.addAttribute(.paragraphStyle, value: ps, range: NSRange(location: 0, length: text.length))
         if !last { text.append(NSAttributedString(string: "\n", attributes: baseAttributes)) }
         let all = NSRange(location: 0, length: text.length)
         text.addAttribute(prefix, value: marker, range: all)
@@ -276,8 +280,7 @@ enum MarkdownRichCodec {
         let background = theme.style(for: .codeBlock).background ?? theme.editorBackground
         let result = NSMutableAttributedString(string: code, attributes: [
             .font: mono,
-            .foregroundColor: theme.editorForeground,
-            .backgroundColor: background
+            .foregroundColor: theme.editorForeground
         ])
         let engine = TreeSitterEngine()
         let aliases = ["javascript": "js", "typescript": "ts", "python": "py", "ruby": "rb",
@@ -291,6 +294,16 @@ enum MarkdownRichCodec {
                 }
             }
         }
+        // Native code block — a bordered, padded NSTextBlock instead of a flat
+        // background fill. The block is a real rich-text structure; the markdown
+        // round-trip survives because `semantic()` strips paragraph styles.
+        let paragraph = RichTextBlockStyle(
+            padding: .init(uniform: 12),
+            border: .init(uniform: 1),
+            borderColor: theme.rulerSeparator.withAlphaComponent(0.4),
+            backgroundColor: background
+        ).makeParagraphStyle(paragraphSpacing: 6)
+        result.addAttribute(.paragraphStyle, value: paragraph, range: NSRange(location: 0, length: result.length))
         return result
     }
 

@@ -1,12 +1,55 @@
 # AetherLight — parchment white, zero shadow, code at dawn
 name: AetherLight
 kind: light
+class: theme.light.aetherlight
 tags: [aether, signature, light]
+
+# Global editor colors
+editor:
+  background: "0xF5F5F0"
+  foreground: "0x383840"
+  caret: "0x0066CC"
+  selection: "0xB3D6F5"
+  lineHighlight: "0xE6E6E0"
+  invisibles: "0xD8D8D0"
+
+# ── AetherCodex Chrome ──
+glassTintColor: "0xE8D4A0"
+glassTint: 0.30
+glassBlurStrength: 0.42
+glassStyle: clear
+textShadowStrength: 0.0
+lineSpacing: 3.0
+editorBackgroundOpacity: 0.10
+sidebarBackgroundOpacity: 0.15
+rootBlurMaterial: underWindowBackground
+rootBlendingMode: behindWindow
+pythiaGlassMaterial: sidebar
+
+# ── Gutter & Sidebar ──
 rulerBackground: "0xE6E6E1"
+rulerForeground: "0x7A7A75"
 rulerSeparator: "0xCDCDC866"
+sidebarAccent: "0x1A57A6"
+sidebarForeground: "0x383840"
 gutterSelectionBackground: "0xD0D0D0"
 gutterSelectionForeground: "0x333333"
 gutterSelectionBorder: "0xAAAAAA"
+sidebarBackground: "0xE8E6E3"
+
+# ── Pythia Oracle Chamber (first-class curated) ──
+# Warm dawn chamber: shares the parchment background, carries a dawn-blue
+# accent + amber complementary, and a lifted blue shine for tool-call glass.
+pythia:
+  background: "0xF5F5F0"
+  foreground: "0x383840"
+  accent: "0x1A57A6"
+  complementary: "0xB08D3E"
+  codeBackground: "0xECE9E0"
+  codeForeground: "0x383840"
+  shine: "0x7FA8D9"
+  glassTint: 0.30
+  glassMaterial: sidebar
 
 scopes:
   keyword:
@@ -105,46 +148,27 @@ scopes:
     color: "0x336699"
     underline: true
   markup.italic:
-    color: "0xB0E0C0"
+    color: "0x5A5A5A"
     italic: true
   markup.bold:
-    color: "0xF0E8A0"
+    color: "0x2E2E35"
     bold: true
   markup.strikethrough:
     color: "0x996666"
-    markup.strikethrough: true
+    strikethrough: true
   markup.quote:
-    color: "0x9999B3"
+    color: "0x666666"
     italic: true
-    background: "0x141420"
+    background: "0xF0EFE8"
   markup.rule:
-    color: "0x665580"
+    color: "0x999999"
     bold: true
   markup.code.block:
-    color: "0x8CB3BF"
-    background: "0x0E1418"
+    color: "0x3A5A70"
+    background: "0xF0F0EA"
   markup.code.inline:
-    color: "0x8CB3BF"
-    background: "0x0E1418"
+    color: "0x3A5A70"
+    background: "0xF0F0EA"
   markup.list.checked:
-    color: "0x73BF73"
+    color: "0x3E7A3E"
     bold: true
-
-editorBackground: "0xF5F5F0"
-sidebarBackground: "0xE8E6E3"
-sidebarBackgroundOpacity: 0.15
-editorForeground: "0x383840"
-caretColor: "0x0066CC"
-selectionColor: "0xB3D6F5"
-lineHighlight: "0xE6E6E0"
-editorBackgroundOpacity: 0.10
-textShadowStrength: 0.0
-lineSpacing: 3.0
-
-rootBlurMaterial: underWindowBackground
-rootBlendingMode: behindWindow
-pythiaGlassMaterial: sidebar
-glassTintColor: "0xE8D4A0"
-glassStyle: clear
-glassTint: 0.30
-class: theme.Vibrant Light

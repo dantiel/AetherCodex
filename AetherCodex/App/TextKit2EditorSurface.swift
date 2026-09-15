@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CSafeLayout
 
 // MARK: - Document model
 
@@ -256,6 +257,14 @@ final class GutterRenderView: NSView {
         didSet { needsDisplay = true }
     }
 
+    /// The editor's live TextKit 1 layout manager. Line origins are derived from
+    /// its *actual* line-fragment rects, so numbers and the active-line highlight
+    /// stay locked to the text even when syntax highlighting gives each line its
+    /// own font size / line height. Falls back to uniform spacing when nil.
+    weak var sourceLayoutManager: NSLayoutManager? {
+        didSet { needsDisplay = true }
+    }
+
     private let foldGutterWidth: CGFloat = 14
     private let numberLeftPad: CGFloat = 6
     private let numberGap: CGFloat = 12
@@ -286,17 +295,81 @@ final class GutterRenderView: NSView {
         needsDisplay = true
     }
 
-    /// The editor is non-wrapping (infinite container width), so every source
-    /// line maps to exactly one visual line of constant height. Deriving origins
-    /// from the code line height keeps the gutter locked to the text view instead
-    /// of drifting from a separate TextKit 2 re-layout.
+    /// Derives per-line origins from the live layout manager's fragment rects.
+    /// The editor is non-wrapping, so each source line is one fragment — but line
+    /// *heights* vary per line (headings, emphasis, image lines, …), so a single
+    /// constant `lineHeight` can never keep numbers aligned with the text.
     private func rebuildLineOrigins(from attributedString: NSAttributedString) {
+        if let lm = sourceLayoutManager, lm.numberOfGlyphs > 0,
+           let storage = lm.textStorage {
+            lineOrigins = Self.lineOrigins(from: lm, string: storage.string as NSString,
+                                           width: gutter.width)
+            return
+        }
+        // Passive fallback: no live layout manager — assume uniform height.
         let lineCount = attributedString.string.components(separatedBy: "\n").count
         let height = max(gutter.lineHeight, 1)
         lineOrigins = (1...lineCount).map { number in
             (number: number, rect: CGRect(x: 0, y: CGFloat(number - 1) * height,
-                                          width: gutter.width, height: height))
+                                           width: gutter.width, height: height))
         }
+    }
+
+    /// Walks the layout manager's fragments top-to-bottom and maps each to its
+    /// 1-based source line. Wrapped continuations merge into their paragraph so a
+    /// single number + one full-height highlight covers the whole visual line.
+    private static func lineOrigins(from lm: NSLayoutManager, string: NSString,
+                                    width: CGFloat) -> [(number: Int, rect: CGRect)] {
+        var result: [(number: Int, rect: CGRect)] = []
+        let starts = lineStarts(for: string)
+        var startIdx = 0
+        var currentGlyph = 0
+        let maxGlyph = lm.numberOfGlyphs
+        var guardCount = 0
+
+        while currentGlyph < maxGlyph, guardCount < 200_000 {
+            guardCount += 1
+            var fragGlyphRange = NSRange(location: 0, length: 0)
+            let fragRect = SafeLineFragmentRect(lm, UInt(currentGlyph), &fragGlyphRange)
+            guard fragGlyphRange.location != NSNotFound, fragGlyphRange.length > 0 else { break }
+
+            let fragCharRange = SafeCharacterRangeForGlyphRange(lm, fragGlyphRange)
+            if fragCharRange.location != NSNotFound, fragCharRange.length > 0 {
+                while startIdx + 1 < starts.count && starts[startIdx + 1] <= fragCharRange.location {
+                    startIdx += 1
+                }
+                let lineNumber = startIdx + 1
+                let top = fragRect.minY
+                let bottom = fragRect.minY + fragRect.height
+                if let last = result.last, last.number == lineNumber {
+                    let newTop = min(last.rect.minY, top)
+                    let newBottom = max(last.rect.maxY, bottom)
+                    result[result.count - 1] = (number: lineNumber,
+                                                rect: CGRect(x: 0, y: newTop, width: width, height: newBottom - newTop))
+                } else {
+                    result.append((number: lineNumber,
+                                   rect: CGRect(x: 0, y: top, width: width, height: bottom - top)))
+                }
+            }
+
+            let next = NSMaxRange(fragGlyphRange)
+            if next <= currentGlyph { break }
+            currentGlyph = next
+        }
+        return result
+    }
+
+    /// Character index of each line start (line 1 begins at 0; each \n or \r
+    /// opens the next line immediately after it).
+    private static func lineStarts(for string: NSString) -> [Int] {
+        var starts: [Int] = [0]
+        var i = 0
+        while i < string.length {
+            let ch = string.character(at: i)
+            if ch == 0x0A || ch == 0x0D { starts.append(i + 1) }
+            i += 1
+        }
+        return starts
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -403,16 +476,19 @@ struct TextKit2EditorRepresentable: NSViewRepresentable {
 struct GutterRenderRepresentable: NSViewRepresentable {
     let attributedString: NSAttributedString
     let gutter: EditorGutterStyle
+    var sourceLayoutManager: NSLayoutManager? = nil
 
     func makeNSView(context: Context) -> GutterRenderView {
         let view = GutterRenderView(frame: .zero)
         view.gutter = gutter
+        view.sourceLayoutManager = sourceLayoutManager
         view.setAttributedString(attributedString)
         return view
     }
 
     func updateNSView(_ nsView: GutterRenderView, context: Context) {
         nsView.gutter = gutter
+        nsView.sourceLayoutManager = sourceLayoutManager
         nsView.setAttributedString(attributedString)
     }
 }
@@ -542,7 +618,8 @@ struct TextKit2ScrollSurface: View {
                 ProgressiveGutterNumbers(attributedString: attributedString,
                                          gutter: numbersOnlyGutter,
                                          contentHeight: renderedHeight,
-                                         verticalOffset: topContentInset - scrollOffset.y)
+                                         verticalOffset: topContentInset - scrollOffset.y,
+                                         sourceLayoutManager: existingEditor?.layoutManager)
                     .frame(width: gutter.width, height: proxy.size.height, alignment: .top)
                     .offset(x: leadingChromeWidth)
                     .allowsHitTesting(false)
@@ -565,6 +642,7 @@ private struct ProgressiveGutterNumbers: View {
     let gutter: EditorGutterStyle
     let contentHeight: CGFloat
     let verticalOffset: CGFloat
+    var sourceLayoutManager: NSLayoutManager? = nil
 
     private let transitionHeight: CGFloat = 72
 
@@ -606,7 +684,8 @@ private struct ProgressiveGutterNumbers: View {
 
     private var numberLayer: some View {
         GutterRenderRepresentable(attributedString: attributedString,
-                                  gutter: gutter)
+                                  gutter: gutter,
+                                  sourceLayoutManager: sourceLayoutManager)
             .frame(width: gutter.width, height: contentHeight)
             .offset(y: verticalOffset)
     }

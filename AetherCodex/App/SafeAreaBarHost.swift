@@ -33,6 +33,9 @@ struct AppKitViewHost: NSViewRepresentable {
 final class EditorChromeState: ObservableObject {
     @Published var sidebarVisible: Bool = true
     @Published var pythiaVisible: Bool = false
+    /// Oracle-only mode: the whole window flips like a card, revealing Pythia
+    /// alone on the reverse face — the editor chrome folds away entirely.
+    @Published var oracleOnly: Bool = false
     @Published var sidebarWidth: CGFloat = 180
     @Published var pythiaWidth: CGFloat = 280
     @Published var title: String = "Untitled"
@@ -41,6 +44,9 @@ final class EditorChromeState: ObservableObject {
     
     /// Callback to reposition traffic lights when sidebar visibility changes
     var onSidebarVisibilityChange: ((Bool) -> Void)?
+    /// Callback to fold away AppKit overlays (status bar, tab bar) when the
+    /// window flips into oracle-only mode.
+    var onOracleOnlyChange: ((Bool) -> Void)?
     
     init() {
         // Observe sidebar visibility changes to trigger animations
@@ -48,6 +54,13 @@ final class EditorChromeState: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] visible in
                 self?.onSidebarVisibilityChange?(visible)
+            }
+            .store(in: &cancellables)
+        
+        $oracleOnly
+            .removeDuplicates()
+            .sink { [weak self] oracleOnly in
+                self?.onOracleOnlyChange?(oracleOnly)
             }
             .store(in: &cancellables)
     }
@@ -199,7 +212,7 @@ struct EditorContainerView: View {
                         // NSTextView behind it (which moves the caret / line number).
                         Rectangle()
                             .fill(chrome.theme.sidebarMaterial)
-                            .overlay(Color(nsColor: chrome.theme.sidebarBackground ?? chrome.theme.rulerBackground)
+                            .overlay(Color(nsColor: chrome.theme.pythia.background)
                                 .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme)))
                         PythiaPanel(model: pythiaModel)
                             .environment(\.markdownThemeName, chrome.theme.name)
@@ -234,27 +247,121 @@ struct EditorContainerView: View {
     }
 }
 
+// MARK: - Oracle flip card
+
+/// The window's true content — a flip card. Front face = the code editor
+/// (chrome and all); reverse face = Pythia alone. `oracleOnly` turns the card
+/// over: the editor does not slide or maximize, it *turns away*.
+@available(macOS 26.0, *)
+struct OracleFlipRoot: View {
+    let editor: EditorViewController
+    let sidebar: NSView
+    @ObservedObject var pythiaModel: PythiaChatModel
+    @ObservedObject var chrome: EditorChromeState
+    @ObservedObject var document: EditorDocumentModel
+
+    /// 0 = editor facing forward, 180 = oracle facing forward.
+    @State private var degrees: Double = 0
+
+    var body: some View {
+        ZStack {
+            // Front face: the code editor with all its chrome. Fades to the
+            // reverse side as it turns past edge-on.
+            EditorContainerView(editor: editor, sidebar: sidebar,
+                                pythiaModel: pythiaModel, chrome: chrome,
+                                document: document)
+                .rotation3DEffect(.degrees(degrees), axis: (x: 0, y: 1, z: 0), perspective: 0.45)
+                .opacity(degrees > 90 ? 0 : 1)
+                .allowsHitTesting(!chrome.oracleOnly)
+
+            // Reverse face: Pythia alone. Both faces stay mounted so the turn
+            // reads as one continuous card; only the visible side takes input.
+            OracleOnlyView(pythiaModel: pythiaModel, chrome: chrome)
+                .rotation3DEffect(.degrees(degrees - 180), axis: (x: 0, y: 1, z: 0), perspective: 0.45)
+                .opacity(degrees > 90 ? 1 : 0)
+                .allowsHitTesting(chrome.oracleOnly)
+        }
+        .onChange(of: chrome.oracleOnly) { _, flipped in
+            withAnimation(.easeInOut(duration: 0.62)) {
+                degrees = flipped ? 180 : 0
+            }
+        }
+    }
+}
+
+/// The reverse face of the flip card — Pythia stands alone, filling the window.
+@available(macOS 26.0, *)
+private struct OracleOnlyView: View {
+    @ObservedObject var pythiaModel: PythiaChatModel
+    @ObservedObject var chrome: EditorChromeState
+
+    private var palette: PythiaPalette { chrome.theme.pythia }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            WindowBackdrop(strength: ThemeSettings.shared.resolvedGlassBlurStrength(for: chrome.theme))
+                .overlay(chrome.theme.editorGlassTintColor)
+                .overlay(Color(nsColor: chrome.theme.pythia.background)
+                    .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme)))
+
+            PythiaPanel(model: pythiaModel)
+                .environment(\.markdownThemeName, chrome.theme.name)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            flipBackButton
+        }
+        .ignoresSafeArea(.container, edges: [.top, .leading, .trailing])
+    }
+
+    private var flipBackButton: some View {
+        Button {
+            chrome.oracleOnly = false
+        } label: {
+            Image(systemName: "arrow.uturn.backward")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 30, height: 30)
+                .contentShape(Circle())
+                .glassEffect(.regular.interactive(), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(palette.foregroundColor)
+        .help("Return to Editor")
+        .padding(.leading, 80)
+        .padding(.top, 8)
+    }
+}
+
 private struct EditorModeSurface: View {
     let editor: EditorViewController
     let theme: SyntaxTheme
     @ObservedObject var document: EditorDocumentModel
     @ObservedObject var rich: RichTextDocument
+    @ObservedObject var imageModel: ImagePreviewModel
+    @ObservedObject var htmlModel: HTMLPreviewModel
     var leading: CGFloat
     var trailing: CGFloat
 
     init(editor: EditorViewController, theme: SyntaxTheme, document: EditorDocumentModel,
-         leading: CGFloat = 0, trailing: CGFloat = 0) {
+          leading: CGFloat = 0, trailing: CGFloat = 0) {
         self.editor = editor
         self.theme = theme
         self.document = document
         self.rich = editor.richDocument
+        self.imageModel = editor.imagePreview
+        self.htmlModel = editor.htmlPreview
         self.leading = leading
         self.trailing = trailing
     }
 
     var body: some View {
-        if rich.active {
-            RichTextSurface(document: rich, theme: theme, showSource: editor.showMarkdownSource)
+        if imageModel.isActive {
+            ImagePreviewSurface(model: imageModel, theme: theme)
+                .padding(.leading, leading).padding(.trailing, trailing)
+        } else if htmlModel.isActive {
+            HTMLPreviewSurface(model: htmlModel, theme: theme, onShowSource: editor.showHTMLSource)
+                .padding(.leading, leading).padding(.trailing, trailing)
+        } else if rich.active {
+            RichTextSurface(document: rich, theme: theme, showSource: editor.showMarkdownSource, sidebarClosed: leading == 0)
                 .padding(.leading, leading).padding(.trailing, trailing)
         } else {
             TextKit2ScrollSurface(attributedString: document.attributedString,
@@ -264,10 +371,17 @@ private struct EditorModeSurface: View {
                                  sharedTextStorage: editor.textStorage, existingEditor: editor.textView)
                 .scrollEdgeEffectStyle(.soft, for: [.top, .leading, .trailing])
                 .overlay(alignment: .topTrailing) {
-                    if editor.supportsRichText {
-                        Button("Text view", action: editor.showRichText)
-                            .buttonStyle(.bordered).padding(.top, 48).padding(.trailing, trailing + 20)
+                    VStack(alignment: .trailing, spacing: 8) {
+                        if editor.supportsRichText {
+                            Button("Text view", action: editor.showRichText)
+                                .buttonStyle(.bordered)
+                        }
+                        if editor.supportsHTML {
+                            Button("Preview", action: editor.previewHTML)
+                                .buttonStyle(.bordered)
+                        }
                     }
+                    .padding(.top, 48).padding(.trailing, trailing + 20)
                 }
         }
     }
@@ -295,14 +409,63 @@ struct TopBar: View {
 
             Spacer()
 
-            // Visual balance opposite the sidebar toggle.
-            Color.clear.frame(width: 24, height: 1)
+            PythiaControlGroup(chrome: chrome)
         }
         .padding(.leading, 80)
         .padding(.trailing, 12)
         .frame(height: 44)
         .frame(maxWidth: .infinity)
         .offset(y: -28)
+    }
+}
+
+/// Combined titlebar group for Pythia: one toggle for the sidebar, one for the
+/// card flip (oracle-only). Lives in the titlebar so the flip stays reachable
+/// even when the Pythia sidebar is folded away.
+private struct PythiaControlGroup: View {
+    @ObservedObject var chrome: EditorChromeState
+
+    var body: some View {
+        HStack(spacing: 2) {
+            pythiaToggle
+            flipButton
+        }
+        .padding(2)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+    }
+
+    private var pythiaToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.25)) { chrome.pythiaVisible.toggle() }
+        } label: {
+            Image(systemName: chrome.pythiaVisible ? "sidebar.right" : "rectangle.righthalf.inset.filled")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 26, height: 24)
+                .contentShape(Circle())
+                .background(chrome.pythiaVisible
+                            ? AnyShapeStyle(.regularMaterial)
+                            : AnyShapeStyle(.clear), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(chrome.pythiaVisible
+                         ? chrome.theme.pythia.accentColor
+                         : Color.secondary)
+        .help(chrome.pythiaVisible ? "Close Pythia" : "Open Pythia")
+    }
+
+    private var flipButton: some View {
+        Button {
+            chrome.oracleOnly = true
+        } label: {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 26, height: 24)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(chrome.theme.pythia.accentColor)
+        .help("Oracle Only (flip window)")
     }
 }
 

@@ -36,7 +36,9 @@ class Artificer
       log_instrumenta_call 'INSTRUMENTA_CALL', name, args
       safe_context = create_safe_context instrumenta_results
       start_time = Time.now
-      sink&.send_status 'tool_starting', { name:, args: args.to_s.truncate(120) }
+      tool_uuid = SecureRandom.uuid
+      Thread.current[:aether_tool_uuid] = tool_uuid
+      sink&.send_status 'tool_starting', { name:, args: echo_args(args) }, uuid: tool_uuid
 
       result = HermeticExecutionDomain.execute max_retries: 2, timeout: 86_400 do
         exec_result = execution_block.call name, args, safe_context
@@ -47,7 +49,7 @@ class Artificer
         end
 
         safe_result = safe_encode exec_result
-        sink&.send_status 'tool_completed', { name:, execution_time: exec_time, result: ui_preview(safe_result) }
+        sink&.send_status 'tool_completed', { name:, execution_time: exec_time, result: ui_preview(safe_result, name: name) }, uuid: tool_uuid
         updated_instrumenta_results = instrumenta_results + [{ id:, name:, result: safe_result, args:, execution_time: exec_time.round(3) }]
 
         # Build tool message and vision message separately.
@@ -79,7 +81,9 @@ class Artificer
                            instrumenta_call[:args]
       safe_context = create_safe_context instrumenta_results
       start_time = Time.now
-      sink&.send_status 'tool_starting', { name:, args: instrumenta_call[:args].to_s.truncate(120) }
+      tool_uuid = SecureRandom.uuid
+      Thread.current[:aether_tool_uuid] = tool_uuid
+      sink&.send_status 'tool_starting', { name:, args: echo_args(instrumenta_call[:args]) }, uuid: tool_uuid
 
       result = HermeticExecutionDomain.execute max_retries: 2, timeout: 86_400 do
         exec_result = execution_block.call name, instrumenta_call[:args], safe_context
@@ -90,7 +94,7 @@ class Artificer
         end
 
         safe_result = safe_encode exec_result
-        sink&.send_status 'tool_completed', { name:, execution_time: exec_time, result: ui_preview(safe_result) }
+        sink&.send_status 'tool_completed', { name:, execution_time: exec_time, result: ui_preview(safe_result, name: name) }, uuid: tool_uuid
         instrumenta_call_id = instrumenta_call[:id] || SecureRandom.uuid
         updated_instrumenta_results = instrumenta_results + [{ id:     instrumenta_call_id,
                                                                name:,
@@ -111,6 +115,7 @@ class Artificer
     rescue HermeticExecutionDomain::Error => e
       handle_hermetic_execution_error e, 'Hermetic execution failed'
     end
+
 
 
     # Handle multiple instrumenta calls in sequence with proper message accumulation
@@ -178,6 +183,19 @@ class Artificer
 
       args = ensure_json(args) if args.is_a? String
       args.transform_keys(&:to_sym)
+    end
+
+
+    # Serialise a tool call's arguments for the live UI echo. The Swift file
+    # mirror decodes these back into structured `ReadFileArgs` / `PatchFileArgs`
+    # (path, range, diff, …) — so they must travel as *JSON*, never Ruby's
+    # `Hash#to_s` dump (`{:path=>"…"}`), which Swift's JSONDecoder cannot read.
+    def echo_args(args)
+      return '{}' if args.nil?
+      return args if args.is_a?(String)
+      args.to_json
+    rescue StandardError
+      args.to_s
     end
 
 
@@ -521,7 +539,11 @@ class Artificer
     # full result still reaches the model via the tool message; this is only what
     # the Pythia panel renders. truncate_tool_output already bounds results, so
     # capping here is purely cosmetic.
-    def ui_preview(result, limit = 4000)
+    def ui_preview(result, limit = 4000, name: nil)
+      # read_file behält seine Struktur, damit der Swift-Datei-Spiegel Pfad/Range/Inhalt
+      # rendern kann; andere content-tragende Ergebnisse bleiben ein kompaktes Echo.
+      return result if name&.to_s == 'read_file' && result.is_a?(Hash)
+
       text = if result.is_a?(Hash)
                (result[:content] || result['content'] || result.to_json).to_s
              else

@@ -63,6 +63,38 @@ struct ToolChip: Identifiable, Equatable, Codable {
     var command: String = ""
     var cwd: String = ""
     var exitStatus: Int? = nil
+    // Hermetic tool id — the model's tool_call id threaded through Artificer.
+    // Every horologium status update for one instrumenta call shares it, so
+    // file_reading → file_read_complete → tool_completed merge into one chip.
+    var toolId: String? = nil
+    // Live status line for the minified view; cleared on completion; never
+    // affects the group's expanded state.
+    // Horologium reconciliation: the many granular status frames for one tool
+    // call share a single uuid — they merge into this chip instead of each
+    // spawning a new entry. `status` is the live in-flight line (minified +
+    // header); `detail` is the richer expanded-view note (path, bytes, …).
+    var horologiumID: String? = nil
+    var status: String? = nil
+    var detail: String? = nil
+    /// The original horologium message, HTML stripped to plain text — carries
+    /// the richest in-flight/completed line (path, byte count, line range).
+    /// This is what the minimized form shows, mirroring TextMate Pythia.
+    var message: String? = nil
+}
+
+extension ToolChip {
+    /// Richest single-line description for the minimized form — the original
+    /// horologium message wins, then the live status, then detail, then the
+    /// shell command (CLI) or a bare name. One line, much meaning.
+    var minifiedSummary: String {
+        if let message, !message.isEmpty { return message }
+        if kind == .cli, !command.isEmpty { return command }
+        let sem = InstrumentaSemantics.forTool(name)
+        if let status, !status.isEmpty { return "\(sem.glyph) \(sem.label) \(status)" }
+        if let detail, !detail.isEmpty { return "\(sem.glyph) \(sem.label) \(detail)" }
+        if !args.isEmpty { return "\(sem.glyph) \(sem.label) \(name)" }
+        return "\(sem.glyph) \(sem.label) \(name)"
+    }
 }
 
 /// A shell command woven into the flow — the unified CLI block rendered both for
@@ -84,7 +116,11 @@ struct ToolGroup: Identifiable, Equatable, Codable {
     var id = UUID()
     var tools: [ToolChip] = []
     var closed = false
-    var expanded = true
+    var expanded = false
+
+    /// True once every chip in the cluster has finished — swaps the in-flight
+    /// spinner for a quiet checkmark in the minified summary.
+    var allDone: Bool { !tools.isEmpty && tools.allSatisfy(\.done) }
 }
 
 /// One node in the unified flow timeline. Messages, tool groups and CLI
@@ -143,6 +179,11 @@ extension FlowEntry: Codable {
 final class PythiaChatModel: ObservableObject {
     @Published var flow: [FlowEntry] = []
     @Published var companionID: String = "pythia"
+    /// Companions veiled into the æther while talking to default Pythia. They
+    /// answer in the chat (via `_say`) and offer follow-ups (`_suggest`), and
+    /// contribute their specialist tools. Only these — the ones shown active in
+    /// the bar — are hermetically active.
+    @Published var activeCompanions: Set<String> = []
     @Published var busy = false
     @Published var statusText: String?
     @Published var streamingText = ""
@@ -151,6 +192,9 @@ final class PythiaChatModel: ObservableObject {
         /// One-click Riss macro offered when the daemon tears the thread — transient
         /// UI state, never persisted into the flow ledger.
         @Published var recoverCard: RecoverSuggestion?
+        /// Transient UI state: which individual tool chips are unfolded. Never
+        /// persisted — chips start minimized every session and after each turn.
+        @Published var expandedChipIDs: Set<UUID> = []
         /// Companion voices extracted from the latest reply — one-click macros that
         /// make the pantheon omnipresent instead of JSON chips.
         @Published var companionBubbles: [CompanionBubble] = []
@@ -173,6 +217,9 @@ final class PythiaChatModel: ObservableObject {
     }
 
     init() {
+        // Restore hermetic activation — which companions answer alongside Pythia.
+        let saved = UserDefaults.standard.stringArray(forKey: "pythia.activeCompanions") ?? []
+        activeCompanions = Set(saved)
         setupStreaming()
         observeFlowChanges()
         // Flush the debounced save when the app quits so the final flow state
@@ -376,12 +423,17 @@ final class PythiaChatModel: ObservableObject {
                 }
                 let reply: OracleReply
                 if companion == "pythia" {
-                    reply = try await RubyBridge.shared.chatDetailed(messages: history)
+                    reply = try await RubyBridge.shared.chatDetailed(
+                        messages: history,
+                        activeCompanions: Array(activeCompanions).sorted()
+                    )
                 } else {
                     let answer = try await RubyBridge.shared.askCompanion(name: companion, question: history.last?["content"] ?? "")
                     reply = OracleReply(text: answer, reasoningContent: nil)
                 }
-                let finalText = reply.text ?? "The æther is silent."
+                let rawAnswer = reply.text ?? ""
+                let finalText = rawAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "The æther is silent." : rawAnswer
                 var assistantEntry: [String: String] = ["role": "assistant", "content": finalText]
                 if let rc = reply.reasoningContent, !rc.isEmpty {
                     assistantEntry["reasoning_content"] = rc
@@ -392,6 +444,11 @@ final class PythiaChatModel: ObservableObject {
                     self.statusText = nil
                     self.appendMessage(ChatMessage(role: "assistant", text: finalText, glyph: glyph, reasoning: reply.reasoningContent))
                     self.history.append(assistantEntry)
+                    // The active pantheon answers through Pythia's turn: each
+                    // `_say`/`_ask` voice lands as its own message with its glyph.
+                    for say in reply.companionSays {
+                        self.appendMessage(ChatMessage(role: "assistant", text: say.message, glyph: say.glyph))
+                    }
                     self.companionBubbles = bubbles
                     self.trimHistory()  // count even again after assistant
                     self.collapseCompletedToolGroups()
@@ -475,12 +532,35 @@ final class PythiaChatModel: ObservableObject {
 
     func selectCompanion(_ id: String) {
         companionID = id
+        // Speaking to a companion directly veils it into the æther — activation
+        // is implied by direct speech. Default Pythia stays the home voice.
+        if id != "pythia" && !activeCompanions.contains(id) {
+            activeCompanions.insert(id)
+            persistActiveCompanions()
+        }
         history = []  // companions are single-turn
         closeOpenToolGroup()
         streamingVisible = false
         streamingText = ""
         statusText = nil
         scheduleFlowSave()
+    }
+
+    /// Toggle a companion's hermetic activation. Active companions answer in the
+    /// default Pythia chat (via `_say`/`_suggest`) and contribute their tools.
+    func toggleCompanion(_ id: String) {
+        if activeCompanions.contains(id) {
+            activeCompanions.remove(id)
+        } else {
+            activeCompanions.insert(id)
+        }
+        persistActiveCompanions()
+    }
+
+    func isCompanionActive(_ id: String) -> Bool { activeCompanions.contains(id) }
+
+    private func persistActiveCompanions() {
+        UserDefaults.standard.set(Array(activeCompanions).sorted(), forKey: "pythia.activeCompanions")
     }
 
     // MARK: Riss macro & companion bubbles
@@ -550,6 +630,11 @@ final class PythiaChatModel: ObservableObject {
     private func handleStream(_ payload: [String: Any]) {
         let kind = payload["type"] as? String ?? ""
         let data = payload["data"] as? [String: Any] ?? [:]
+        let uuid = payload["uuid"] as? String
+        // tool id — the model's tool_call id threaded through Artificer. Status
+        // updates (file_reading, file_patching, …) merge into that one chip
+        // instead of spawning a new chip per event.
+        let toolId = payload["tool_id"] as? String ?? data["id"] as? String ?? data["tool_id"] as? String
         switch kind {
         case "thinking":
             statusText = "💭 \(data["message"] as? String ?? "thinking…")"
@@ -560,23 +645,32 @@ final class PythiaChatModel: ObservableObject {
             if name == "run_command" {
                 // The agent's run_command merges as a CLI chip *inside* the open
                 // instrumenta group — one interface, no group-tearing.
-                appendCliChip(args: stringify(data["args"]))
+                appendCliChip(args: stringify(data["args"]), toolId: toolId)
             } else {
-                appendTool(name, args: stringify(data["args"]))
+                appendTool(name, args: stringify(data["args"]), uuid: uuid)
             }
         case "tool_completed":
             let name = (data["tool"] ?? data["name"]) as? String ?? ""
             if name == "run_command" { break }  // completed via command_completed
-            completeTool(output: stringify(data["result"]))
-        case "oracle_revelation", "oracle_conjuration_revelation":
-            // Text closes any open tool run: a later tool call starts a new group.
+            completeTool(toolId: toolId, output: stringify(data["result"]))
+        case "oracle_revelation":
+            // The oracle's spoken narration is a genuine assistant turn — preserve
+            // it as a permanent message instead of a transient streaming bubble
+            // that vanished when the final answer landed (succinct AI messages
+            // were disappearing from the transcript).
+            let narration = (data["raw_content"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !narration.isEmpty {
+                appendMessage(ChatMessage(role: "assistant", text: narration, glyph: currentGlyph))
+            }
+        case "oracle_conjuration_revelation":
             closeOpenToolGroup()
             streamingText = data["raw_content"] as? String ?? ""
             streamingVisible = true
         case "command_executing":
             // The agent's run_command tool — resolved into the open group's CLI
             // chip (the same unified shell block the user's `$` prompt produces).
-            setCliChipCommand(data["command"] as? String ?? "")
+            setCliChipCommand(data["command"] as? String ?? "", toolId: toolId)
+            applyToolStatus(kind: kind, data: data, toolId: toolId)
         case "command_completed":
             if let cwd = data["cwd"] as? String, !cwd.isEmpty {
                 cliCwd = cwd
@@ -585,12 +679,15 @@ final class PythiaChatModel: ObservableObject {
                 data["command"] as? String ?? "",
                 output: data["content"] as? String ?? "",
                 cwd: cliCwd,
-                exitStatus: data["exit_status"] as? Int
+                exitStatus: data["exit_status"] as? Int,
+                toolId: toolId
             )
         case "system_error":
             statusText = "⚠️ \((data["message"] ?? data["error"]) as? String ?? "system error")"
         default:
-            break
+            if Self.toolStatusKinds.contains(kind) {
+                mergeToolStatus(kind: kind, data: data, uuid: uuid)
+            }
         }
     }
 
@@ -619,13 +716,15 @@ final class PythiaChatModel: ObservableObject {
 
     /// Merge an instrument call into the trailing open group when calls are
     /// consecutive; otherwise open a fresh collapsible cluster.
-    private func appendTool(_ name: String, args: String = "") {
-        appendChip(ToolChip(name: name, args: args, done: false))
+    private func appendTool(_ name: String, args: String = "", uuid: String? = nil) {
+        appendChip(ToolChip(name: name, args: args, done: false, horologiumID: uuid))
     }
 
     /// The agent's run_command — a CLI chip inside the open group.
-    private func appendCliChip(args: String = "") {
-        appendChip(ToolChip(kind: .cli, name: "run_command", args: args, done: false, command: "", cwd: cliCwd))
+    private func appendCliChip(args: String = "", toolId: String? = nil) {
+        var chip = ToolChip(kind: .cli, name: "run_command", args: args, done: false, command: "", cwd: cliCwd)
+        chip.toolId = toolId
+        appendChip(chip)
     }
 
     private func appendChip(_ chip: ToolChip) {
@@ -633,7 +732,6 @@ final class PythiaChatModel: ObservableObject {
            case .toolGroup(let group) = flow[idx] {
             var g = group
             g.tools.append(chip)
-            g.expanded = true
             flow[idx] = .toolGroup(g)
         } else {
             var g = ToolGroup()
@@ -649,33 +747,34 @@ final class PythiaChatModel: ObservableObject {
 
     /// Attach the real command to the open CLI chip (or create one if the
     /// tool_starting frame was missed).
-    private func setCliChipCommand(_ cmd: String) {
+    private func setCliChipCommand(_ cmd: String, toolId: String? = nil) {
         guard let idx = openToolGroupIndex(),
               case .toolGroup(let group) = flow[idx] else {
-            appendCliChip()
+            appendCliChip(toolId: toolId)
             return
         }
         var g = group
-        if let chipIdx = g.tools.lastIndex(where: { $0.kind == .cli && !$0.done }) {
+        if let chipIdx = g.tools.lastIndex(where: { $0.kind == .cli && !$0.done && (toolId == nil || $0.toolId == toolId) }) {
             g.tools[chipIdx].command = cmd
             flow[idx] = .toolGroup(g)
             scheduleFlowSave()
         } else {
-            appendCliChip()
+            appendCliChip(toolId: toolId)
         }
     }
 
     /// Fill the open CLI chip with command output, cwd and exit status.
-    private func completeCliChip(_ cmd: String, output: String, cwd: String, exitStatus: Int?) {
+    private func completeCliChip(_ cmd: String, output: String, cwd: String, exitStatus: Int?, toolId: String? = nil) {
         guard let idx = openToolGroupIndex(),
               case .toolGroup(let group) = flow[idx] else { return }
         var g = group
-        if let chipIdx = g.tools.lastIndex(where: { $0.kind == .cli && !$0.done }) {
+        if let chipIdx = g.tools.lastIndex(where: { $0.kind == .cli && !$0.done && (toolId == nil || $0.toolId == toolId) }) {
             if !cmd.isEmpty { g.tools[chipIdx].command = cmd }
             g.tools[chipIdx].output = output
             g.tools[chipIdx].cwd = cwd
             g.tools[chipIdx].exitStatus = exitStatus
             g.tools[chipIdx].done = true
+            g.tools[chipIdx].status = nil
             flow[idx] = .toolGroup(g)
             scheduleFlowSave()
         }
@@ -683,23 +782,196 @@ final class PythiaChatModel: ObservableObject {
 
     /// Mark the newest unfinished *instrument* chip as completed. CLI chips are
     /// completed via command_completed, not here.
-    private func completeTool(output: String) {
+    private func completeTool(toolId: String? = nil, output: String) {
         guard let idx = flow.lastIndex(where: { if case .toolGroup = $0 { return true } else { return false } }) else { return }
         guard case .toolGroup(let group) = flow[idx] else { return }
         var g = group
-        if let chipIdx = g.tools.lastIndex(where: { $0.kind == .instrument && !$0.done }) {
-            g.tools[chipIdx].done = true
-            g.tools[chipIdx].output = output
+        var chipIdx: Int? = nil
+        if let toolId {
+            chipIdx = g.tools.lastIndex(where: { $0.toolId == toolId })
         }
+        if chipIdx == nil {
+            chipIdx = g.tools.lastIndex(where: { $0.kind == .instrument && !$0.done })
+        }
+        guard let ci = chipIdx else { return }
+        g.tools[ci].done = true
+        g.tools[ci].output = output
+        g.tools[ci].status = nil
+        flow[idx] = .toolGroup(g)
+        scheduleFlowSave()
+    }
+
+    /// Horologium status kinds that belong to a specific instrument invocation —
+    /// they carry the same uuid as their `tool_starting` envelope and merge into
+    /// that single chip instead of each spawning a new flow entry.
+    private static let toolStatusKinds: Set<String> = [
+        "file_reading", "file_read_complete", "file_read_fail",
+        "file_creating", "file_created", "temp_file_created",
+        "file_patching", "file_patched", "file_patched_fail",
+        "file_renaming", "file_renamed",
+        "undo_completed", "undo_failed",
+        "symbolic_patch_start", "symbolic_patch_complete", "symbolic_patch_fail",
+        "memory_storing", "memory_stored", "note_added", "note_removed", "note_updated",
+        "memory_searching", "memory_found", "notes_recalled",
+        "file_overview",
+        "screenshot_capturing", "screenshot_captured", "screenshot_failed",
+    ]
+
+    /// Merge a granular Horologium frame into the in-flight instrument chip it
+    /// belongs to. Serial execution means there is at most one open instrument at
+    /// a time; the uuid is recorded so later frames for the same call find the
+    /// same chip. The group's `expanded` state is deliberately left untouched —
+    /// an update must never yank a chip the user unfolded back shut.
+    private func mergeToolStatus(kind: String, data: [String: Any], uuid: String?) {
+        guard let (gIdx, cIdx) = openInstrumentChipLocation(),
+              case .toolGroup(let group) = flow[gIdx] else { return }
+        var g = group
+        var chip = g.tools[cIdx]
+        if let uuid, !uuid.isEmpty { chip.horologiumID = uuid }
+        let (status, detail) = Self.toolStatusText(kind: kind, data: data)
+        if let status { chip.status = status }
+        if let detail { chip.detail = detail }
+        if let rawMessage = data["message"] as? String, !rawMessage.isEmpty {
+            chip.message = Self.plainTextFromHTML(rawMessage)
+        }
+        g.tools[cIdx] = chip
+        flow[gIdx] = .toolGroup(g)
+        scheduleFlowSave()
+    }
+
+    private func openInstrumentChipLocation() -> (group: Int, chip: Int)? {
+        for gIdx in flow.indices.reversed() {
+            guard case .toolGroup(let group) = flow[gIdx] else { continue }
+            if let cIdx = group.tools.lastIndex(where: { $0.kind == .instrument && !$0.done }) {
+                return (gIdx, cIdx)
+            }
+        }
+        return nil
+    }
+
+    /// Translate a Horologium status kind + data into a one-line live status
+    /// (for the minified summary) and a richer detail line (for the expanded view).
+    private static func toolStatusText(kind: String, data: [String: Any]) -> (status: String?, detail: String?) {
+        let path = data["path"] as? String
+        let short = path.map { ($0 as NSString).lastPathComponent }
+        let range = data["range"] as? [Int]
+        let bytes = (data["bytes_read"] as? Int) ?? (data["bytes"] as? Int)
+
+        switch kind {
+        case "file_reading":
+            return (short.map { "Liest \($0)…" } ?? "Liest…", detailLine(path: path, range: range))
+        case "file_read_complete":
+            return (short.map { "Gelesen \($0)" } ?? "Gelesen", detailLine(path: path, range: range, bytes: bytes))
+        case "file_read_fail":
+            return ("Lesefehler", short)
+        case "file_creating":
+            return (short.map { "Erzeugt \($0)…" } ?? "Erzeugt…", path)
+        case "file_created":
+            return (short.map { "Erzeugt \($0)" } ?? "Erzeugt", detailLine(path: path, bytes: bytes))
+        case "temp_file_created":
+            return (short.map { "Temp \($0)" } ?? "Temp-Datei", path)
+        case "file_patching":
+            return ("Patcht \(short ?? "Datei")…", (data["diff_lines"] as? Int).map { "\($0) Diff-Zeilen" })
+        case "file_patched":
+            return ("Gepatcht", path)
+        case "file_patched_fail":
+            return ("Patch fehlgeschlagen", short)
+        case "file_renaming":
+            return ("Benennt um…", path)
+        case "file_renamed":
+            return ("Umbenannt", path)
+        case "undo_completed":
+            return ("Rückgängig vollzogen", path)
+        case "undo_failed":
+            return ("Rückgängig fehlgeschlagen", path)
+        case "symbolic_patch_start":
+            return ("Symbol-Patch…", path)
+        case "symbolic_patch_complete":
+            return ("Symbol-Patch vollzogen", path)
+        case "symbolic_patch_fail":
+            return ("Symbol-Patch fehlgeschlagen", path)
+        case "memory_storing", "note_added", "note_updated":
+            return ("Speichert Erinnerung…", nil)
+        case "memory_stored":
+            return ("Erinnerung gespeichert", nil)
+        case "note_removed":
+            return ("Notiz gelöscht", nil)
+        case "memory_searching", "notes_recalled":
+            return ("Ruft Erinnerung ab…", nil)
+        case "memory_found":
+            return ("Erinnerung gefunden", nil)
+        case "file_overview":
+            return ("Überblickt…", path)
+        case "screenshot_capturing":
+            return ("Blickt…", data["mode"] as? String)
+        case "screenshot_captured":
+            return ("Blick festgehalten", data["path"] as? String)
+        case "screenshot_failed":
+            return ("Blick fehlgeschlagen", data["error"] as? String)
+        default:
+            return (nil, nil)
+        }
+    }
+
+    private static func detailLine(path: String?, range: [Int]? = nil, bytes: Int? = nil) -> String? {
+        var parts: [String] = []
+        if let path { parts.append(path) }
+        if let range, range.count == 2 { parts.append("Zeilen \(range[0])–\(range[1])") }
+        if let bytes { parts.append("\(bytes) Bytes") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Merge a horologium status update into the matching open chip. The update
+    /// only changes the chip's live status line — it never toggles the group's
+    /// expanded state, so an expanded view stays expanded while a tool streams.
+    private func applyToolStatus(kind: String, data: [String: Any], toolId: String?) {
+        guard let status = InstrumentaStatus.text(for: kind, data: data) else { return }
+        guard let idx = openToolGroupIndex(),
+              case .toolGroup(let group) = flow[idx] else { return }
+        var g = group
+        var chipIdx: Int? = nil
+        if let toolId {
+            chipIdx = g.tools.lastIndex(where: { $0.toolId == toolId })
+        }
+        if chipIdx == nil {
+            chipIdx = g.tools.lastIndex(where: { !$0.done })
+        }
+        guard let ci = chipIdx else { return }
+        g.tools[ci].status = status
         flow[idx] = .toolGroup(g)
         scheduleFlowSave()
     }
 
     /// Coerce a Ruby-side value into a display string for tool args/output.
+    /// Structured values become readable JSON (not Swift's `["key": …]` dump),
+    /// so Mnemosyne & co. can be rendered as *meaning*, not a debug fragment.
     private func stringify(_ value: Any?) -> String {
         guard let value else { return "" }
         if let s = value as? String { return s }
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
+           let json = String(data: data, encoding: .utf8) {
+            return json
+        }
         return String(describing: value)
+    }
+
+    /// Collapse a Ruby-side `Scriptorium.html` message into plain text for the
+    /// minimized line — strips `<file>`/`<a>`/`<strong>` tags and decodes the
+    /// few entities Redcarpet escapes, preserving the human meaning (path,
+    /// byte count, line range) without the markup.
+    private static func plainTextFromHTML(_ html: String) -> String {
+        var s = html
+        let entities: [(String, String)] = [
+            ("&quot;", "\""), ("&#39;", "'"), ("&apos;", "'"),
+            ("&lt;", "<"), ("&gt;", ">"), ("&nbsp;", " "), ("&amp;", "&"),
+        ]
+        for (entity, replacement) in entities {
+            s = s.replacingOccurrences(of: entity, with: replacement)
+        }
+        s = s.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Close the trailing open tool run so later events start a new group.
@@ -724,6 +996,9 @@ final class PythiaChatModel: ObservableObject {
                 g.expanded = false
                 flow[idx] = .toolGroup(g)
             }
+            // Individual chips fold with their cluster — every turn reopens to a
+            // clean, minimized instrumenta ledger.
+            expandedChipIDs.removeAll()
         }
         scheduleFlowSave()
     }
@@ -737,6 +1012,15 @@ final class PythiaChatModel: ObservableObject {
         flow[idx] = .toolGroup(g)
         scheduleFlowSave()
     }
+
+    /// Toggle a single tool chip's minimized/expanded state inside a group.
+    func toggleToolChip(_ id: UUID) {
+        if expandedChipIDs.contains(id) {
+            expandedChipIDs.remove(id)
+        } else {
+            expandedChipIDs.insert(id)
+        }
+    }
 }
 
 // MARK: - Pythia panel
@@ -744,16 +1028,25 @@ final class PythiaChatModel: ObservableObject {
 struct PythiaPanel: View {
     @ObservedObject var model: PythiaChatModel
     @ObservedObject private var aetherContext = AetherContext.shared
+    @State private var themeRevision = 0
+
+    /// The active theme's chamber palette — mirrors the code editor's chrome.
+    private var palette: PythiaPalette { ThemeRegistry.shared.current.pythia }
 
     var body: some View {
+        let palette = self.palette
+        let _ = themeRevision
         MessageList(model: model)
         .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
         .safeAreaBar(edge: .top, spacing: 0) {
           VStack(spacing: 0) {
-            CompanionPicker(model: model)
-                .padding(.horizontal, 10)
-                .padding(.top, 56)  // window chrome clearance
-                .padding(.bottom, 6)
+            HStack(spacing: 6) {
+              CompanionPicker(model: model)
+              Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 56)  // window chrome clearance
+            .padding(.bottom, 6)
 
             if aetherContext.root != nil {
                 HStack(spacing: 6) {
@@ -801,6 +1094,11 @@ struct PythiaPanel: View {
         .onChange(of: aetherContext.root) { oldRoot, newRoot in
             model.contextDidChange(from: oldRoot, to: newRoot)
         }
+        .environment(\.pythiaPalette, palette)
+        .tint(palette.accentColor)
+        .onReceive(NotificationCenter.default.publisher(for: ThemeSettings.didChangeNotification)) { _ in
+            themeRevision += 1
+        }
     }
 
     /// Liquid-glass glyph button toggling the Æther Debug window (daemon logs)
@@ -816,9 +1114,10 @@ struct PythiaPanel: View {
                 .glassEffect(.regular.interactive(), in: Circle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.white)
+        .foregroundStyle(palette.foregroundColor)
         .help("Show Æther Debug")
     }
+
 }
 
 // MARK: - Context pill
@@ -827,12 +1126,13 @@ struct PythiaPanel: View {
 /// advertise *which* æther it is currently breathing. "ICH bin der ÆTHER."
 private struct ContextPill: View {
     @ObservedObject var context: AetherContext
+    @Environment(\.pythiaPalette) private var palette
 
     var body: some View {
         HStack(spacing: 5) {
             Text("◈")
                 .font(.system(size: 10))
-                .foregroundStyle(context.configPath != nil ? Color.accentColor : Color.secondary)
+                .foregroundStyle(context.configPath != nil ? palette.accentColor : Color.secondary)
             Text(context.name ?? "")
                 .font(.system(size: 11, weight: .medium))
                 .lineLimit(1)
@@ -852,6 +1152,7 @@ private struct ContextPill: View {
 private struct CompanionPicker: View {
     @ObservedObject var model: PythiaChatModel
     @ObservedObject private var bridge = RubyBridge.shared
+    @Environment(\.pythiaPalette) private var palette
 
     /// The pantheon as the daemon knows it — one roster, two worlds. Falls back
     /// to the local copy until the first `ready` frame arrives; Pythia herself
@@ -870,30 +1171,73 @@ private struct CompanionPicker: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 ForEach(companions) { companion in
-                    let active = model.companionID == companion.id
-                    Button {
-                        model.selectCompanion(companion.id)
-                    } label: {
-                        Text(companion.glyph)
-                            .font(.system(size: 13))
-                            .frame(width: 26, height: 26)
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .background(active ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.clear), in: Circle())
-                    .overlay(
-                        Circle().strokeBorder(
-                            active ? Color.accentColor.opacity(0.7) : .white.opacity(0.10),
-                            lineWidth: 0.75
-                        )
-                    )
-                    .scaleEffect(active ? 1.06 : 1.0)
-                    .animation(.spring(response: 0.3, dampingFraction: 0.78), value: active)
-                    .help(companion.label)
+                    pickerButton(for: companion)
                 }
             }
             .padding(.vertical, 2)
         }
+    }
+
+    /// One glyph, two gestures: a click toggles hermetic activation (the voice
+    /// joins/leaves the default Pythia chat), a right-click speaks to the
+    /// companion directly. Pythia herself is the immutable home voice.
+    @ViewBuilder
+    private func pickerButton(for companion: Companion) -> some View {
+        let isPythia = companion.id == "pythia"
+        let isDirect = model.companionID == companion.id
+        let isActive = isPythia || model.isCompanionActive(companion.id)
+
+        Button {
+            if isPythia {
+                model.selectCompanion("pythia")
+            } else {
+                model.toggleCompanion(companion.id)
+            }
+        } label: {
+            Text(companion.glyph)
+                .font(.system(size: 13))
+                .frame(width: 26, height: 26)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(isActive ? 1.0 : 0.45)
+        .background(
+            isDirect ? AnyShapeStyle(.regularMaterial)
+                     : (isActive ? AnyShapeStyle(palette.accentColor.opacity(0.16))
+                                 : AnyShapeStyle(.clear)),
+            in: Circle()
+        )
+        .overlay(
+            Circle().strokeBorder(
+                isDirect ? palette.accentColor.opacity(0.95)
+                         : (isActive ? palette.accentColor.opacity(0.5) : .white.opacity(0.10)),
+                lineWidth: isDirect ? 1.2 : 0.75
+            )
+        )
+        .scaleEffect(isDirect ? 1.08 : (isActive ? 1.03 : 1.0))
+        .animation(.spring(response: 0.3, dampingFraction: 0.78), value: isActive)
+        .animation(.spring(response: 0.3, dampingFraction: 0.78), value: isDirect)
+        .help(helpText(for: companion, isPythia: isPythia, isActive: isActive, isDirect: isDirect))
+        .contextMenu {
+            if !isPythia {
+                Button(isDirect ? "✓ \(companion.label)" : "Mit \(companion.label) sprechen") {
+                    model.selectCompanion(companion.id)
+                }
+                Divider()
+                Button(isActive ? "Deaktivieren" : "Aktivieren") {
+                    model.toggleCompanion(companion.id)
+                }
+            }
+        }
+    }
+
+    private func helpText(for companion: Companion, isPythia: Bool, isActive: Bool, isDirect: Bool) -> String {
+        if isPythia {
+            return isDirect ? "Pythia — Standard-Orakel" : "Zu Pythia zurückkehren"
+        }
+        let state = isActive ? "aktiv" : "inaktiv"
+        let voice = isDirect ? " · du sprichst direkt" : ""
+        return "\(companion.label) (\(state))\(voice)\nKlick: aktivieren/deaktivieren · Rechtsklick: direkt sprechen"
     }
 }
 
@@ -903,31 +1247,40 @@ private struct CompanionPicker: View {
 /// prompt and by the agent's `run_command` tool. Two hands, one interface.
 private struct CliBlock: View {
     let entry: CliEntry
+    @Environment(\.pythiaPalette) private var palette
+    @State private var expanded = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text("$")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.accentColor)
-                Text(highlightCode(entry.command, language: "shell"))
-                    .font(.system(size: 11, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                if entry.done {
-                    Image(systemName: entry.exitStatus == 0 ? "checkmark.circle" : "xmark.circle")
-                        .font(.system(size: 9))
-                        .foregroundStyle(entry.exitStatus == 0 ? Color.secondary : Color.red.opacity(0.8))
-                } else {
-                    ProgressView().controlSize(.mini)
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Text("$")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(palette.accentColor)
+                    Text(highlightCode(entry.command, language: "shell"))
+                        .font(.system(size: 11, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    if entry.done {
+                        Image(systemName: entry.exitStatus == 0 ? "checkmark.circle" : "exclamationmark.circle")
+                            .font(.system(size: 9))
+                            .foregroundStyle(entry.exitStatus == 0 ? Color.secondary : Color.red.opacity(0.8))
+                    } else {
+                        ProgressView().controlSize(.mini)
+                    }
                 }
+                .contentShape(Rectangle())
             }
-            if !entry.output.isEmpty {
-                Text(highlightCode(entry.output, language: "shell"))
-                    .font(.system(size: 10, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
+
+            if expanded, !entry.output.isEmpty {
+                CliOutputPane(text: entry.output)
             }
         }
         .padding(.horizontal, 9)
@@ -944,36 +1297,15 @@ private struct CliBlock: View {
 
 // MARK: - Streaming footer
 
-/// Reports the bottom sentinel's vertical position in the scroll viewport so the
-/// message list can tell whether the reader is parked at the live edge or has
-/// deliberately scrolled up into older flow (in which case autoscroll must yield).
-private struct ScrollSentinelKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
-/// Reports the scroll viewport's height so the sentinel offset can be interpreted
-/// as "how far below the fold the live edge sits".
-private struct ScrollViewportKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
 
 private struct MessageList: View {
     @ObservedObject var model: PythiaChatModel
     @State private var breathing = false
-    /// Sentinel minY within the viewport coordinate space.
-    @State private var sentinelMinY: CGFloat = 0
-    @State private var viewportHeight: CGFloat = 0
-    /// True when the live edge is (roughly) in view — autoscroll may follow.
-    @State private var isNearBottom = true
+    /// True when the reader is parked at the live edge — autoscroll may follow.
+    @State private var isAtBottom = true
 
-    /// How far below the viewport fold the live edge may drift before we stop
-    /// yanking the reader down and instead surface the "jump to bottom" arrow.
+    /// How far the true bottom may drift below the visible edge before we
+    /// detach and surface the "jump to bottom" arrow.
     private let proximityThreshold: CGFloat = 48
 
     var body: some View {
@@ -988,7 +1320,7 @@ private struct MessageList: View {
                         case .message(let message):
                             MessageRow(message: message)
                         case .toolGroup(let group):
-                            ToolGroupView(model: model, groupID: group.id)
+                            ToolGroupView(model: model, group: group)
                         case .cli(let cli):
                             CliBlock(entry: cli)
                         }
@@ -1005,37 +1337,26 @@ private struct MessageList: View {
                             .id("stream")
                     }
                     Color.clear.frame(height: 1).id("bottom")
-                        .background(
-                            GeometryReader { geo in
-                                Color.clear.preference(
-                                    key: ScrollSentinelKey.self,
-                                    value: geo.frame(in: .named("pythiaScroll")).minY
-                                )
-                            }
-                        )
                 }
                 .padding(10)
             }
-            .coordinateSpace(name: "pythiaScroll")
-            .background(
-                GeometryReader { geo in
-                    Color.clear.preference(key: ScrollViewportKey.self, value: geo.size.height)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                // Distance from the visible bottom edge to the content's true
+                // bottom. Within the threshold → attached (arrow hidden).
+                let distanceToBottom = geometry.contentSize.height
+                    - (geometry.contentOffset.y + geometry.containerSize.height)
+                return distanceToBottom <= proximityThreshold
+            } action: { _, atBottom in
+                if isAtBottom != atBottom {
+                    isAtBottom = atBottom
                 }
-            )
-            .onPreferenceChange(ScrollSentinelKey.self) { minY in
-                sentinelMinY = minY
-                updateProximity()
-            }
-            .onPreferenceChange(ScrollViewportKey.self) { h in
-                viewportHeight = h
-                updateProximity()
             }
             .onChange(of: model.scrollAnchor) { _, _ in
                 // A fresh user/CLI turn always wins the reader's attention.
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("bottom", anchor: .bottom)
                 }
-                isNearBottom = true
+                isAtBottom = true
             }
             .onChange(of: model.flow) { _, _ in
                 followLiveEdge(proxy)
@@ -1044,14 +1365,14 @@ private struct MessageList: View {
                 followLiveEdge(proxy)
             }
             .overlay(alignment: .bottomTrailing) {
-                if !isNearBottom {
+                if !isAtBottom {
                     jumpToBottomButton(proxy)
                         .padding(.trailing, 14)
                         .padding(.bottom, 10)
                         .transition(.scale.combined(with: .opacity))
                 }
             }
-            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isNearBottom)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isAtBottom)
         }
     }
 
@@ -1076,19 +1397,11 @@ private struct MessageList: View {
     }
 
     /// Follow the live edge while it grows, but only if the reader is already
-    /// parked near the bottom. Once they scroll up, the thread belongs to them.
+    /// parked at the bottom. Once they scroll up, the thread belongs to them.
     private func followLiveEdge(_ proxy: ScrollViewProxy) {
-        guard isNearBottom else { return }
-        proxy.scrollTo("bottom", anchor: .bottom)
-    }
-
-    /// Re-derive "near bottom" from the sentinel's position vs. the viewport
-    /// height. Sentinel sits at the live edge; when scrolled up it drifts past
-    /// the fold and flips this flag off.
-    private func updateProximity() {
-        let near = sentinelMinY <= viewportHeight + proximityThreshold
-        if isNearBottom != near {
-            isNearBottom = near
+        guard isAtBottom else { return }
+        withAnimation(.easeOut(duration: 0.18)) {
+            proxy.scrollTo("bottom", anchor: .bottom)
         }
     }
 
@@ -1097,7 +1410,7 @@ private struct MessageList: View {
             withAnimation(.easeOut(duration: 0.2)) {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
-            isNearBottom = true
+            isAtBottom = true
         } label: {
             Image(systemName: "arrow.down")
                 .font(.system(size: 12, weight: .bold))
@@ -1258,48 +1571,121 @@ private struct CwdStatus: View {
 /// at its chronological position in the flow. Independent from any footer.
 private struct ToolGroupView: View {
     @ObservedObject var model: PythiaChatModel
-    let groupID: UUID
-
-    private var group: ToolGroup? {
-        for entry in model.flow {
-            if case .toolGroup(let g) = entry, g.id == groupID { return g }
-        }
-        return nil
-    }
+    let group: ToolGroup
 
     var body: some View {
-        if let group {
-            VStack(alignment: .leading, spacing: 4) {
-                Button {
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                        model.toggleToolGroup(groupID)
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
-                            .rotationEffect(.degrees(group.expanded ? 90 : 0))
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                    model.toggleToolGroup(group.id)
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .rotationEffect(.degrees(group.expanded ? 90 : 0))
+                    if group.expanded {
                         Text(group.tools.count == 1 ? "1 Instrument" : "\(group.tools.count) Instrumente")
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        Spacer(minLength: 0)
+                    } else {
+                        // Collapsed: only the *last* tool call — a quiet
+                        // one-liner naming the newest action, not a row of chips.
+                        if group.tools.count > 1 {
+                            Text("\(group.tools.count) ·")
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                        }
+                        if let last = group.tools.last {
+                            MinifiedInstrumentLabel(chip: last)
+                        }
                     }
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.10), lineWidth: 0.5))
-                    .contentShape(Capsule())
+                    Spacer(minLength: 0)
+                    if group.allDone {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ProgressView().controlSize(.mini)
+                    }
                 }
-                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.10), lineWidth: 0.5))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
 
-                if group.expanded {
-                    ForEach(group.tools) { chip in
-                        ToolChipRow(chip: chip)
-                    }
+            if group.expanded {
+                ForEach(group.tools) { chip in
+                    ToolChipRow(model: model, chip: chip)
                 }
             }
-            .animation(.spring(response: 0.32, dampingFraction: 0.85), value: group.expanded)
-            .transition(.opacity.combined(with: .move(edge: .bottom)))
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.85), value: group.expanded)
+        .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+}
+
+/// Minified rendering of a single instrument — the original horologium message
+/// (or a synthesized fallback) as a compact, information-rich line: path, byte
+/// count and line range, not a bare glyph + verb.
+private struct MinifiedInstrumentLabel: View {
+    let chip: ToolChip
+
+    var body: some View {
+        Text(chip.minifiedSummary)
+            .font(.system(size: 10))
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+            .truncationMode(.tail)
+    }
+}
+
+/// Human status line for a horologium event, so an in-flight instrumenta chip
+/// can show *what it is doing right now* (not a debug param dump). Unknown kinds
+/// return nil so unrelated events never touch a chip.
+struct InstrumentaStatus {
+    static func text(for kind: String, data: [String: Any]) -> String? {
+        let path = data["path"] as? String
+        let query = data["query"] as? String
+        let file = path.map { ($0 as NSString).lastPathComponent }
+        switch kind {
+        case "file_reading": return file.map { "liest \($0)" } ?? "liest…"
+        case "file_read_complete": return "gelesen"
+        case "file_read_fail": return "Lesefehler"
+        case "file_creating": return file.map { "erzeugt \($0)" } ?? "erzeugt…"
+        case "file_created": return "erzeugt"
+        case "temp_file_created": return "temp \(file ?? "datei")"
+        case "file_patching": return file.map { "patcht \($0)" } ?? "patcht…"
+        case "file_patched": return "gepatcht"
+        case "file_patched_fail": return "Patchfehler"
+        case "file_renaming": return file.map { "benennt \($0) um" } ?? "benennt um…"
+        case "file_renamed": return "umbenannt"
+        case "symbolic_patch_start": return "symbolischer Patch…"
+        case "symbolic_patch_complete": return "symbolisch gepatcht"
+        case "symbolic_patch_fail", "symbolic_patch_failed": return "Symbol-Patchfehler"
+        case "undo_patch": return "rückgängig…"
+        case "memory_searching": return query.map { "sucht „\($0)“" } ?? "sucht…"
+        case "memory_found": return "gefunden"
+        case "memory_storing": return "speichert…"
+        case "memory_stored": return "gespeichert"
+        case "note_added": return "Notiz angelegt"
+        case "note_removed": return "Notiz entfernt"
+        case "note_updated": return "Notiz aktualisiert"
+        case "notes_recalled": return "erinnert"
+        case "file_overview": return "Übersicht…"
+        case "aegis_unveiled": return "Aegis entschleiert"
+        case "screenshot_capturing": return "Screenshot…"
+        case "screenshot_captured": return "Screenshot"
+        case "screenshot_failed": return "Screenshot-Fehler"
+        case "command_executing": return "führt aus…"
+        case "command_completed": return "fertig"
+        case "ask_user": return "fragt…"
+        case "peer_drift": return "Drift erkannt"
+        case "self_control_danger": return "Selbstkontrolle"
+        default: return nil
         }
     }
 }
@@ -1362,11 +1748,72 @@ struct InstrumentaSemantics {
 /// One chip inside a tool group — either a semantic instrument or a CLI block
 /// (the agent's run_command). Each carries its own meaning, not raw JSON.
 private struct ToolChipRow: View {
+    @ObservedObject var model: PythiaChatModel
     let chip: ToolChip
+    private var sem: InstrumentaSemantics { InstrumentaSemantics.forTool(chip.name) }
+    private var isExpanded: Bool { model.expandedChipIDs.contains(chip.id) }
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Button {
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                    model.toggleToolChip(chip.id)
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    Text(chip.minifiedSummary)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 0)
+                    if chip.done {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(sem.tint)
+                    } else {
+                        ProgressView().controlSize(.mini)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(sem.tint.opacity(chip.done ? 0.15 : 0.35), lineWidth: 0.5)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 6))
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                chipBody
+            }
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.85), value: isExpanded)
+    }
+
+    @ViewBuilder
+    private var chipBody: some View {
         if chip.kind == .cli {
             CliChipView(chip: chip)
+        } else if MnemosyneTool.isMnemosyne(chip.name) {
+            MnemosyneCauldronView(chip: chip)
+        } else if FileOverviewTool.isFileOverview(chip.name) {
+            FileOverviewView(chip: chip)
+        } else if FileInstrumentTool.isReadFile(chip.name) {
+            ReadFileView(chip: chip)
+        } else if FileInstrumentTool.isPatchFile(chip.name) {
+            PatchFileView(chip: chip)
+        } else if FileInstrumentTool.isCreateFile(chip.name) {
+            CreateFileView(chip: chip)
+        } else if FileInstrumentTool.isRenameFile(chip.name) {
+            RenameFileView(chip: chip)
+        } else if FileInstrumentTool.isUndoPatch(chip.name) {
+            UndoPatchView(chip: chip)
         } else {
             InstrumentChipView(chip: chip)
         }
@@ -1379,32 +1826,27 @@ private struct InstrumentChipView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 5) {
-                Text(sem.glyph)
-                    .font(.system(size: 11))
-                Text(sem.label)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.primary)
-                Text(chip.name)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.secondary.opacity(0.7))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                if chip.done {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 8, weight: .semibold))
-                        .foregroundStyle(sem.tint)
-                } else {
-                    ProgressView().controlSize(.mini)
-                }
-            }
             if !chip.args.isEmpty {
                 Text(chip.args)
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.secondary.opacity(0.75))
                     .lineLimit(2)
                     .truncationMode(.tail)
+            }
+            if let status = chip.status, !status.isEmpty, !chip.done {
+                Text(status)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(sem.tint.opacity(0.9))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
+            if let detail = chip.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary.opacity(0.7))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .textSelection(.enabled)
             }
             if !chip.output.isEmpty {
                 Text(chip.output)
@@ -1427,37 +1869,70 @@ private struct InstrumentChipView: View {
     }
 }
 
+/// Scrollable command output with progressive blur at both scroll edges and a
+/// frosted bed behind the monospaced text — a shell result reads as a glowing
+/// fragment, not a raw dump.
+private struct CliOutputPane: View {
+    let text: String
+    @Environment(\.pythiaPalette) private var palette
+
+    var body: some View {
+        ScrollView(.vertical) {
+            Text(highlightCode(text, language: "shell"))
+                .font(.system(size: 10, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(6)
+        }
+        .frame(maxHeight: 180)
+        .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+        .background(palette.codeBackgroundColor.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(palette.shineColor.opacity(0.22), lineWidth: 0.5)
+        )
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+}
+
 /// The agent's run_command rendered as the unified shell block — but *inside*
 /// the instrumenta group, so consecutive tool calls stay one collapsible unit.
 private struct CliChipView: View {
     let chip: ToolChip
+    @Environment(\.pythiaPalette) private var palette
+    @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text("$")
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.accentColor)
-                Text(highlightCode(chip.command.isEmpty ? "run_command" : chip.command, language: "shell"))
-                    .font(.system(size: 10, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 0)
-                if chip.done {
-                    Image(systemName: chip.exitStatus == 0 ? "checkmark.circle" : "xmark.circle")
-                        .font(.system(size: 9))
-                        .foregroundStyle(chip.exitStatus == 0 ? Color.secondary : Color.red.opacity(0.8))
-                } else {
-                    ProgressView().controlSize(.mini)
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .semibold))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                    Text("$")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(palette.accentColor)
+                    Text(highlightCode(chip.command.isEmpty ? "run_command" : chip.command, language: "shell"))
+                        .font(.system(size: 10, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    if chip.done {
+                        Image(systemName: chip.exitStatus == 0 ? "checkmark.circle" : "exclamationmark.circle")
+                            .font(.system(size: 9))
+                            .foregroundStyle(chip.exitStatus == 0 ? Color.secondary : Color.red.opacity(0.8))
+                    } else {
+                        ProgressView().controlSize(.mini)
+                    }
                 }
+                .contentShape(Rectangle())
             }
-            if !chip.output.isEmpty {
-                Text(highlightCode(chip.output, language: "shell"))
-                    .font(.system(size: 9, design: .monospaced))
-                    .lineLimit(8)
-                    .truncationMode(.tail)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            .buttonStyle(.plain)
+
+            if expanded, !chip.output.isEmpty {
+                CliOutputPane(text: chip.output)
             }
         }
         .padding(.horizontal, 8)
@@ -1465,8 +1940,9 @@ private struct CliChipView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(Color.mint.opacity(0.25), lineWidth: 0.5)
+                .strokeBorder(palette.shineColor.opacity(0.30), lineWidth: 0.5)
         )
+        .shadow(color: palette.shineColor.opacity(0.10), radius: 5, y: 1)
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 }
@@ -1478,6 +1954,7 @@ private struct CliChipView: View {
 private struct RecoverCardView: View {
     let card: RecoverSuggestion
     @ObservedObject var model: PythiaChatModel
+    @Environment(\.pythiaPalette) private var palette
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1504,7 +1981,7 @@ private struct RecoverCardView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .foregroundStyle(.black)
-                    .background(Color.accentColor, in: Capsule())
+                    .background(palette.accentColor, in: Capsule())
                     .contentShape(Capsule())
             }
             .buttonStyle(.plain)
@@ -1526,9 +2003,9 @@ private struct RecoverCardView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 0.75)
+                .strokeBorder(palette.accentColor.opacity(0.35), lineWidth: 0.75)
         )
-        .shadow(color: Color.accentColor.opacity(0.18), radius: 6, y: 2)
+        .shadow(color: palette.shineColor.opacity(0.22), radius: 6, y: 2)
     }
 }
 
@@ -1536,40 +2013,171 @@ private struct RecoverCardView: View {
 
 /// Omnipresent companion voices: the reply's extracted suggestions become
 /// one-click macros — the pantheon speaks through the UI, not JSON chips.
+/// Rendered as true speech bubbles in a wrapping flow: each bubble hugs its
+/// prompt (short → compact, long → multi-line), anchors its voice to the
+/// speaker's glyph via a downward tail, and is fully clickable with hover lift.
 private struct CompanionBubbleBar: View {
     @ObservedObject var model: PythiaChatModel
+    @Environment(\.pythiaPalette) private var palette
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
+        ScrollView(.vertical, showsIndicators: false) {
+            CompanionFlowLayout(spacing: 7, maxItemWidth: 236) {
                 ForEach(model.companionBubbles) { bubble in
-                    Button {
+                    CompanionSpeechBubble(bubble: bubble, palette: palette) {
                         model.actionCompanionBubble(bubble)
-                    } label: {
-                        HStack(spacing: 5) {
-                            Text(bubble.glyph)
-                                .font(.system(size: 11))
-                            if !bubble.name.isEmpty {
-                                Text(bubble.name)
-                                    .font(.system(size: 9, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(bubble.prompt)
-                                .font(.system(size: 10))
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 5)
-                        .background(.regularMaterial, in: Capsule())
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.10), lineWidth: 0.5))
-                        .contentShape(Capsule())
                     }
-                    .buttonStyle(.plain)
-                    .help(bubble.prompt)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxHeight: 160)
+    }
+}
+
+/// A single companion suggestion as a real speech bubble — glyph + name in a
+/// small header, the prompt as a multi-line body that wraps to the bubble's
+/// max width, and a tail pointing down toward the speaking companion.
+private struct CompanionSpeechBubble: View {
+    let bubble: CompanionBubble
+    let palette: PythiaPalette
+    let action: () -> Void
+
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 4) {
+                    Text(bubble.glyph)
+                        .font(.system(size: 11))
+                    if !bubble.name.isEmpty {
+                        Text(bubble.name)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(palette.accentColor)
+                    }
+                }
+                Text(bubble.prompt)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(.horizontal, 11)
+            .padding(.top, 7)
+            .padding(.bottom, 12)
+            .frame(maxWidth: 236, alignment: .leading)
+            .background(.regularMaterial, in: SpeechBubbleShape())
+            .overlay(
+                SpeechBubbleShape()
+                    .stroke(.white.opacity(hovered ? 0.24 : 0.11), lineWidth: 0.5)
+            )
+            .contentShape(SpeechBubbleShape())
+        }
+        .buttonStyle(.plain)
+        .scaleEffect(hovered ? 1.02 : 1.0)
+        .shadow(color: palette.shineColor.opacity(hovered ? 0.30 : 0.14), radius: hovered ? 7 : 4, y: 2)
+        .animation(.easeInOut(duration: 0.16), value: hovered)
+        .onHover { hovered = $0 }
+        .help(bubble.prompt)
+    }
+}
+
+/// A rounded speech bubble with a tail pointing down at the lower-left — the
+/// companion "speaks" from below, and the tail anchors the voice to its glyph.
+private struct SpeechBubbleShape: Shape {
+    var cornerRadius: CGFloat = 10
+    var tailSize: CGSize = CGSize(width: 9, height: 7)
+    var tailOffset: CGFloat = 14
+
+    func path(in rect: CGRect) -> Path {
+        let tail = tailSize
+        let bubbleRect = CGRect(
+            x: rect.minX,
+            y: rect.minY,
+            width: rect.width,
+            height: rect.height - tail.height
+        )
+        var path = Path()
+        path.addRoundedRect(in: bubbleRect, cornerSize: CGSize(width: cornerRadius, height: cornerRadius))
+        let baseY = bubbleRect.maxY
+        let tipX = rect.minX + tailOffset + tail.width * 0.5
+        path.move(to: CGPoint(x: rect.minX + tailOffset, y: baseY))
+        path.addLine(to: CGPoint(x: rect.minX + tailOffset + tail.width, y: baseY))
+        path.addLine(to: CGPoint(x: tipX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// Wraps child views into multiple left-aligned rows, proposing each child a
+/// bounded width so text wraps — the pantheon "talks" in a flowing paragraph
+/// of bubbles rather than a single endless horizontal line.
+private struct CompanionFlowLayout: Layout {
+    var spacing: CGFloat = 7
+    var maxItemWidth: CGFloat = 236
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let containerWidth = proposal.width ?? maxItemWidth
+        let rows = arrange(subviews: subviews, containerWidth: containerWidth)
+        return CGSize(width: containerWidth, height: rows.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let containerWidth = proposal.width ?? maxItemWidth
+        let rows = arrange(subviews: subviews, containerWidth: containerWidth)
+        var y = bounds.minY
+        for row in rows.rows {
+            var x = bounds.minX
+            var rowHeight: CGFloat = 0
+            for item in row.items {
+                rowHeight = max(rowHeight, item.size.height)
+                subviews[item.index].place(
+                    at: CGPoint(x: x, y: y),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(item.size)
+                )
+                x += item.size.width + spacing
+            }
+            y += rowHeight + spacing
+        }
+    }
+
+    private struct Row {
+        var items: [(index: Int, size: CGSize)] = []
+    }
+
+    private struct Arrangement {
+        var rows: [Row] = []
+        var height: CGFloat = 0
+    }
+
+    private func arrange(subviews: Subviews, containerWidth: CGFloat) -> Arrangement {
+        let itemMax = containerWidth > 0 ? min(maxItemWidth, containerWidth) : maxItemWidth
+        var arrangement = Arrangement()
+        var row = Row()
+        var rowWidth: CGFloat = 0
+        var rowHeight: CGFloat = 0
+
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(ProposedViewSize(width: itemMax, height: nil))
+            if !row.items.isEmpty && rowWidth + size.width + spacing > containerWidth {
+                arrangement.rows.append(row)
+                arrangement.height += rowHeight + spacing
+                row = Row()
+                rowWidth = 0
+                rowHeight = 0
+            }
+            let advance = size.width + (row.items.isEmpty ? 0 : spacing)
+            row.items.append((index: index, size: size))
+            rowWidth += advance
+            rowHeight = max(rowHeight, size.height)
+        }
+        if !row.items.isEmpty {
+            arrangement.rows.append(row)
+            arrangement.height += rowHeight
+        }
+        return arrangement
     }
 }
 
@@ -1579,6 +2187,7 @@ private struct InputBar: View {
     @ObservedObject var model: PythiaChatModel
     @State private var draft = ""
     @FocusState private var inputFocused: Bool
+    @Environment(\.pythiaPalette) private var palette
 
     /// `$` as the first character opens the polymorphic Pythia CLI: the same
     /// shell the agent's `run_command` tool inhabits. One interface, two hands.
@@ -1590,7 +2199,7 @@ private struct InputBar: View {
                 if cliMode {
                     Text("$")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(palette.accentColor)
                 }
                 TextField(cliMode ? (model.cliCwd.isEmpty ? "command…" : model.cliCwd) : "Ask…", text: $draft)
                     .textFieldStyle(.plain)
@@ -1604,12 +2213,12 @@ private struct InputBar: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 9)
                     .strokeBorder(
-                        cliMode ? Color.accentColor.opacity(0.8)
-                                : (inputFocused ? Color.accentColor.opacity(0.6) : .white.opacity(0.14)),
+                        cliMode ? palette.accentColor.opacity(0.8)
+                                : (inputFocused ? palette.accentColor.opacity(0.6) : .white.opacity(0.14)),
                         lineWidth: 0.75
                     )
             )
-            .shadow(color: (inputFocused || cliMode) ? Color.accentColor.opacity(0.22) : .clear, radius: 5)
+            .shadow(color: (inputFocused || cliMode) ? palette.accentColor.opacity(0.22) : .clear, radius: 5)
             .animation(.easeInOut(duration: 0.22), value: inputFocused)
             .animation(.easeInOut(duration: 0.22), value: cliMode)
 

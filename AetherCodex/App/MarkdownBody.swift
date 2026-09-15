@@ -197,7 +197,33 @@ struct ListItem: Identifiable {
 /// wraps its answers in `<div>`/`<b>`/`<em>` etc.
 func renderInline(_ text: String) -> AttributedString {
     let cleaned = htmlToMarkdown(text)
-    return (try? AttributedString(markdown: cleaned, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(cleaned)
+    let base = (try? AttributedString(markdown: cleaned, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(cleaned)
+    return themeInlineRuns(base)
+}
+
+/// Recolor inline runs (code, bold, italic, strikethrough) from the theme's
+/// markup scopes — mirroring how TextMate's markdown preview inherits the
+/// editor theme — so emphasis reads as a document, not platform-default gray.
+private func themeInlineRuns(_ string: AttributedString) -> AttributedString {
+    var out = string
+    let theme = ThemeRegistry.shared.current
+    for run in out.runs {
+        let intents = run.inlinePresentationIntent ?? []
+        if intents.contains(.code) {
+            let scope = theme.style(for: .inlineCode)
+            let fg = scope.foreground ?? theme.pythia.codeForeground
+            let bg = scope.background ?? theme.pythia.codeBackground
+            out[run.range].foregroundColor = Color(nsColor: fg)
+            out[run.range].backgroundColor = Color(nsColor: scope.background == nil ? bg.withAlphaComponent(0.55) : bg)
+        } else if intents.contains(.stronglyEmphasized), let fg = theme.style(for: .strong).foreground {
+            out[run.range].foregroundColor = Color(nsColor: fg)
+        } else if intents.contains(.emphasized), let fg = theme.style(for: .emphasis).foreground {
+            out[run.range].foregroundColor = Color(nsColor: fg)
+        } else if intents.contains(.strikethrough), let fg = theme.style(for: .strikethrough).foreground {
+            out[run.range].foregroundColor = Color(nsColor: fg)
+        }
+    }
+    return out
 }
 
 /// Best-effort HTML→Markdown normalization for the tags the oracle actually
@@ -217,6 +243,7 @@ private func htmlToMarkdown(_ s: String) -> String {
     t = t.replacingOccurrences(of: "</i>", with: "_", options: .caseInsensitive)
     t = t.replacingOccurrences(of: "<code>", with: "`", options: .caseInsensitive)
     t = t.replacingOccurrences(of: "</code>", with: "`", options: .caseInsensitive)
+    t = fileLinkify(t)
     t = linkify(t)
     t = t.replacingOccurrences(of: #"</?(?:p|div|span|section|article|strong|em|b|i|code|a)(?:\s[^>]*)?>"#, with: "", options: [.regularExpression, .caseInsensitive])
     for (entity, value) in [("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&nbsp;", " "), ("&amp;", "&")] {
@@ -238,6 +265,55 @@ private func linkify(_ s: String) -> String {
         t = (t as NSString).replacingCharacters(in: m.range, with: "[\(label)](\(href))")
     }
     return t
+}
+
+/// `<file path="A/B.swift" line="1" column="2">name</file>` and `<file>A/B.swift</file>`
+/// → `[name](aethercodex://open?path=...)` so file references stay tappable.
+private func fileLinkify(_ s: String) -> String {
+    let pattern = #"<file\b([^>]*)>(.*?)</file>"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else { return s }
+    let ns = s as NSString
+    var t = s
+    for m in regex.matches(in: s, options: [], range: NSRange(location: 0, length: ns.length)).reversed() {
+        guard m.numberOfRanges >= 3 else { continue }
+        let attrs = ns.substring(with: m.range(at: 1))
+        let inner = ns.substring(with: m.range(at: 2))
+        let path = attributeValue("path", in: attrs) ?? inner
+        guard !path.isEmpty else { continue }
+        let label = inner.isEmpty ? path : inner
+        var comps = URLComponents()
+        comps.scheme = "aethercodex"
+        comps.host = "open"
+        var items = [URLQueryItem(name: "path", value: path)]
+        if let line = attributeValue("line", in: attrs) { items.append(URLQueryItem(name: "line", value: line)) }
+        if let column = attributeValue("column", in: attrs) { items.append(URLQueryItem(name: "column", value: column)) }
+        comps.queryItems = items
+        let link = comps.url?.absoluteString ?? ""
+        t = (t as NSString).replacingCharacters(in: m.range, with: "[\(label)](\(link))")
+    }
+    return t
+}
+
+private func attributeValue(_ name: String, in attrs: String) -> String? {
+    let pattern = "\\b\(name)\\s*=\\s*[\"']([^\"']+)[\"']"
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }
+    let ns = attrs as NSString
+    guard let m = regex.firstMatch(in: attrs, options: [], range: NSRange(location: 0, length: ns.length)),
+          m.numberOfRanges >= 2 else { return nil }
+    return ns.substring(with: m.range(at: 1))
+}
+
+/// Resolves an `aethercodex://open` URL from an inline file link and routes it
+/// through the same resolver the memory cauldron uses.
+private enum FileLinkResolver {
+    static func handle(_ url: URL) -> Bool {
+        guard url.scheme == "aethercodex", url.host == "open",
+              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let path = comps.queryItems?.first(where: { $0.name == "path" })?.value,
+              !path.isEmpty else { return false }
+        MnemosyneLinkResolver.open(path)
+        return true
+    }
 }
 
 // MARK: - Markdown body
@@ -267,6 +343,9 @@ struct MarkdownBody: View {
         }
         .foregroundStyle(Color(nsColor: ThemeRegistry.shared.current.sidebarForeground))
         .tint(Color(nsColor: ThemeRegistry.shared.current.style(for: .link).foreground ?? ThemeRegistry.shared.current.sidebarAccent))
+        .environment(\.openURL, OpenURLAction { url in
+            FileLinkResolver.handle(url) ? .handled : .systemAction
+        })
         .onReceive(NotificationCenter.default.publisher(for: ThemeSettings.didChangeNotification)) { _ in settingsRevision += 1 }
     }
 
@@ -278,12 +357,12 @@ struct MarkdownBody: View {
         case .table(let header, let rows):
             MarkdownTableView(header: header, rows: rows)
         case .quote(let text):
-            HStack(alignment: .top) {
-                Rectangle().fill(Color(nsColor: ThemeRegistry.shared.current.sidebarAccent)).frame(width: 2)
-                Text(renderInline(text)).italic().textSelection(.enabled)
-            }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 4)
+            BlockquoteView(text: text)
         case .rule:
-            Divider().padding(.vertical, 6)
+            Rectangle()
+                .fill(Color(nsColor: ThemeRegistry.shared.current.style(for: .thematicBreak).foreground ?? ThemeRegistry.shared.current.pythia.shine).opacity(0.4))
+                .frame(height: 1)
+                .padding(.vertical, 6)
         case .heading(let text, let level):
             HeadingView(text: text, level: level)
         case .list(let items):
@@ -303,9 +382,9 @@ struct MarkdownBody: View {
 /// AttributedString. Falls back to the editor foreground when the language is
 /// unknown. Shared by fenced code blocks and the Pythia CLI shell blocks so both
 /// hands speak the same theme syntax.
-func highlightCode(_ code: String, language: String) -> AttributedString {
+func highlightCode(_ code: String, language: String, fallback: NSColor? = nil) -> AttributedString {
     let theme = ThemeRegistry.shared.current
-    let result = NSMutableAttributedString(string: code, attributes: [.foregroundColor: theme.editorForeground])
+    let result = NSMutableAttributedString(string: code, attributes: [.foregroundColor: fallback ?? theme.pythia.codeForeground])
     let engine = TreeSitterEngine()
     let aliases = ["javascript": "js", "typescript": "ts", "python": "py", "ruby": "rb",
                    "shell": "sh", "bash": "sh", "zsh": "sh", "swift": "swift"]
@@ -325,27 +404,16 @@ private struct CodeBlockView: View {
     let language: String
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            Text(highlightedCode)
-                .font(.system(size: 11.5, design: .monospaced))
-                .lineSpacing(2)
-                .textSelection(.enabled)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: ThemeRegistry.shared.current.style(for: .codeBlock).background ?? ThemeRegistry.shared.current.editorBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
-        )
-    }
-
-    private var highlightedCode: AttributedString {
-        highlightCode(code, language: language)
+        let theme = ThemeRegistry.shared.current
+        let scope = theme.style(for: .codeBlock)
+        LineNumberedCodeView(code: code,
+                             language: language,
+                             font: .system(size: 11.5, design: .monospaced),
+                             fontSize: 11.5,
+                             lineSpacing: 2,
+                             background: Color(nsColor: scope.background ?? theme.pythia.codeBackground),
+                             border: Color(nsColor: theme.pythia.shine).opacity(0.14),
+                             fallback: scope.foreground ?? theme.pythia.codeForeground)
     }
 }
 
@@ -353,21 +421,43 @@ private struct HeadingView: View {
     let text: String
     let level: Int
 
-    private var size: CGFloat {
-        switch level {
-        case 1: 15
-        case 2: 14
-        default: 13
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(renderInline(text))
+                .font(Font(MarkdownRichCodec.font(level: level)))
+                .foregroundStyle(Color(nsColor: ThemeRegistry.shared.current.style(for: TokenScope(rawValue: "markup.heading.\(level)") ?? .heading).foreground ?? ThemeRegistry.shared.current.sidebarAccent))
+                .lineSpacing(3)
+                .textSelection(.enabled)
+            if level <= 2 {
+                Rectangle()
+                    .fill(Color(nsColor: ThemeRegistry.shared.current.style(for: .thematicBreak).foreground ?? ThemeRegistry.shared.current.pythia.shine).opacity(level == 1 ? 0.35 : 0.18))
+                    .frame(height: 1)
+            }
         }
+        .padding(.top, level <= 2 ? 2 : 0)
     }
+}
+
+private struct BlockquoteView: View {
+    let text: String
 
     var body: some View {
-        Text(renderInline(text))
-            .font(Font(MarkdownRichCodec.font(level: level)))
-            .foregroundStyle(Color(nsColor: ThemeRegistry.shared.current.style(for: TokenScope(rawValue: "markup.heading.\(level)") ?? .heading).foreground ?? ThemeRegistry.shared.current.sidebarAccent))
-            .lineSpacing(3)
-            .textSelection(.enabled)
-            .padding(.top, level <= 2 ? 2 : 0)
+        let theme = ThemeRegistry.shared.current
+        let scope = theme.style(for: .blockquote)
+        let bar = scope.foreground ?? theme.pythia.complementary
+        let wash = scope.background ?? bar.withAlphaComponent(0.08)
+        HStack(alignment: .top, spacing: 0) {
+            Rectangle().fill(Color(nsColor: bar)).frame(width: 3)
+            Text(renderInline(text))
+                .italic()
+                .foregroundStyle(Color(nsColor: scope.foreground ?? theme.pythia.foreground))
+                .textSelection(.enabled)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+        }
+        .background(Color(nsColor: wash))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .padding(.vertical, 3)
     }
 }
 
@@ -378,11 +468,11 @@ private struct ListView: View {
         VStack(alignment: .leading, spacing: 3) {
             ForEach(items) { item in
                 HStack(alignment: .top, spacing: 6) {
-                    Text(item.text.hasPrefix("[x] ") || item.text.hasPrefix("[X] ") ? "☑" : item.text.hasPrefix("[ ] ") ? "☐" : item.ordered ? "\(item.index)." : "•")
+                    Text(marker(for: item))
                         .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color(nsColor: markerColor(for: item)))
                         .frame(width: 16, alignment: .trailing)
-                    Text(renderInline(item.text.hasPrefix("[ ] ") || item.text.lowercased().hasPrefix("[x] ") ? String(item.text.dropFirst(4)) : item.text))
+                    Text(renderInline(label(for: item)))
                         .font(.system(size: 13))
                         .lineSpacing(3)
                         .textSelection(.enabled)
@@ -390,5 +480,26 @@ private struct ListView: View {
             }
         }
         .padding(.leading, 2)
+    }
+
+    private func marker(for item: ListItem) -> String {
+        if item.text.hasPrefix("[x] ") || item.text.hasPrefix("[X] ") { return "☑" }
+        if item.text.hasPrefix("[ ] ") { return "☐" }
+        return item.ordered ? "\(item.index)." : "•"
+    }
+
+    private func label(for item: ListItem) -> String {
+        if item.text.hasPrefix("[ ] ") || item.text.lowercased().hasPrefix("[x] ") {
+            return String(item.text.dropFirst(4))
+        }
+        return item.text
+    }
+
+    private func markerColor(for item: ListItem) -> NSColor {
+        let theme = ThemeRegistry.shared.current
+        if item.text.hasPrefix("[x] ") || item.text.hasPrefix("[X] ") {
+            return theme.style(for: .checkedListItem).foreground ?? theme.pythia.complementary
+        }
+        return .secondaryLabelColor
     }
 }

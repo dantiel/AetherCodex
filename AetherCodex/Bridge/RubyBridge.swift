@@ -626,10 +626,11 @@ class RubyBridge: ObservableObject {
     /// Multi-turn chat that also surfaces the model's `reasoning_content`, so
     /// the Swift history can pass it back on the next turn (DeepSeek's thinking
     /// mode requires the field to round-trip).
-    func chatDetailed(messages: [[String: String]], system: String? = nil, model: String? = nil) async throws -> OracleReply {
+    func chatDetailed(messages: [[String: String]], system: String? = nil, model: String? = nil, activeCompanions: [String] = []) async throws -> OracleReply {
         var args: [String: Any] = ["messages": messages, "history": false]
         if let system { args["system"] = system }
         if let model { args["model"] = model }
+        if !activeCompanions.isEmpty { args["active_companions"] = activeCompanions }
         let response = try await send(command: "oracle", arguments: args)
         return try extractReply(from: response)
     }
@@ -750,7 +751,8 @@ class RubyBridge: ObservableObject {
            let answer = resp["answer"] as? String {
             let reasoning = resp["reasoning_content"] as? String
             let suggestions = resp["companion_suggestions"] as? [[String: Any]] ?? []
-            return OracleReply(text: answer, reasoningContent: reasoning, companionSuggestions: suggestions)
+            let says = Self.companionSays(from: resp["logs"] as? [[String: Any]] ?? [])
+            return OracleReply(text: answer, reasoningContent: reasoning, companionSuggestions: suggestions, companionSays: says)
         }
         // Cooperative interrupt: the worker returned a divine-interrupt array.
         if let arr = response.resultArray,
@@ -766,6 +768,33 @@ class RubyBridge: ObservableObject {
     private func extractAnswer(from response: RubyBridgeResponse) throws -> String? {
         try extractReply(from: response).text
     }
+
+    /// Companion `_say`/`_ask` voices collected from the reply's `logs` — the
+    /// active pantheon answering through default Pythia's turn.
+    private static func companionSays(from logs: [[String: Any]]) -> [CompanionSay] {
+        logs.compactMap { log in
+            guard (log["type"] as? String) == "say",
+                  let data = log["data"] as? [String: Any],
+                  let message = data["message"] as? String,
+                  !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return CompanionSay(
+                glyph: log["glyph"] as? String ?? "✦",
+                name: log["companion"] as? String ?? "",
+                message: message
+            )
+        }
+    }
+}
+
+/// A decoded Oracle turn: the visible answer plus the model's private reasoning
+/// (round-tripped on multi-turn so DeepSeek's thinking mode stays satisfied),
+/// plus companion voices the Ruby side extracted from the reply.
+/// A companion voice surfaced into the chat flow via its `_say`/`_ask` instrument —
+/// the pantheon answering through default Pythia's turn.
+struct CompanionSay {
+    let glyph: String
+    let name: String
+    let message: String
 }
 
 /// A decoded Oracle turn: the visible answer plus the model's private reasoning
@@ -775,10 +804,12 @@ struct OracleReply {
     let text: String?
     let reasoningContent: String?
     let companionSuggestions: [[String: Any]]
+    let companionSays: [CompanionSay]
 
-    init(text: String?, reasoningContent: String?, companionSuggestions: [[String: Any]] = []) {
+    init(text: String?, reasoningContent: String?, companionSuggestions: [[String: Any]] = [], companionSays: [CompanionSay] = []) {
         self.text = text
         self.reasoningContent = reasoningContent
         self.companionSuggestions = companionSuggestions
+        self.companionSays = companionSays
     }
 }
