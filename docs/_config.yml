@@ -1,0 +1,14 @@
+# GitHub Pages Configuration for ÆtherCodex (native editor)
+# Served from docs/ — activate "GitHub Pages → main/docs" in repo settings.
+theme: null
+title: "ÆtherCodex"
+description: "Native macOS code editor with embedded AI — a glass athanor for the AI century."
+
+exclude:
+  - README.md
+  - build_site.rb
+  - "*.md"
+
+include:
+  - styles.css
+  - eyes.js
