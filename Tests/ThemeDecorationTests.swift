@@ -49,7 +49,7 @@ final class ThemeDecorationTests: XCTestCase {
 
     func testRegeneratedThemesLoad() throws {
         let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("AetherCodex/Resources/Themes")
+            .appendingPathComponent("AetherOracle/resources/Themes")
         let urls = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "yml" }
         XCTAssertGreaterThan(urls.count, 100)

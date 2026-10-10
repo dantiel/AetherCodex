@@ -204,7 +204,7 @@ final class IncrementalSearchBar: NSView {
         } else {
             if let vev = glassHost as? NSVisualEffectView {
                 let theme = ThemeRegistry.shared.current
-                let isDark = theme.kind == .dark
+                let isDark = theme.appearance == .dark
                 vev.material = isDark ? .toolTip : .underWindowBackground
                 if let bg = theme.sidebarBackground {
                     vev.layer?.backgroundColor = bg.withAlphaComponent(0.10).cgColor

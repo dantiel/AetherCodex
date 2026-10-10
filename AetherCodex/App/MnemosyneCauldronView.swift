@@ -473,12 +473,25 @@ struct FileLinkButton: View {
     let accent: Color
     @State private var hovering = false
 
+    /// Strips the "not found" strikethrough markers Mnemosyne prepends so the
+    /// filetype icon resolves against the real path, not the decoration.
+    private var cleanPath: String {
+        var p = path.trimmingCharacters(in: .whitespaces)
+        if p.hasPrefix("~~") && p.hasSuffix("~~") {
+            p = String(p.dropFirst(2).dropLast(2))
+        }
+        if let r = p.range(of: " (path not found)") {
+            p = String(p[..<r.lowerBound])
+        }
+        return p
+    }
+
     var body: some View {
         Button {
-            MnemosyneLinkResolver.open(path)
+            FileLinkResolver.open(cleanPath)
         } label: {
             HStack(spacing: 3) {
-                Image(systemName: "doc.text")
+                Image(systemName: FileIcon.symbol(for: URL(fileURLWithPath: cleanPath)))
                     .font(.system(size: 7.5))
                 Text(path)
                     .font(.system(size: 8.5, design: .monospaced))
@@ -494,19 +507,5 @@ struct FileLinkButton: View {
         .onHover { h in
             withAnimation(.easeOut(duration: 0.12)) { hovering = h }
         }
-    }
-}
-
-/// Löst einen Link-Pfad gegen die Projektwurzel auf und stößt den Editor-Sprung an.
-enum MnemosyneLinkResolver {
-    static func open(_ link: String) {
-        let expanded = (link as NSString).expandingTildeInPath
-        let path: String
-        if (expanded as NSString).isAbsolutePath {
-            path = expanded
-        } else {
-            path = (RubyBridge.shared.projectRoot as NSString).appendingPathComponent(expanded)
-        }
-        NotificationCenter.default.post(name: .openFileInEditor, object: URL(fileURLWithPath: path))
     }
 }

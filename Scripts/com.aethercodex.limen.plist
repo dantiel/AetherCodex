@@ -8,7 +8,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>/Users/d/.rvm/rubies/ruby-3.1.7/bin/ruby</string>
-    <string>/Users/d/Desktop/HOI_KOSMOI/paramitrabalho/aethercodex-editor/Ruby/standalone_daemon.rb</string>
+    <string>/Users/d/Desktop/HOI_KOSMOI/paramitrabalho/aethercodex-editor/AetherOracle/ruby/standalone_daemon.rb</string>
     <string>--listen</string>
     <string>/tmp/aether-limen.sock</string>
   </array>
@@ -21,13 +21,13 @@
     <key>AETHER_DAEMON</key>
     <string>1</string>
     <key>BUNDLE_GEMFILE</key>
-    <string>/Users/d/Desktop/HOI_KOSMOI/paramitrabalho/aethercodex-editor/Ruby/Gemfile</string>
+    <string>/Users/d/Desktop/HOI_KOSMOI/paramitrabalho/aethercodex-editor/AetherOracle/ruby/Gemfile</string>
     <key>BUNDLE_PATH</key>
-    <string>/Users/d/Desktop/HOI_KOSMOI/paramitrabalho/aethercodex-editor/Ruby/.vendor_bundle</string>
+    <string>/Users/d/Desktop/HOI_KOSMOI/paramitrabalho/aethercodex-editor/AetherOracle/ruby/.vendor_bundle</string>
     <key>GEM_HOME</key>
-    <string>/Users/d/Desktop/HOI_KOSMOI/paramitrabalho/aethercodex-editor/Ruby/.vendor_bundle</string>
+    <string>/Users/d/Desktop/HOI_KOSMOI/paramitrabalho/aethercodex-editor/AetherOracle/ruby/.vendor_bundle</string>
     <key>GEM_PATH</key>
-    <string>/Users/d/Desktop/HOI_KOSMOI/paramitrabalho/aethercodex-editor/Ruby/.vendor_bundle</string>
+    <string>/Users/d/Desktop/HOI_KOSMOI/paramitrabalho/aethercodex-editor/AetherOracle/ruby/.vendor_bundle</string>
   </dict>
 
   <key>KeepAlive</key>

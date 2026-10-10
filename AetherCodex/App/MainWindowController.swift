@@ -29,25 +29,21 @@ struct SidebarTab {
 
 // MARK: - SidebarContainer
 
-/// Hosts the icon-strip tab bar + content area for the sidebar.
-/// When collapsed to icon-only mode, shows a top tab bar (sidebarAdaptable).
+/// Hosts the sidebar's content panes. The tab switcher is a floating glass
+/// capsule docked to the bottom of the sheet; content fills the full width
+/// above it (no vertical rail).
 final class SidebarContainer: NSViewController {
 
     private let tabs: [SidebarTab]
-    private var tabButtons: [NSButton] = []
-    private var iconStack: NSStackView!
     private(set) var contentContainer: NSView!
-    private var topTabBar: NSSegmentedControl!
     private var isCollapsed = false
 
+    /// The tab switcher no longer lives here — the docked sidebar shows it in
+    /// a SwiftUI bottom `safeAreaBar` (SafeAreaBarHost.swift, `SidebarTabBar`).
+    /// This container only hosts the panes and their show/hide switching.
     var selectedTabId: String { tabs[selectedIndex].id }
-    private var selectedIndex: Int = 0 {
-        didSet { updateTabSelection() }
-    }
+    private var selectedIndex: Int = 0
 
-    /// The top tab bar view — host this above the editor when sidebar is collapsed.
-    var topTabBarView: NSView { topTabBar }
-    
     /// Sidebar glass surface — NSVisualEffectView with .withinWindow blending.
     /// Carries its own material distinct from the shared glassBg.
     var backgroundFill: NSView!
@@ -63,6 +59,14 @@ final class SidebarContainer: NSViewController {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not implemented") }
+
+    /// Programmatic tab selection — mirrors the old AppKit pill buttons.
+    /// The SwiftUI `SidebarTabBar` drives this from the bottom safe-area bar.
+    func selectTab(id: String) {
+        guard let i = tabs.firstIndex(where: { $0.id == id }), i != selectedIndex else { return }
+        selectedIndex = i
+        onTabSelected?(id)
+    }
 
     func setContentView(_ view: NSView, forTabId id: String) {
         view.translatesAutoresizingMaskIntoConstraints = false
@@ -80,17 +84,8 @@ final class SidebarContainer: NSViewController {
     func setCollapsed(_ collapsed: Bool) {
         isCollapsed = collapsed
         contentContainer.isHidden = collapsed
-        topTabBar.isHidden = !collapsed
-        iconStack.isHidden = collapsed
         // backgroundFill always visible — provides continuous surface: sidebar → divider → gutter
     }
-
-    /// Top inset for sidebar content — pushes icons & file list below traffic lights.
-    /// Background fill still extends full height behind the traffic lights for glass effect.
-    // The SwiftUI bar already reserves its header height. Align the icons with
-    // the first file row (28 pt below the path label), not another full toolbar.
-    private let sidebarIconTopInset: CGFloat = 92
-    private let sidebarLeftInset: CGFloat = 0
 
     override func loadView() {
         view = NSView()
@@ -106,47 +101,6 @@ final class SidebarContainer: NSViewController {
     }
 
     private func buildUI() {
-        // --- Icon strip (vertical, always visible when expanded) ---
-        iconStack = NSStackView()
-        iconStack.orientation = .vertical
-        iconStack.spacing = 4
-        iconStack.alignment = .centerX
-        iconStack.edgeInsets = NSEdgeInsets(top: 8, left: 2, bottom: 0, right: 2)
-        iconStack.translatesAutoresizingMaskIntoConstraints = false
-
-        for (i, tab) in tabs.enumerated() {
-            guard let img = NSImage(systemSymbolName: tab.symbolName,
-                                     accessibilityDescription: tab.title) else {
-                print("[SidebarContainer] SF Symbol not found: \(tab.symbolName)")
-                continue
-            }
-            let btn = NSButton(image: img,
-                               target: self, action: #selector(tabButtonClicked(_:)))
-            btn.tag = i
-            btn.bezelStyle = .smallSquare
-            btn.isBordered = false
-            btn.translatesAutoresizingMaskIntoConstraints = false
-            btn.toolTip = tab.tooltip
-            NSLayoutConstraint.activate([
-                iconStack.widthAnchor.constraint(equalToConstant: 28),
-                btn.heightAnchor.constraint(equalToConstant: 24),
-            ])
-            tabButtons.append(btn)
-            iconStack.addArrangedSubview(btn)
-        }
-
-        // --- Top tab bar (sidebarAdaptable style — shown when collapsed) ---
-        topTabBar = NSSegmentedControl(
-            labels: tabs.map { $0.title },
-            trackingMode: .selectOne,
-            target: self,
-            action: #selector(topTabChanged(_:))
-        )
-        topTabBar.segmentStyle = .separated
-        topTabBar.translatesAutoresizingMaskIntoConstraints = false
-        topTabBar.isHidden = true
-        topTabBar.segmentDistribution = .fit
-
         // --- Content container ---
         contentContainer = NSView()
         contentContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -173,52 +127,30 @@ final class SidebarContainer: NSViewController {
         ])
 
         view.addSubview(backgroundFill, positioned: .below, relativeTo: nil)
-        view.addSubview(iconStack)
         view.addSubview(contentContainer)
-        
+
         NSLayoutConstraint.activate([
             // Background fill covers entire sidebar container (full height behind traffic lights)
             backgroundFill.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             backgroundFill.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             backgroundFill.topAnchor.constraint(equalTo: view.topAnchor),
             backgroundFill.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            
-            iconStack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: sidebarLeftInset),
-            iconStack.topAnchor.constraint(equalTo: view.topAnchor, constant: sidebarIconTopInset),
-            iconStack.widthAnchor.constraint(equalToConstant: 36),
 
-            contentContainer.leadingAnchor.constraint(equalTo: iconStack.trailingAnchor, constant: 4),
+            // Content fills the sheet down to the window edge — the SwiftUI
+            // bottom safe-area bar (SidebarTabBar) overlays its lower band
+            // with the native scroll-edge effect.
+            contentContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             contentContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             contentContainer.topAnchor.constraint(equalTo: view.topAnchor),
             contentContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
-
-        updateTabSelection()
     }
 
-    @objc private func tabButtonClicked(_ sender: NSButton) {
-        selectedIndex = sender.tag
-        onTabSelected?(tabs[selectedIndex].id)
-    }
-
-    @objc private func topTabChanged(_ sender: NSSegmentedControl) {
-        selectedIndex = sender.selectedSegment
-        onTabSelected?(tabs[selectedIndex].id)
-    }
-
-    private func updateTabSelection() {
-        for (i, btn) in tabButtons.enumerated() {
-            btn.contentTintColor = (i == selectedIndex) ? accentColor : dimmedColor
-        }
-        topTabBar.selectedSegment = selectedIndex
-    }
-
-    /// Apply theme colors: tab icon tints only. Glass material + tint are set via applySidebarGlass.
+    /// Theme colors live in the SwiftUI `SidebarTabBar` now; the container
+    /// keeps the values for callers that still apply them.
     func applyThemeColors(tintColor: NSColor, accent: NSColor, dimmed: NSColor) {
         accentColor = accent
         dimmedColor = dimmed
-        // backgroundFill + tint managed exclusively by MainWindowController.applySidebarTint
-        updateTabSelection()
     }
     
     /// Apply tint to the sidebar section.
@@ -253,13 +185,22 @@ final class SeamlessSplitView: NSSplitView {
 final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
 
     var fileBrowser: FileBrowserViewController!
-    var editorViewController: EditorViewController!
+    private(set) var tabsModel: TabsModel!
+
+    /// Active tab's controller — kept as a computed accessor so the many existing
+    /// call sites (`openFile`, search, theme, first responder) keep working.
+    var editorViewController: EditorViewController? { tabsModel?.activeEditor }
+    var documentModel: EditorDocumentModel? { tabsModel?.activeDocument }
     private var pythiaModel = PythiaChatModel()
     private var splitVC: NSSplitViewController!
     private var editorItem: NSSplitViewItem!
     private var editorHeaderView: EditorHeaderView!
     private var sidebarContainer: SidebarContainer!
-    private var topTabBarHost: NSView!
+    private var favouritesVC: FavouritesHostViewController!
+    private var gitVC: NSHostingController<GitSidebarView>?
+    private var searchVC: NSHostingController<SidebarSearchView>?
+    private let gitModel = GitSidebarModel()
+    private let searchModel = SidebarSearchModel()
     private var overlayPanel: OverlayFileBrowserPanel?
     private var sidebarFloatingPanel: FloatingOverlayPanel?
     private var pythiaFloatingPanel: FloatingOverlayPanel?
@@ -267,7 +208,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private var statusBar: NSVisualEffectView!
     private var statusLabel: NSTextField!
     private var chromeState: EditorChromeState!
-    private var documentModel: EditorDocumentModel!
     
     private var lastSidebarExpanded = false
     private var isAnimatingSidebar = false
@@ -313,18 +253,28 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         // Editor background is a SwiftUI Material (see EditorContainerView), driven
         // by the theme's glassBlurStrength + glassTint — no AppKit glass view here.
         // ── Sidebar (left pane) ──
-        sidebarContainer = SidebarContainer(tabs: [
-            SidebarTab(id: "files",  title: "Files",  symbolName: "folder",                 tooltip: "File Browser"),
-            SidebarTab(id: "search", title: "Search", symbolName: "magnifyingglass",        tooltip: "Search"),
-            SidebarTab(id: "git",    title: "Git",    symbolName: "arrow.triangle.branch",  tooltip: "Git"),
-        ])
+        // One roster, three consumers: the AppKit container (pane switching), the
+        // panes themselves (each docks the floating tab bar in its own SwiftUI
+        // graph via `sidebarTabBar`) and the window titlebar.
+        let sidebarTabs: [SidebarTab] = [
+            SidebarTab(id: "files",      title: "Files",      symbolName: "folder",                 tooltip: "File Browser"),
+            SidebarTab(id: "favourites", title: "Favourites", symbolName: "star",                   tooltip: "Favourite Projects"),
+            SidebarTab(id: "search",     title: "Search",     symbolName: "magnifyingglass",        tooltip: "Search"),
+            SidebarTab(id: "git",        title: "Git",        symbolName: "arrow.triangle.branch",  tooltip: "Git"),
+        ]
+        // The chrome must exist before the panes are built — each of them observes
+        // it to draw and drive the floating tab bar.
+        chromeState = EditorChromeState(sidebarTabs: sidebarTabs)
+        sidebarContainer = SidebarContainer(tabs: sidebarTabs)
         sidebarContainer.onTabSelected = { [weak self] id in
             guard let self else { return }
-            switch id {
-            case "files":  self.fileBrowser?.view.isHidden = false
-            case "search": self.fileBrowser?.view.isHidden = true
-            case "git":    self.fileBrowser?.view.isHidden = true
-            default: break
+            self.fileBrowser?.view.isHidden = (id != "files")
+            self.favouritesVC?.view.isHidden = (id != "favourites")
+            self.gitVC?.view.isHidden = (id != "git")
+            self.searchVC?.view.isHidden = (id != "search")
+            if id == "git" {
+                self.chromeState?.sidebarWidth = max(self.chromeState?.sidebarWidth ?? 180, 320)
+                self.gitModel.refresh(self.fileBrowser?.rootItem?.url)
             }
         }
  
@@ -332,22 +282,45 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         _ = sidebarContainer.view
  
         fileBrowser = FileBrowserViewController()
+        fileBrowser.chrome = chromeState
         fileBrowser.setTransparentBackground()
         fileBrowser.onFileOpen = { [weak self] url in
-            self?.editorViewController?.openFile(url)
+            self?.openFileInTab(url)
         }
-        fileBrowser.onFolderOpen = { _ in
-            // just navigated; no action
+        fileBrowser.onFolderOpen = { [weak self] url in
+            self?.gitModel.folder = url
+            if self?.sidebarContainer.selectedTabId == "git" { self?.gitModel.refresh(url) }
+            self?.chromeState?.currentFolder = url
+            self?.searchModel.root = url
         }
         sidebarContainer.setContentView(fileBrowser.view, forTabId: "files")
 
-        // ── Editor (center pane) ──
-        editorViewController = EditorViewController()
-        _ = editorViewController.view  // force-load so viewDidLoad fires
-        editorViewController.onTitleChange = { [weak self] title in
-            self?.window?.title = title
-            self?.chromeState?.title = title
+        // ── Favourites (registered AetherCodex projects + ÆtherLink discovery) ──
+        favouritesVC = FavouritesHostViewController(chrome: chromeState)
+        FavouritesStore.shared.openProject = { [weak self] url in
+            self?.fileBrowser?.openFolder(url)
         }
+        sidebarContainer.setContentView(favouritesVC.view, forTabId: "favourites")
+
+        gitModel.openFile = { [weak self] url in self?.openFileInTab(url) }
+        gitModel.openDiff = { [weak self] title, subtitle, diff, filePath, repoRoot in
+            self?.openDiffInTab(title: title, subtitle: subtitle, diff: diff,
+                                filePath: filePath, repoRoot: repoRoot)
+        }
+        gitModel.prepareAI = { [weak self] prompt in
+            self?.chromeState?.pythiaVisible = true
+            self?.pythiaModel.pendingPrompt = prompt
+        }
+        gitVC = NSHostingController(rootView: GitSidebarView(model: gitModel, chrome: chromeState))
+        sidebarContainer.setContentView(gitVC!.view, forTabId: "git")
+
+        // ── Search (project-scoped filename lookup; Go-To-File panel on demand) ──
+        searchModel.open = { [weak self] url in self?.openFileInTab(url) }
+        searchVC = NSHostingController(rootView: SidebarSearchView(model: searchModel, chrome: chromeState))
+        sidebarContainer.setContentView(searchVC!.view, forTabId: "search")
+
+        // ── Editor (center pane) — tabbed documents ──
+        tabsModel = TabsModel()
 
         // ── Pythia (right pane) — pure SwiftUI PythiaPanel, no WebView ──
 
@@ -355,11 +328,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         // safeAreaBar(edge: .top/.leading/.trailing) + .scrollEdgeEffectStyle(.soft)
         // provide native scroll-edge blur on all three edges — something AppKit's
         // NSSplitViewItemAccessoryViewController cannot do (top/bottom only).
-
-        // ── Top tab bar host (collapsed sidebar tabs) ──
-        topTabBarHost = NSView()
-        topTabBarHost.translatesAutoresizingMaskIntoConstraints = false
-        topTabBarHost.isHidden = true
 
         // ── Status bar ──
         statusBar = NSVisualEffectView(frame: .zero)
@@ -374,9 +342,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         statusBar.addSubview(statusLabel)
 
         // ── Assemble SwiftUI host as window content ──
-        chromeState = EditorChromeState()
         chromeState.sidebarWidth = CGFloat(SessionState.shared.sidebarWidth ?? 180)
         chromeState.pythiaWidth = CGFloat(SessionState.shared.pythiaWidth ?? 280)
+
+        // The SwiftUI bottom safe-area tab bar drives the AppKit pane switcher.
+        chromeState.onSidebarTabSelected = { [weak self] id in
+            self?.sidebarContainer.selectTab(id: id)
+        }
+        // Restore the last pane from the session (the old AppKit pill never did).
+        if let saved = SessionState.shared.selectedSidebarTab,
+           sidebarTabs.contains(where: { $0.id == saved }) {
+            chromeState.selectedSidebarTab = saved
+            sidebarContainer.selectTab(id: saved)
+        }
         
         // Wire up traffic lights repositioning when sidebar visibility changes
         chromeState.onSidebarVisibilityChange = { [weak self] visible in
@@ -394,33 +372,39 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         chromeState.onOracleOnlyChange = { [weak self] oracleOnly in
             guard let self else { return }
             self.statusBar.isHidden = oracleOnly
-            // The tab bar is only normally visible when the sidebar is collapsed;
-            // preserve that condition when the card flips back.
-            self.topTabBarHost.isHidden = oracleOnly || self.chromeState.sidebarVisible
         }
 
-        documentModel = EditorDocumentModel()
-        editorViewController.onDocumentChange = { [weak self] attributedString in
-            self?.documentModel.attributedString = attributedString
-            self?.documentModel.revision += 1
+        // Breadcrumb navigation: a folder peek drives the sidebar file browser;
+        // a file selection opens it in a tab.
+        chromeState.navigateFolder = { [weak self] url in
+            self?.chromeState?.currentFolder = url
+            self?.fileBrowser?.openFolder(url)
+        }
+        chromeState.openDocument = { [weak self] url in
+            self?.openFileInTab(url)
         }
 
-        // The AppKit editor's view is never laid out in the SwiftUI hierarchy (the
-        // TextKit 2 surface replaces it), so its deferred `newDocument()` — which
-        // fires from `layout()` when the view first gets a non-zero frame — never
-        // runs. Seed the initial document explicitly so the surface isn't empty
-        // (an empty document also collapses the ScrollView to a 1×1 content and
-        // shrinks the whole window).
-        if editorViewController.highlightedDocument().length == 0 {
-            editorViewController.newDocument()
+        // Wire the active tab's title into the window chrome. `TabsModel` seeds the
+        // first (untitled/flash) tab itself — the old single-editor bootstrap is
+        // gone: the AppKit view is never laid out in the SwiftUI hierarchy, so each
+        // `EditorTab` runs `newDocument()` explicitly in its `seedIfEmpty()`.
+        tabsModel.onActiveTitleChange = { [weak self] title in
+            self?.window?.title = title
+            self?.chromeState?.title = title
         }
+        // Keep the file browser pinned to the active document's folder: switching
+        // tabs re-homes the sidebar, so the file you're looking at is always the
+        // one whose folder is revealed.
+        tabsModel.onActiveTabChange = { [weak self] in
+            self?.syncFileBrowserToActiveFile()
+        }
+        chromeState.title = tabsModel.activeTab?.title ?? "Untitled"
 
         let containerView = OracleFlipRoot(
-            editor: editorViewController,
             sidebar: sidebarContainer.view,
             pythiaModel: pythiaModel,
             chrome: chromeState,
-            document: documentModel
+            tabs: tabsModel
         )
         // Host the SwiftUI content in a plain `NSHostingView` (not
         // `NSHostingController`) with autoresizing enabled, so the window frame
@@ -441,16 +425,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
 
         let liveView = hostingView
 
-        // Status bar + top tab bar float above the editor (AppKit overlays).
-        liveView.addSubview(topTabBarHost)
+        // Status bar floats above the editor (AppKit overlay). The editor tab
+        // strip is no longer an AppKit overlay — it lives in the SwiftUI top
+        // `safeAreaBar` as a hosted NSView.
         liveView.addSubview(statusBar)
 
         NSLayoutConstraint.activate([
-            topTabBarHost.leadingAnchor.constraint(equalTo: liveView.leadingAnchor),
-            topTabBarHost.trailingAnchor.constraint(equalTo: liveView.trailingAnchor),
-            topTabBarHost.topAnchor.constraint(equalTo: liveView.topAnchor),
-            topTabBarHost.heightAnchor.constraint(equalToConstant: 36),
-
             statusBar.leadingAnchor.constraint(equalTo: liveView.leadingAnchor),
             statusBar.trailingAnchor.constraint(equalTo: liveView.trailingAnchor),
             statusBar.bottomAnchor.constraint(equalTo: liveView.bottomAnchor),
@@ -461,7 +441,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         ])
 
         // Ensure the text view gets focus when window becomes key
-        window.initialFirstResponder = editorViewController.textView
+        window.initialFirstResponder = tabsModel.activeEditor?.textView
 
         themeObserver = NotificationCenter.default.addObserver(
             forName: ThemeSettings.didChangeNotification, object: nil, queue: .main
@@ -484,8 +464,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         NotificationCenter.default.addObserver(
             forName: .openFileInEditor, object: nil, queue: .main
         ) { [weak self] note in
-            guard let url = note.object as? URL else { return }
-            self?.editorViewController?.openFile(url)
+            if let request = note.object as? FileLinkRequest {
+                self?.openFileInTab(request.url, revealLine: request.line)
+            } else if let url = note.object as? URL {
+                self?.openFileInTab(url)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .openEntityInTab, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let request = note.object as? EntityTabRequest else { return }
+            self?.openEntityInTab(request)
         }
         // Restore saved session state
         if let lastFolder = SessionState.shared.lastProjectFolder {
@@ -591,24 +580,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         chromeState?.sidebarWidth ?? CGFloat(SessionState.shared.sidebarWidth ?? 180)
     }
 
-    // MARK: - Top Tab Bar (sidebarAdaptable)
-
-    private func updateTopTabBar(collapsed: Bool) {
-        guard let host = topTabBarHost, let container = sidebarContainer else { return }
-        host.isHidden = !collapsed
-        if collapsed {
-            let tabBar = container.topTabBarView
-            tabBar.removeFromSuperview()
-            tabBar.translatesAutoresizingMaskIntoConstraints = false
-            host.addSubview(tabBar)
-            NSLayoutConstraint.activate([
-                tabBar.leadingAnchor.constraint(equalTo: host.leadingAnchor, constant: 48),
-                tabBar.trailingAnchor.constraint(equalTo: host.trailingAnchor, constant: -8),
-                tabBar.centerYAnchor.constraint(equalTo: host.centerYAnchor),
-            ])
-        }
-    }
-
     // Helper to get the glass view from a split view item's view controller
     private func glassView(from item: NSSplitViewItem?) -> NSView? {
         return item?.viewController.view
@@ -630,8 +601,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
               let window = window, let editor = editorViewController else { return }
 
         let overlayFB = FileBrowserViewController()
-        overlayFB.onFileOpen = { [weak editor] url in
-            editor?.openFile(url)
+        overlayFB.onFileOpen = { [weak self] url in
+            self?.openFileInTab(url)
         }
         _ = overlayFB.view
         overlayFB.rootItem = fileBrowser?.rootItem
@@ -663,7 +634,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         chromeState?.theme = theme
         
         // ── Window appearance ──
-        window?.appearance = NSAppearance(named: theme.kind == .dark ? .darkAqua : .aqua)
+        window?.appearance = NSAppearance(named: theme.appearance == .dark ? .darkAqua : .aqua)
         window?.backgroundColor = .clear
         
         let bgOpacity = settings.resolvedEditorBackgroundOpacity(for: theme)
@@ -697,6 +668,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             dimmed: theme.editorForeground.withAlphaComponent(0.45)
         )
         fileBrowser?.applyForegroundColor(theme.sidebarForeground, accent: theme.sidebarAccent)
+        gitModel.theme = theme
         fileBrowser?.setTransparentBackground()
 
     }
@@ -754,8 +726,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         // Project folder
         s.lastProjectFolder = fileBrowser?.rootItem?.url.path
 
-        // Open file
+        // Open file(s)
         s.lastOpenFile = editorViewController?.currentFile?.path
+        s.openTabs = tabsModel?.tabs.compactMap { $0.controller.currentFile?.path } ?? []
 
         // safeAreaBar widths (single-pane architecture)
         if chromeState?.sidebarVisible == true {
@@ -787,8 +760,36 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     /// Restore text view focus when the window becomes key — prevents
     /// the "click to type" friction after dismissing search or switching apps.
     func windowDidBecomeKey(_ notification: Notification) {
-        guard !(editorViewController?.incrementalSearchBar.isVisible ?? false) else { return }
+        // The startup pass in applyWindowRounding() runs before the window is
+        // shown, while the traffic-light buttons aren't yet attached to the live
+        // titlebar hierarchy (their superview is nil), so the guard in
+        // positionTrafficLights() silently bails and the buttons linger at
+        // AppKit's default placement. Re-assert once the window is key, after the
+        // titlebar has settled, so the controls nest in the rounded corner.
+        DispatchQueue.main.async { [weak self] in
+            self?.positionTrafficLights()
+        }
+        // AppKit may run one more titlebar layout pass right after the window
+        // becomes key; re-assert a beat later so the final pass wins the race.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.positionTrafficLights()
+        }
+        guard !(editorViewController?.quickSearch.isVisible ?? false) else { return }
         window?.makeFirstResponder(editorViewController?.textView)
+    }
+
+    // MARK: - Quick Search (menu routing via responder chain)
+
+    @objc func toggleQuickSearch(_ sender: Any?) {
+        editorViewController?.toggleIncrementalSearch()
+    }
+
+    @objc func findNext(_ sender: Any?) {
+        editorViewController?.searchNavigateForward()
+    }
+
+    @objc func findPrevious(_ sender: Any?) {
+        editorViewController?.searchNavigateBackward()
     }
     
     // MARK: - Session Export/Restore (multi-window)
@@ -827,7 +828,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         if let path = state.lastOpenFile {
             let url = URL(fileURLWithPath: path)
             if FileManager.default.fileExists(atPath: path) {
-                editorViewController?.openFile(url)
+                openFileInTab(url)
             }
         }
     }
@@ -846,6 +847,70 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             return
         }
         editor.saveDocument()
+    }
+
+    @objc func newTab(_ sender: Any?) {
+        tabsModel?.newTab()
+    }
+
+    @objc func closeTab(_ sender: Any?) {
+        guard let tabs = tabsModel else { return }
+        if let entityId = tabs.activeEntityTabId {
+            tabs.closeEntity(entityId)
+        } else if tabs.tabs.count > 1, let id = tabs.activeTabId {
+            tabs.close(id)
+        } else {
+            window?.performClose(nil)
+        }
+    }
+
+    @objc func nextTab(_ sender: Any?) {
+        tabsModel?.selectNext()
+    }
+
+    @objc func previousTab(_ sender: Any?) {
+        tabsModel?.selectPrevious()
+    }
+
+    /// Open a file into a tab: fills the active untitled tab, otherwise a new one.
+    func openFileInTab(_ url: URL, revealLine line: Int? = nil) {
+        guard let tabs = tabsModel else { return }
+        let tab = tabs.tabForOpening(url)
+        tab.controller.openFile(url)
+        if let line { tab.controller.revealLine(line) }
+        saveSessionState()
+        syncFileBrowserToActiveFile()
+    }
+
+    /// Follow the active document *inside* the current sidebar root. Opening a file
+    /// or switching tabs no longer re-homes the browser to the file's folder — the
+    /// sidebar stays on the opened project and simply expands + selects + scrolls to
+    /// the file. Only when the file lives outside the current root does the browser
+    /// fall back to opening its parent folder (there is no other sensible home).
+    private func syncFileBrowserToActiveFile() {
+        guard let file = tabsModel?.activeTab?.controller.currentFile else { return }
+        if fileBrowser?.revealFile(file) == false {
+            fileBrowser?.openFolder(file.deletingLastPathComponent())
+        }
+    }
+
+    /// Open a Magnum Opus task or Salomo seal as a first-class tab.
+    func openEntityInTab(_ request: EntityTabRequest) {
+        guard let tabs = tabsModel else { return }
+        tabs.openEntityTab(request.kind, title: request.title)
+        // Leave the oracle-only flip so the tab is immediately visible.
+        chromeState?.oracleOnly = false
+        saveSessionState()
+    }
+
+    /// Open a unified Git diff as a first-class tab in the main editor area.
+    func openDiffInTab(title: String, subtitle: String = "", diff: String,
+                       filePath: URL? = nil, repoRoot: URL? = nil) {
+        guard let tabs = tabsModel else { return }
+        tabs.openDiffTab(title: title, subtitle: subtitle, diff: diff,
+                         filePath: filePath, repoRoot: repoRoot)
+        chromeState?.oracleOnly = false
+        saveSessionState()
     }
 
     // MARK: - Pane Toggles
@@ -984,13 +1049,100 @@ extension MainWindowController {
         ThemeSettings.shared.highlightCurrentLine.toggle()
         editorViewController?.applyThemeChrome()
     }
-    
+
+    // MARK: Standard Edit Forwarding
+
+    @objc func deleteLine(_ sender: Any?) { editorViewController?.deleteLine(sender) }
+    @objc func insertLineBelow(_ sender: Any?) { editorViewController?.insertLineBelow(sender) }
+    @objc func insertLineAbove(_ sender: Any?) { editorViewController?.insertLineAbove(sender) }
+    @objc func uppercaseSelection(_ sender: Any?) { editorViewController?.uppercaseSelection(sender) }
+    @objc func lowercaseSelection(_ sender: Any?) { editorViewController?.lowercaseSelection(sender) }
+    @objc func toggleComment(_ sender: Any?) { editorViewController?.toggleComment(sender) }
+    @objc func toggleBlockComment(_ sender: Any?) { editorViewController?.toggleBlockComment(sender) }
+    @objc func indentSelection(_ sender: Any?) { editorViewController?.indentSelection(sender) }
+    @objc func outdentSelection(_ sender: Any?) { editorViewController?.outdentSelection(sender) }
+    @objc func duplicateLine(_ sender: Any?) { editorViewController?.duplicateLine(sender) }
+    @objc func moveLineUp(_ sender: Any?) { editorViewController?.moveLineUp(sender) }
+    @objc func moveLineDown(_ sender: Any?) { editorViewController?.moveLineDown(sender) }
+    @objc func joinLines(_ sender: Any?) { editorViewController?.joinLines(sender) }
+    @objc func selectCurrentLine(_ sender: Any?) { editorViewController?.selectCurrentLine(sender) }
+    @objc func editEachLineInSelection(_ sender: Any?) { editorViewController?.editEachLineInSelection(sender) }
+    @objc func selectNextOccurrence(_ sender: Any?) { editorViewController?.selectNextOccurrence(sender) }
+    @objc func selectAllOccurrences(_ sender: Any?) { editorViewController?.selectAllOccurrences(sender) }
+    @objc func goToLine(_ sender: Any?) { editorViewController?.goToLine(sender) }
+    @objc func toggleInvisibles(_ sender: Any?) { editorViewController?.toggleInvisibles(sender) }
+
+    // MARK: Find & Replace forwarding
+
+    private func prepareFindReplace() -> FindReplaceModel? {
+        guard let model = editorViewController?.findReplace else { return nil }
+        model.projectRootProvider = { [weak self] in self?.fileBrowser?.rootItem?.url }
+        model.openFile = { [weak self] url, line in
+            self?.openFileInTab(url, revealLine: line)
+        }
+        return model
+    }
+
+    @objc func showFindDialog(_ sender: Any?) {
+        editorViewController?.quickSearch.cancel()
+        prepareFindReplace()?.show(replace: false)
+    }
+
+    @objc func showFindReplaceDialog(_ sender: Any?) {
+        editorViewController?.quickSearch.cancel()
+        prepareFindReplace()?.show(replace: true)
+    }
+
+    @objc func useSelectionForFind(_ sender: Any?) { prepareFindReplace()?.useSelectionForFind() }
+    @objc func findReplaceNext(_ sender: Any?) { prepareFindReplace()?.next() }
+    @objc func findReplacePrevious(_ sender: Any?) { prepareFindReplace()?.previous() }
+
+    // MARK: Display toggles
+
+    @objc func toggleLineNumbers(_ sender: Any?) {
+        EditorDisplaySettings.shared.showLineNumbers.toggle()
+    }
+
+    @objc func toggleWrapColumn(_ sender: Any?) {
+        EditorDisplaySettings.shared.showWrapColumn.toggle()
+    }
+
+    @objc func setWrapColumnWidth(_ sender: Any?) {
+        if let item = sender as? NSMenuItem, let value = item.representedObject as? Int {
+            EditorDisplaySettings.shared.wrapColumn = value
+        }
+    }
+
+    @objc func setWrapColumnOther(_ sender: Any?) {
+        let alert = NSAlert()
+        alert.messageText = "Wrap Column"
+        alert.informativeText = "Enter a character column."
+        alert.addButton(withTitle: "Set")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 180, height: 24))
+        field.placeholderString = "\(EditorDisplaySettings.shared.wrapColumn)"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let n = Int(field.stringValue.trimmingCharacters(in: .whitespaces)), n > 0 else { return }
+        EditorDisplaySettings.shared.wrapColumn = n
+    }
+
     @objc func goToFile(_ sender: Any?) {
         guard let root = fileBrowser?.rootItem?.url else { return }
-        GoToFilePanel.show(projectRoot: root) { [weak self] url in
-            self?.editorViewController?.openFile(url)
-            self?.saveSessionState()
+        let openPaths = Set((tabsModel?.tabs ?? []).compactMap { $0.controller.currentFile?.path })
+        GoToFilePanel.show(projectRoot: root,
+                           currentURL: editorViewController?.currentFile,
+                           openPaths: openPaths) { [weak self] url in
+            self?.openFileInTab(url)
         }
+    }
+
+    @objc func searchAether(_ sender: Any?) {
+        // TODO: AetherSearchPanel is not yet implemented. The "Search Æther…"
+        // (⌥⌘T) menu item is wired but currently defers to the fuzzy Go-to-File
+        // palette (⌘T) until the dedicated global-search panel lands.
+        goToFile(sender)
     }
     
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
@@ -999,6 +1151,20 @@ extension MainWindowController {
         }
         if menuItem.action == #selector(toggleHighlightCurrentLine(_:)) {
             menuItem.state = ThemeSettings.shared.highlightCurrentLine ? .on : .off
+        }
+        if menuItem.action == #selector(toggleInvisibles(_:)) {
+            let on = editorViewController?.textView.layoutManager?.showsInvisibleCharacters ?? false
+            menuItem.state = on ? .on : .off
+        }
+        if menuItem.action == #selector(toggleLineNumbers(_:)) {
+            menuItem.state = EditorDisplaySettings.shared.showLineNumbers ? .on : .off
+        }
+        if menuItem.action == #selector(toggleWrapColumn(_:)) {
+            menuItem.state = EditorDisplaySettings.shared.showWrapColumn ? .on : .off
+        }
+        if menuItem.action == #selector(setWrapColumnWidth(_:)) {
+            let value = (menuItem.representedObject as? Int) ?? -1
+            menuItem.state = (value == EditorDisplaySettings.shared.wrapColumn) ? .on : .off
         }
         return true
     }

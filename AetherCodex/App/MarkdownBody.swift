@@ -303,18 +303,6 @@ private func attributeValue(_ name: String, in attrs: String) -> String? {
     return ns.substring(with: m.range(at: 1))
 }
 
-/// Resolves an `aethercodex://open` URL from an inline file link and routes it
-/// through the same resolver the memory cauldron uses.
-private enum FileLinkResolver {
-    static func handle(_ url: URL) -> Bool {
-        guard url.scheme == "aethercodex", url.host == "open",
-              let comps = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let path = comps.queryItems?.first(where: { $0.name == "path" })?.value,
-              !path.isEmpty else { return false }
-        MnemosyneLinkResolver.open(path)
-        return true
-    }
-}
 
 // MARK: - Markdown body
 
@@ -330,7 +318,7 @@ struct MarkdownBody: View {
         Group {
         if plain || text.isEmpty {
             Text(text)
-                .font(.system(size: 13))
+                .font(Font(ThemeRegistry.shared.current.pythia.proseFont))
                 .lineSpacing(3)
                 .textSelection(.enabled)
         } else {
@@ -341,10 +329,10 @@ struct MarkdownBody: View {
             }
         }
         }
-        .foregroundStyle(Color(nsColor: ThemeRegistry.shared.current.sidebarForeground))
+        .foregroundStyle(Color(nsColor: ThemeRegistry.shared.current.pythia.baseText))
         .tint(Color(nsColor: ThemeRegistry.shared.current.style(for: .link).foreground ?? ThemeRegistry.shared.current.sidebarAccent))
         .environment(\.openURL, OpenURLAction { url in
-            FileLinkResolver.handle(url) ? .handled : .systemAction
+            FileLinkResolver.open(url) ? .handled : .systemAction
         })
         .onReceive(NotificationCenter.default.publisher(for: ThemeSettings.didChangeNotification)) { _ in settingsRevision += 1 }
     }
@@ -369,7 +357,7 @@ struct MarkdownBody: View {
             ListView(items: items)
         case .paragraph(let text):
             Text(renderInline(text))
-                .font(Font(ThemeSettings.shared.resolvedProportionalFont))
+                .font(Font(ThemeRegistry.shared.current.pythia.proseFont))
                 .lineSpacing(4)
                 .textSelection(.enabled)
         }
@@ -385,12 +373,35 @@ struct MarkdownBody: View {
 func highlightCode(_ code: String, language: String, fallback: NSColor? = nil) -> AttributedString {
     let theme = ThemeRegistry.shared.current
     let result = NSMutableAttributedString(string: code, attributes: [.foregroundColor: fallback ?? theme.pythia.codeForeground])
-    let engine = TreeSitterEngine()
     let aliases = ["javascript": "js", "typescript": "ts", "python": "py", "ruby": "rb",
                    "shell": "sh", "bash": "sh", "zsh": "sh", "swift": "swift"]
-    if engine.setLanguage(forExtension: aliases[language.lowercased()] ?? language.lowercased()) {
-        let range = NSRange(location: 0, length: result.length)
-        for token in engine.tokenize(code, in: range) where NSMaxRange(token.range) <= result.length {
+    let ext = aliases[language.lowercased()] ?? language.lowercased()
+
+    // Genuine tree-sitter grammars (real parsers, not C-placeholder aliases) —
+    // keep the fast native path for the core languages.
+    let tsGenuine: Set<String> = [
+        "swift", "py", "js", "mjs", "cjs", "jsx", "ts", "tsx", "rb", "rs", "go",
+        "html", "htm", "xml", "css", "scss", "less", "json", "sh", "bash", "zsh",
+        "c", "h", "cpp", "cc", "cxx", "hpp", "php", "md", "markdown", "mkdn", "mdown",
+    ]
+
+    if tsGenuine.contains(ext) {
+        let engine = TreeSitterEngine()
+        if engine.setLanguage(forExtension: ext) {
+            let range = NSRange(location: 0, length: result.length)
+            for token in engine.tokenize(code, in: range) where NSMaxRange(token.range) <= result.length {
+                if let color = theme.style(for: token.scope).foreground {
+                    result.addAttribute(.foregroundColor, value: color, range: token.range)
+                }
+            }
+        }
+        return AttributedString(result)
+    }
+
+    // Long-tail breadth: the TextMate grammar engine (Ruby textpow) covers the
+    // languages tree-sitter doesn't carry a real parser for.
+    if let tokens = TextMateGrammarEngine.shared.tokenize(code, language: ext) {
+        for token in tokens where NSMaxRange(token.range) <= result.length {
             if let color = theme.style(for: token.scope).foreground {
                 result.addAttribute(.foregroundColor, value: color, range: token.range)
             }
@@ -401,7 +412,12 @@ func highlightCode(_ code: String, language: String, fallback: NSColor? = nil) -
 
 private struct CodeBlockView: View {
     let code: String
-    let language: String
+    @State private var language: String
+
+    init(code: String, language: String) {
+        self.code = code
+        _language = State(initialValue: language.isEmpty ? "text" : language)
+    }
 
     var body: some View {
         let theme = ThemeRegistry.shared.current
@@ -414,6 +430,49 @@ private struct CodeBlockView: View {
                              background: Color(nsColor: scope.background ?? theme.pythia.codeBackground),
                              border: Color(nsColor: theme.pythia.shine).opacity(0.14),
                              fallback: scope.foreground ?? theme.pythia.codeForeground)
+            .overlay(alignment: .topTrailing) {
+                languageIndicator
+            }
+    }
+
+    /// Languages offered by the fenced-code language picker.
+    private static let languageChoices = [
+        "text", "swift", "python", "javascript", "typescript", "ruby", "rust",
+        "go", "html", "css", "scss", "json", "bash", "shell", "c", "cpp",
+        "csharp", "java", "kotlin", "php", "yaml", "toml", "xml", "markdown",
+        "sql", "lua", "scala", "haskell", "makefile",
+    ]
+
+    private var languageIndicator: some View {
+        let theme = ThemeRegistry.shared.current
+        return Menu {
+            ForEach(Self.languageChoices, id: \.self) { lang in
+                Button {
+                    language = lang
+                } label: {
+                    if lang == language {
+                        Label(lang, systemImage: "checkmark")
+                    } else {
+                        Text(lang)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .font(.system(size: 8, weight: .semibold))
+                Text(language)
+                    .font(.system(size: 9.5, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Color(nsColor: theme.pythia.codeForeground))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.ultraThinMaterial, in: Capsule())
+            .overlay(Capsule().strokeBorder(Color(nsColor: theme.pythia.shine).opacity(0.2), lineWidth: 0.5))
+        }
+        .menuStyle(.borderlessButton)
+        .padding(5)
     }
 }
 

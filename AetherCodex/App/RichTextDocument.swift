@@ -54,9 +54,12 @@ final class RichTextDocument: NSObject, ObservableObject, NSTextViewDelegate {
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
+        // Zero the NSTextView's implicit minimum so a narrow editor column (both
+        // sidebars open) never forces the wrapping container to stay wide.
+        textView.minSize = NSSize(width: 0, height: 0)
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude)
-        textView.textContainerInset = NSSize(width: 32, height: 28)
+        textView.textContainerInset = NSSize(width: 8, height: 28)
         textView.delegate = self
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -247,7 +250,10 @@ final class RichTextDocument: NSObject, ObservableObject, NSTextViewDelegate {
         }
         let selected = (textView.string as NSString).substring(with: range)
         let text = marker + selected.replacingOccurrences(of: "\n", with: "\n" + marker)
-        textView.insertText(NSAttributedString(string: text, attributes: MarkdownRichCodec.baseAttributes), replacementRange: range)
+        // Render through the codec so the structural marker (`- `, `- [ ]`) is
+        // hidden and the list/todo glyph is drawn natively — never raw syntax.
+        let rendered = MarkdownRichCodec.render(text)
+        textView.insertText(rendered, replacementRange: range)
         textView.window?.makeFirstResponder(textView)
     }
 
@@ -400,21 +406,28 @@ final class RichTextDocument: NSObject, ObservableObject, NSTextViewDelegate {
 struct RichTextSurface: View {
     @ObservedObject var document: RichTextDocument
     let theme: SyntaxTheme
-    let showSource: () -> Void
     /// Whether the file-browser sidebar is closed — when true, the ruler is the
     /// leftmost surface and fades in under the transparent titlebar, matching
     /// the code editor's gutter.
     var sidebarClosed: Bool = false
+    /// Extra chrome height above the surface (the editor tab strip) that pushes
+    /// the controls bar and scroll content down when the tab bar is visible.
+    var topInset: CGFloat = 0
+    /// Active paragraph level for the segmented style control (Body/H1–H3).
+    @State private var paragraphLevel = 0
 
     /// Real scroll-content breathing room below the floating controls bar.
     /// It scrolls away with the text (like the source surface), so the native
     /// `.scrollEdgeEffectStyle` from `EditorContainerView` progressively blurs
     /// the document as it travels beneath the transparent top bar.
-    private let topContentInset: CGFloat = 96
+    private var topContentInset: CGFloat { 96 + topInset }
 
     /// Fixed leading margin strip (the "side ruler") flush against the left
     /// sidebar. Mirrors the line-number gutter's glass surface and colors,
     /// minus the numbers.
+    /// Leading "measurement" ruler column width, shared so the titlebar can
+    /// indent the title past it exactly like the code gutter and diff columns.
+    static let rulerColumnWidth: CGFloat = 28
     private let rulerWidth: CGFloat = 28
 
     var body: some View {
@@ -454,13 +467,23 @@ struct RichTextSurface: View {
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .scrollIndicators(.visible)
+                // Stop the vertical scroller below the floating chrome (tab strip
+                // when visible, title row otherwise), mirroring the code surface.
+                .contentMargins(.top, EditorChromeMetrics.scrollIndicatorTopInset(showsTabBar: topInset > 0),
+                                for: .scrollIndicators)
                 .scrollEdgeEffectStyle(.soft, for: .top)
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
         .overlay(alignment: .top) {
+            // The controls bar must never impose its natural minimum width on the
+            // editor column: when the pane is narrower than the full toolbar, the
+            // `ViewThatFits` fallback scrolls it instead of widening the surface.
+            // `.clipped()` keeps any overflow (wide toolbar in a narrow pane) from
+            // spilling outside the editor column and breaking the HStack layout.
             chrome
-                .padding(.top, 36)
+                .padding(.top, 40 + topInset)
+                .clipped()
         }
     }
 
@@ -468,11 +491,21 @@ struct RichTextSurface: View {
     /// text passes behind it and participates in the top scroll-edge blur.
     private var chrome: some View {
         VStack(spacing: 0) {
-            ViewThatFits(in: .horizontal) {
-                controls
-                ScrollView(.horizontal) { controls }
+            // Split the bar into a *scrollable* leading group and a *fixed*
+            // trailing group. The leading `ScrollView` never imposes its natural
+            // minimum width on the editor column — when the pane is narrower than
+            // the controls, it scrolls instead of widening the surface (the old
+            // `ViewThatFits` fallback could still report the full `controls`
+            // width in the overlay, which is what broke the layout at small
+            // widths). The trailing buttons (Source / Fonts / Colors) stay pinned
+            // to the right edge, always reachable.
+            HStack(spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    leadingControls
+                }
+                trailingControls
             }
-            .padding(.horizontal, 20).padding(.vertical, 8)
+            .padding(.leading, 40).padding(.trailing, 20).padding(.vertical, 8)
             // Quiet measure, not page chrome or line numbers.
             Canvas { context, size in
                 for x in stride(from: 32.0, to: size.width - 24, by: 16) {
@@ -507,95 +540,113 @@ struct RichTextSurface: View {
         NSColorPanel.shared.orderFront(nil)
     }
 
-    private var controls: some View {
-        HStack(spacing: 5) {
-            // Format-aware chrome: only the capabilities the output document
-            // actually serializes are offered. Markdown hides typographic controls
-            // (font family/size, underline, colour) because they have no Markdown
-            // syntax and would not survive the round-trip; RTF shows them all.
+    /// Format-aware controls that scroll when the editor column is too narrow.
+    /// Markdown hides typographic controls (font family/size, underline, colour)
+    /// because they have no Markdown syntax and would not survive the round-trip.
+    private var leadingControls: some View {
+        HStack(spacing: 6) {
             if !document.markdown {
                 // Font family + size — the TextEdit heart, in liquid glass.
+                toolGroup {
+                    Menu {
+                        ForEach(Self.fontFamilies, id: \.self) { family in
+                            Button(family) { document.setFontFamily(family) }
+                        }
+                        Divider()
+                        Button("Show Fonts…", action: openFontPanel)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "textformat")
+                            Text(currentFamily).lineLimit(1)
+                        }
+                        .frame(minWidth: 92, alignment: .leading)
+                    }
+                    .buttonStyle(SegmentedButtonStyle())
+                    .help("Font family")
+
+                    Menu {
+                        ForEach(Self.fontSizes, id: \.self) { size in
+                            Button("\(Int(size))") { document.setFontSize(size) }
+                        }
+                    } label: {
+                        Text("\(Int(document.currentFont.pointSize))").frame(minWidth: 20)
+                    }
+                    .buttonStyle(SegmentedButtonStyle())
+                    .help("Font size")
+                }
+            }
+
+            toolGroup {
+                GlyphToggle(system: "bold", active: isBold, help: "Bold") { document.trait(.boldFontMask) }
+                GlyphToggle(system: "italic", active: isItalic, help: "Italic") { document.trait(.italicFontMask) }
+                if !document.markdown {
+                    GlyphToggle(system: "underline", active: isUnderline, help: "Underline") { document.toggleAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue) }
+                }
+                GlyphToggle(system: "strikethrough", active: isStrikethrough, help: "Strikethrough") { document.toggleAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue) }
+                if !document.markdown {
+                    GlyphToggle(system: "paintpalette", active: false, help: "Text color", action: openColorPanel)
+                }
+            }
+
+            toolGroup {
+                GlyphToggle(system: "list.bullet", active: false, help: "Bullet list") { document.insertList(kind: .bullet) }
+                GlyphToggle(system: "list.number", active: false, help: "Numbered list") { document.insertList(kind: .ordered) }
+                GlyphToggle(system: "checklist", active: false, help: "Task list") { document.insertList(kind: .task) }
+                if document.markdown {
+                    GlyphToggle(system: "checkmark.square", active: false, help: "Toggle task") { document.toggleTask() }
+                }
+            }
+
+            toolGroup {
+                GlyphToggle(system: "text.quote", active: false, help: "Block quote") { document.insertQuote() }
+                GlyphToggle(system: "chevron.left.forwardslash.chevron.right", active: false, help: "Code block") { document.insertCodeBlock() }
+            }
+
+            Picker("Paragraph", selection: $paragraphLevel) {
+                Text("Body").tag(0)
+                Text("H1").tag(1)
+                Text("H2").tag(2)
+                Text("H3").tag(3)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.mini)
+            .onChange(of: paragraphLevel) { _, level in document.paragraph(level) }
+
+            toolGroup {
                 Menu {
-                    ForEach(Self.fontFamilies, id: \.self) { family in
-                        Button(family) { document.setFontFamily(family) }
-                    }
-                    Divider()
-                    Button("Show Fonts…", action: openFontPanel)
+                    Button("Table · 2 × 2") { document.insertTable() }
+                    Button("Local image…") { document.insertImage() }
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "textformat")
-                        Text(currentFamily).lineLimit(1)
-                    }
-                    .frame(minWidth: 104, alignment: .leading)
+                    Image(systemName: "plus")
                 }
-                .buttonStyle(LiquidGlassButtonStyle())
-                .help("Font family")
-
-                Menu {
-                    ForEach(Self.fontSizes, id: \.self) { size in
-                        Button("\(Int(size))") { document.setFontSize(size) }
-                    }
-                } label: {
-                    Text("\(Int(document.currentFont.pointSize))").frame(minWidth: 20)
-                }
-                .buttonStyle(LiquidGlassButtonStyle())
-                .help("Font size")
-
-                Divider().frame(height: 16)
+                .buttonStyle(SegmentedButtonStyle())
+                .help("Insert")
             }
+        }
+        .controlSize(.small)
+    }
 
-            GlyphToggle(system: "bold", active: isBold, help: "Bold") { document.trait(.boldFontMask) }
-            GlyphToggle(system: "italic", active: isItalic, help: "Italic") { document.trait(.italicFontMask) }
+    /// A segmented, label-free cluster of related controls. The toolbar reads as
+    /// a single row of joined segments — no per-group titles, no extra panels.
+    private func toolGroup<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 1) { content() }
+        .padding(2)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(.ultraThinMaterial.opacity(0.55))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(.white.opacity(0.08), lineWidth: 0.5)
+        }
+    }
+
+    /// Trailing buttons that must stay visible even when the leading group
+    /// scrolls out of view at narrow widths.
+    private var trailingControls: some View {
+        HStack(spacing: 5) {
             if !document.markdown {
-                GlyphToggle(system: "underline", active: isUnderline, help: "Underline") { document.toggleAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue) }
-            }
-            GlyphToggle(system: "strikethrough", active: isStrikethrough, help: "Strikethrough") { document.toggleAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue) }
-            if !document.markdown {
-                GlyphToggle(system: "paintpalette", active: false, help: "Text color", action: openColorPanel)
-            }
-
-            Divider().frame(height: 16)
-
-            GlyphToggle(system: "list.bullet", active: false, help: "Bullet list") { document.insertList(kind: .bullet) }
-            GlyphToggle(system: "list.number", active: false, help: "Numbered list") { document.insertList(kind: .ordered) }
-            GlyphToggle(system: "checklist", active: false, help: "Task list") { document.insertList(kind: .task) }
-            if document.markdown {
-                GlyphToggle(system: "checkmark.square", active: false, help: "Toggle task") { document.toggleTask() }
-            }
-            GlyphToggle(system: "text.quote", active: false, help: "Block quote") { document.insertQuote() }
-            GlyphToggle(system: "chevron.left.forwardslash.chevron.right", active: false, help: "Code block") { document.insertCodeBlock() }
-
-            Divider().frame(height: 16)
-
-            Menu {
-                Button("Body") { document.paragraph(0) }
-                ForEach(1...3, id: \.self) { level in
-                    Button("Heading \(level)") { document.paragraph(level) }
-                }
-            } label: {
-                Image(systemName: "paragraphsign")
-            }
-            .buttonStyle(LiquidGlassButtonStyle())
-            .help("Paragraph style")
-
-            Menu {
-                Button("Table · 2 × 2") { document.insertTable() }
-                Button("Local image…") { document.insertImage() }
-            } label: {
-                Image(systemName: "plus")
-            }
-            .buttonStyle(LiquidGlassButtonStyle())
-            .help("Insert")
-
-            Spacer(minLength: 8)
-
-            if document.markdown {
-                Button(action: showSource) {
-                    Label("Source", systemImage: "chevron.left.forwardslash.chevron.right")
-                }
-                .buttonStyle(LiquidGlassButtonStyle())
-                .help("Show Markdown source")
-            } else {
                 Button(action: openFontPanel) { Image(systemName: "textformat") }
                     .buttonStyle(LiquidGlassButtonStyle()).help("Fonts")
                 Button(action: openColorPanel) { Image(systemName: "paintpalette") }
@@ -640,23 +691,29 @@ private struct GlyphToggle: View {
             Image(systemName: system)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(active ? Color.accentColor : Color.primary.opacity(0.8))
-                .frame(width: 22, height: 20)
+                .frame(width: 24, height: 20)
                 .background {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(active ? Color.accentColor.opacity(0.18) : Color.clear)
-                        )
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(active ? Color.accentColor.opacity(0.20) : Color.clear)
                 }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .strokeBorder(.white.opacity(active ? 0.28 : 0.10), lineWidth: 0.75)
-                }
-                .shadow(color: .black.opacity(0.10), radius: 1.5, y: 0.5)
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+}
+
+/// Flat, joined segment for menu-style toolbar items (font family, size,
+/// insert) — matches the label-free segmented glyph toggles.
+private struct SegmentedButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(Color.primary.opacity(0.85))
+            .padding(.horizontal, 8).padding(.vertical, 4)
+            .background {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(configuration.isPressed ? Color.primary.opacity(0.08) : Color.clear)
+            }
     }
 }
 
@@ -685,6 +742,15 @@ private final class RichTextEditorView: NSView {
 
     override var isFlipped: Bool { true }
 
+    /// Neutralize AppKit's text-derived intrinsic size. The host's explicit
+    /// `.frame(width:)` is the single source of truth for the editor column;
+    /// without this the `NSTextView` leaks its wide, reflow-derived intrinsic
+    /// width into SwiftUI's `HStack`, which read as a "double sized" surface
+    /// once the pane dropped below the toolbar's natural minimum width.
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: NSView.noIntrinsicMetric)
+    }
+
     func adopt(_ textView: NSTextView) {
         guard editorTextView !== textView else { return }
         editorTextView?.removeFromSuperview()
@@ -703,14 +769,27 @@ private final class RichTextEditorView: NSView {
     func layoutDocument(width: CGFloat) {
         guard let textView = editorTextView else { return }
         textView.frame = bounds
-        textView.textContainer?.containerSize = NSSize(width: max(width - textView.textContainerInset.width * 2, 1), height: CGFloat.greatestFiniteMagnitude)
-        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        wrap(to: width)
     }
 
     override func layout() {
         super.layout()
-        if let textView = editorTextView {
-            textView.frame = bounds
+        guard let textView = editorTextView else { return }
+        textView.frame = bounds
+        // Re-wrap to the *actual* laid-out width. `layoutDocument` runs once on
+        // `updateNSView`, but the host's bounds are only final here — without this
+        // the container keeps a stale width and the text overflows horizontally,
+        // which read as a phantom "min width" with both sidebars open.
+        wrap(to: bounds.width)
+    }
+
+    private func wrap(to width: CGFloat) {
+        guard let textView = editorTextView, let container = textView.textContainer else { return }
+        let target = NSSize(width: max(width - textView.textContainerInset.width * 2, 1),
+                            height: CGFloat.greatestFiniteMagnitude)
+        if container.containerSize.width != target.width {
+            container.containerSize = target
+            textView.layoutManager?.ensureLayout(for: container)
         }
     }
 
@@ -774,9 +853,13 @@ private struct RichTextRulerBackground: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            // Solid theme surface — the ruler backdrop and its divider stay crisp;
-            // only the scrolling measure ticks participate in the scroll-edge blur.
-            Color(nsColor: theme.rulerBackground)
+            // Match the code editor's gutter: a frosted material beneath the ruler
+            // tint (at reduced opacity) so the richtext ruler reads as the same glass
+            // surface — not a darker opaque band. The code gutter composites
+            // `.ultraThinMaterial` + `backgroundColor.withAlphaComponent(1)`
+            // at 0.86 opacity; keep that exact recipe here.
+            Rectangle().fill(.ultraThinMaterial)
+            Color(nsColor: theme.rulerBackground.withAlphaComponent(1)).opacity(0.86)
             Color(nsColor: theme.rulerSeparator).frame(width: 1).frame(maxHeight: .infinity)
         }
         .frame(width: width)

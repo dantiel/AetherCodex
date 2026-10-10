@@ -36,14 +36,15 @@ def template(title, body, opts = {})
         <div class="cosmic-void">
             <nav>
                 <a class="home-link" href="../index.html" title="ÆtherCodex">
-                    <span class="aether" style="color:#4a90e2;">Æther</span><span class="codex" style="color:#8e44ad;">Codex</span>
+                    <span class="aether">Æther</span><span class="codex">Codex</span>
                 </a>
-                <a href="../index.html#what">What it is</a>
-                <a href="../index.html#companions">Companions</a>
+                <a href="../index.html#what">Features</a>
+                <a href="../index.html#companions">Council</a>
                 <a href="../index.html#chapters">Canon</a>
-                <a href="../index.html#tools">Tools</a>
-                <a href="../index.html#build">Build</a>
-                <a href="aetheric-canon.html">Chapters</a>
+                <a href="../index.html#tools">Capabilities</a>
+                <span class="nav-spacer"></span>
+                <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub">Source</a>
+                <a class="nav-cta" href="../index.html#buy">Buy · $69</a>
             </nav>
 
             <header class="oracle-header">

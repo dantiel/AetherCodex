@@ -4,6 +4,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var mainWindowController: MainWindowController?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        FontBundler.registerAll()
         RubyBridge.shared.initialize()
         mainWindowController = MainWindowController()
         restoreSession()
@@ -35,7 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         for arg in args {
             let url = URL(fileURLWithPath: arg)
             if FileManager.default.fileExists(atPath: arg) {
-                mainWindowController?.editorViewController?.openFile(url)
+                mainWindowController?.openFileInTab(url)
             }
         }
     }
@@ -48,7 +49,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
         let url = URL(fileURLWithPath: filename)
         if FileManager.default.fileExists(atPath: filename) {
-            mainWindowController?.editorViewController?.openFile(url)
+            mainWindowController?.openFileInTab(url)
             NSApp.activate(ignoringOtherApps: true)
             return true
         }
@@ -71,11 +72,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             window.setFrame(rect, display: true)
         }
         
-        // Restore open file FIRST (before folder, so editor is ready)
-        if let path = s.lastOpenFile {
+        // Restore open files FIRST (before folder, so the editor is ready). The
+        // first file fills the initial untitled tab; the rest open as new tabs.
+        let openPaths = s.openTabs.isEmpty ? (s.lastOpenFile.map { [$0] } ?? []) : s.openTabs
+        for path in openPaths {
             let url = URL(fileURLWithPath: path)
             if FileManager.default.fileExists(atPath: path) {
-                mwc.editorViewController?.openFile(url)
+                mwc.openFileInTab(url)
             }
         }
         
@@ -138,8 +141,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 wc.showWindow(nil)
                 return wc
             }()
-            mwc.editorViewController?.openFile(url)
-            mwc.saveSessionState()
+            mwc.openFileInTab(url)
         }
     }
     
@@ -166,11 +168,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let fileMenuItem = NSMenuItem()
         fileMenuItem.submenu = NSMenu(title: "File")
         fileMenuItem.submenu?.addItem(withTitle: "New", action: #selector(AppDelegate.newDocument(_:)), keyEquivalent: "n")
+        let newTabItem = fileMenuItem.submenu?.addItem(withTitle: "New Tab", action: #selector(MainWindowController.newTab(_:)), keyEquivalent: "n")
+        newTabItem?.keyEquivalentModifierMask = [.command, .shift]
         fileMenuItem.submenu?.addItem(withTitle: "Open…", action: #selector(AppDelegate.openDocument(_:)), keyEquivalent: "o")
         fileMenuItem.submenu?.addItem(withTitle: "Open Folder…", action: #selector(MainWindowController.openFolder(_:)), keyEquivalent: "O")
         fileMenuItem.submenu?.addItem(NSMenuItem.separator())
         fileMenuItem.submenu?.addItem(withTitle: "Project Settings…", action: #selector(AppDelegate.openProjectSettings(_:)), keyEquivalent: "")
         fileMenuItem.submenu?.addItem(withTitle: "Save", action: #selector(MainWindowController.saveDocument(_:)), keyEquivalent: "s")
+        fileMenuItem.submenu?.addItem(NSMenuItem.separator())
+        fileMenuItem.submenu?.addItem(withTitle: "Close Tab", action: #selector(MainWindowController.closeTab(_:)), keyEquivalent: "w")
         mainMenu.addItem(fileMenuItem)
 
         // ── Edit ──
@@ -186,16 +192,73 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         editMenuItem.submenu?.addItem(NSMenuItem.separator())
         editMenuItem.submenu?.addItem(withTitle: "Select All", action: #selector(NSTextView.selectAll(_:)), keyEquivalent: "a")
         editMenuItem.submenu?.addItem(NSMenuItem.separator())
-        // Find submenu
+        editMenuItem.submenu?.addItem(withTitle: "Indent", action: #selector(MainWindowController.indentSelection(_:)), keyEquivalent: "]")
+        editMenuItem.submenu?.addItem(withTitle: "Outdent", action: #selector(MainWindowController.outdentSelection(_:)), keyEquivalent: "[")
+        editMenuItem.submenu?.addItem(NSMenuItem.separator())
+        editMenuItem.submenu?.addItem(withTitle: "Comment / Uncomment", action: #selector(MainWindowController.toggleComment(_:)), keyEquivalent: "/")
+        let blockCommentItem = editMenuItem.submenu?.addItem(withTitle: "Block Comment", action: #selector(MainWindowController.toggleBlockComment(_:)), keyEquivalent: "/")
+        blockCommentItem?.keyEquivalentModifierMask = [.command, .shift]
+        editMenuItem.submenu?.addItem(NSMenuItem.separator())
+        let duplicateItem = editMenuItem.submenu?.addItem(withTitle: "Duplicate Line", action: #selector(MainWindowController.duplicateLine(_:)), keyEquivalent: "d")
+        duplicateItem?.keyEquivalentModifierMask = [.control, .shift]
+        let moveUpItem = editMenuItem.submenu?.addItem(withTitle: "Move Line Up", action: #selector(MainWindowController.moveLineUp(_:)), keyEquivalent: "\u{F700}")
+        moveUpItem?.keyEquivalentModifierMask = [.command, .control]
+        let moveDownItem = editMenuItem.submenu?.addItem(withTitle: "Move Line Down", action: #selector(MainWindowController.moveLineDown(_:)), keyEquivalent: "\u{F701}")
+        moveDownItem?.keyEquivalentModifierMask = [.command, .control]
+        let joinItem = editMenuItem.submenu?.addItem(withTitle: "Join Lines", action: #selector(MainWindowController.joinLines(_:)), keyEquivalent: "j")
+        joinItem?.keyEquivalentModifierMask = [.control]
+        let selectLineItem = editMenuItem.submenu?.addItem(withTitle: "Select Line", action: #selector(MainWindowController.selectCurrentLine(_:)), keyEquivalent: "l")
+        selectLineItem?.keyEquivalentModifierMask = [.command, .shift]
+        let editEachLineItem = editMenuItem.submenu?.addItem(withTitle: "Edit Each Line in Selection", action: #selector(MainWindowController.editEachLineInSelection(_:)), keyEquivalent: "w")
+        editEachLineItem?.keyEquivalentModifierMask = [.control, .shift]
+        let selectNextOccurrenceItem = editMenuItem.submenu?.addItem(withTitle: "Select Next Occurrence", action: #selector(MainWindowController.selectNextOccurrence(_:)), keyEquivalent: "d")
+        selectNextOccurrenceItem?.keyEquivalentModifierMask = [.command]
+        let selectAllOccurrencesItem = editMenuItem.submenu?.addItem(withTitle: "Select All Occurrences", action: #selector(MainWindowController.selectAllOccurrences(_:)), keyEquivalent: "g")
+        selectAllOccurrencesItem?.keyEquivalentModifierMask = [.command, .control]
+        editMenuItem.submenu?.addItem(NSMenuItem.separator())
+        let deleteLineItem = editMenuItem.submenu?.addItem(withTitle: "Delete Line", action: #selector(MainWindowController.deleteLine(_:)), keyEquivalent: "k")
+        deleteLineItem?.keyEquivalentModifierMask = [.command, .shift]
+        let insertBelowItem = editMenuItem.submenu?.addItem(withTitle: "Insert Line Below", action: #selector(MainWindowController.insertLineBelow(_:)), keyEquivalent: "\r")
+        insertBelowItem?.keyEquivalentModifierMask = [.command]
+        let insertAboveItem = editMenuItem.submenu?.addItem(withTitle: "Insert Line Above", action: #selector(MainWindowController.insertLineAbove(_:)), keyEquivalent: "\r")
+        insertAboveItem?.keyEquivalentModifierMask = [.command, .shift]
+        editMenuItem.submenu?.addItem(NSMenuItem.separator())
+        let uppercaseItem = editMenuItem.submenu?.addItem(withTitle: "Uppercase", action: #selector(MainWindowController.uppercaseSelection(_:)), keyEquivalent: "u")
+        uppercaseItem?.keyEquivalentModifierMask = [.control, .shift]
+        let lowercaseItem = editMenuItem.submenu?.addItem(withTitle: "Lowercase", action: #selector(MainWindowController.lowercaseSelection(_:)), keyEquivalent: "l")
+        lowercaseItem?.keyEquivalentModifierMask = [.control, .shift]
+        editMenuItem.submenu?.addItem(NSMenuItem.separator())
+        editMenuItem.submenu?.addItem(withTitle: "Go to Line…", action: #selector(MainWindowController.goToLine(_:)), keyEquivalent: "l")
+        editMenuItem.submenu?.addItem(NSMenuItem.separator())
+        // Find submenu (TextMate-style: ⌘F dialog, ⌘G/⇧⌘G navigate, ⌘E capture)
         let findMenu = NSMenu(title: "Find")
-        findMenu.addItem(withTitle: "Find…", action: #selector(EditorViewController.toggleIncrementalSearch), keyEquivalent: "s")
-        findMenu.item(at: 0)?.keyEquivalentModifierMask = .control
-        findMenu.addItem(withTitle: "Find Next", action: #selector(EditorViewController.searchNavigateForward), keyEquivalent: "s")
-        findMenu.item(at: 1)?.keyEquivalentModifierMask = [.control, .shift]
+        findMenu.addItem(withTitle: "Find…", action: #selector(MainWindowController.showFindDialog(_:)), keyEquivalent: "f")
+        let findReplaceMenuItem = findMenu.addItem(withTitle: "Find and Replace…", action: #selector(MainWindowController.showFindReplaceDialog(_:)), keyEquivalent: "f")
+        findReplaceMenuItem.keyEquivalentModifierMask = [.command, .option]
+        findMenu.addItem(withTitle: "Use Selection for Find", action: #selector(MainWindowController.useSelectionForFind(_:)), keyEquivalent: "e")
+        findMenu.addItem(NSMenuItem.separator())
+        findMenu.addItem(withTitle: "Find Next", action: #selector(MainWindowController.findReplaceNext(_:)), keyEquivalent: "g")
+        findMenu.addItem(withTitle: "Find Previous", action: #selector(MainWindowController.findReplacePrevious(_:)), keyEquivalent: "G")
+        findMenu.addItem(NSMenuItem.separator())
+        findMenu.addItem(withTitle: "Incremental Search", action: #selector(MainWindowController.toggleQuickSearch(_:)), keyEquivalent: "s")
+        findMenu.item(at: 7)?.keyEquivalentModifierMask = .control
         let findItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
         findItem.submenu = findMenu
         editMenuItem.submenu?.addItem(findItem)
         mainMenu.addItem(editMenuItem)
+
+        // ── Navigate ──
+        let navigateMenuItem = NSMenuItem()
+        navigateMenuItem.submenu = NSMenu(title: "Navigate")
+        navigateMenuItem.submenu?.addItem(withTitle: "Go to File…", action: #selector(MainWindowController.goToFile(_:)), keyEquivalent: "t")
+        let searchAetherItem = navigateMenuItem.submenu?.addItem(withTitle: "Search Æther…", action: #selector(MainWindowController.searchAether(_:)), keyEquivalent: "t")
+        searchAetherItem?.keyEquivalentModifierMask = [.command, .option]
+        navigateMenuItem.submenu?.addItem(NSMenuItem.separator())
+        let prevTab = navigateMenuItem.submenu?.addItem(withTitle: "Previous Tab", action: #selector(MainWindowController.previousTab(_:)), keyEquivalent: "[")
+        prevTab?.keyEquivalentModifierMask = [.command, .shift]
+        let nextTab = navigateMenuItem.submenu?.addItem(withTitle: "Next Tab", action: #selector(MainWindowController.nextTab(_:)), keyEquivalent: "]")
+        nextTab?.keyEquivalentModifierMask = [.command, .shift]
+        mainMenu.addItem(navigateMenuItem)
 
         // ── View ──
         let viewMenuItem = NSMenuItem()
@@ -203,6 +266,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenuItem.submenu?.addItem(withTitle: "Toggle File Browser", action: #selector(MainWindowController.toggleFileBrowser(_:)), keyEquivalent: "1")
         viewMenuItem.submenu?.addItem(withTitle: "Toggle Pythia", action: #selector(MainWindowController.togglePythia(_:)), keyEquivalent: "2")
         viewMenuItem.submenu?.addItem(withTitle: "Oracle Only", action: #selector(MainWindowController.toggleOracleOnly(_:)), keyEquivalent: "3")
+        viewMenuItem.submenu?.addItem(NSMenuItem.separator())
+        let softWrapItem = viewMenuItem.submenu?.addItem(withTitle: "Soft Wrap", action: #selector(MainWindowController.toggleWordWrap(_:)), keyEquivalent: "w")
+        softWrapItem?.keyEquivalentModifierMask = [.control, .option]
+        viewMenuItem.submenu?.addItem(withTitle: "Line Numbers", action: #selector(MainWindowController.toggleLineNumbers(_:)), keyEquivalent: "")
+        viewMenuItem.submenu?.addItem(withTitle: "Wrap Column", action: #selector(MainWindowController.toggleWrapColumn(_:)), keyEquivalent: "")
+        // Wrap Column Width presets
+        let wrapColumnWidthMenu = NSMenu(title: "Wrap Column Width")
+        for preset in EditorDisplaySettings.presets {
+            let item = wrapColumnWidthMenu.addItem(withTitle: "\(preset)", action: #selector(MainWindowController.setWrapColumnWidth(_:)), keyEquivalent: "")
+            item.representedObject = preset
+        }
+        wrapColumnWidthMenu.addItem(NSMenuItem.separator())
+        wrapColumnWidthMenu.addItem(withTitle: "Other…", action: #selector(MainWindowController.setWrapColumnOther(_:)), keyEquivalent: "")
+        let wrapWidthItem = NSMenuItem(title: "Wrap Column Width", action: nil, keyEquivalent: "")
+        wrapWidthItem.submenu = wrapColumnWidthMenu
+        viewMenuItem.submenu?.addItem(wrapWidthItem)
+        viewMenuItem.submenu?.addItem(withTitle: "Highlight Current Line", action: #selector(MainWindowController.toggleHighlightCurrentLine(_:)), keyEquivalent: "")
+        let invisiblesItem = viewMenuItem.submenu?.addItem(withTitle: "Show Invisibles", action: #selector(MainWindowController.toggleInvisibles(_:)), keyEquivalent: "i")
+        invisiblesItem?.keyEquivalentModifierMask = [.control, .option]
         viewMenuItem.submenu?.addItem(NSMenuItem.separator())
         let biggerItem = NSMenuItem(title: "Bigger", action: #selector(AppDelegate.biggerFont), keyEquivalent: "+")
         biggerItem.keyEquivalentModifierMask = .command
@@ -218,11 +300,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // ── Theme ──
         let themeMenuItem = NSMenuItem()
         themeMenuItem.submenu = NSMenu(title: "Theme")
-        for (i, name) in ThemeRegistry.shared.themes.map({ $0.name }).enumerated() {
-            let item = NSMenuItem(title: name, action: #selector(AppDelegate.selectTheme(_:)), keyEquivalent: "")
-            item.tag = i
-            item.state = (i == ThemeRegistry.shared.activeIndex) ? .on : .off
-            themeMenuItem.submenu?.addItem(item)
+        for (appearance, label) in [(ThemeAppearance.dark, "Dark"), (ThemeAppearance.light, "Light")] {
+            let sectionItem = NSMenuItem(title: label, action: nil, keyEquivalent: "")
+            let section = NSMenu(title: label)
+            for (i, theme) in ThemeRegistry.shared.themes.enumerated()
+                where theme.appearance == appearance {
+                let item = NSMenuItem(title: theme.displayName, action: #selector(AppDelegate.selectTheme(_:)), keyEquivalent: "")
+                item.tag = i
+                item.state = (i == ThemeRegistry.shared.activeIndex) ? .on : .off
+                section.addItem(item)
+            }
+            sectionItem.submenu = section
+            themeMenuItem.submenu?.addItem(sectionItem)
         }
         themeMenuItem.submenu?.addItem(NSMenuItem.separator())
         themeMenuItem.submenu?.addItem(withTitle: "Next Theme", action: #selector(AppDelegate.nextTheme(_:)), keyEquivalent: "]")
@@ -290,7 +379,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateThemeMenu() {
         guard let themeMenu = NSApp.mainMenu?.item(withTitle: "Theme")?.submenu else { return }
         for item in themeMenu.items {
-            item.state = (item.tag == ThemeRegistry.shared.activeIndex) ? .on : .off
+            // Theme items live one level deep under the Dark / Light sections.
+            // Top-level items (Next/Previous/Settings, separators) carry tag 0
+            // and must not receive the active-theme checkmark.
+            guard let submenu = item.submenu else { continue }
+            for subitem in submenu.items {
+                subitem.state = (subitem.tag == ThemeRegistry.shared.activeIndex) ? .on : .off
+            }
         }
     }
 

@@ -2,7 +2,7 @@
 import Foundation
 
 let rubyPath = "/Users/d/.rvm/rubies/ruby-3.1.7/bin/ruby"
-let scriptPath = FileManager.default.currentDirectoryPath + "/Ruby/Core/standalone_daemon.rb"
+let scriptPath = FileManager.default.currentDirectoryPath + "/AetherOracle/ruby/standalone_daemon.rb"
 
 print("[TEST] Ruby path: \(rubyPath)")
 print("[TEST] Script path: \(scriptPath)")

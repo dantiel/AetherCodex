@@ -1,6 +1,11 @@
 import Cocoa
 import SwiftUI
 
+extension Notification.Name {
+    /// Ask an already-open Project Settings window to reveal its Context tab.
+    static let projectSettingsOpenContextTab = Notification.Name("projectSettingsOpenContextTab")
+}
+
 // MARK: - Project Settings
 //
 // A separate dialog for the *project* — the `.aethercodex` that governs the
@@ -11,6 +16,18 @@ import SwiftUI
 // takes effect immediately.
 
 // MARK: - Config model
+
+/// One annotated related context from the `.aethercodex` `contexts:` section —
+/// the ÆtherLink annotation that declares a sibling project (a relation, tagged
+/// for routing). `tags` is kept comma-separated for the UI and rendered as a
+/// YAML/JSON string array on save.
+struct ContextAnnotation: Identifiable, Equatable {
+    var id: String { "\(name)|\(port)|\(description)|\(tags)" }
+    var name = ""
+    var port = ""
+    var description = ""
+    var tags = ""
+}
 
 /// A flat projection of the `.aethercodex` keys the project dialog edits.
 /// Values are kept as plain strings; `reasoning-model` may be "yes"/"no" or a
@@ -24,6 +41,7 @@ struct ProjectConfig {
     var reasoningModel = "yes"
     var port = ""
     var allowedCommands = "*"
+    var contexts: [ContextAnnotation] = []
 
     static let apiTypes = ["deepseek", "openai", "anthropic", "google", "ollama", "custom"]
 
@@ -45,6 +63,7 @@ struct ProjectConfig {
         reasoningModel = fields["reasoning-model"] ?? "yes"
         port = fields["port"] ?? ""
         allowedCommands = fields["allowed-commands"] ?? "*"
+        contexts = Self.parseContexts(text)
     }
 
     func pairs() -> [(String, String)] {
@@ -67,6 +86,7 @@ struct ProjectConfig {
     static func parse(_ text: String) -> [String: String] {
         var out: [String: String] = [:]
         for raw in text.components(separatedBy: "\n") {
+            if Self.isIndented(raw) { continue }   // `contexts:` block belongs to its own parser
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
             guard let colon = raw.firstIndex(of: ":") else { continue }
@@ -93,7 +113,7 @@ struct ProjectConfig {
 
         for (key, value) in pairs {
             let rendered = "\(key): \(scalar(value))"
-            if let idx = lines.firstIndex(where: { lineMatchesKey($0, key) }) {
+            if let idx = lines.firstIndex(where: { !Self.isIndented($0) && lineMatchesKey($0, key) }) {
                 let indent = lines[idx].prefix(while: { $0 == " " || $0 == "\t" })
                 lines[idx] = String(indent) + rendered
             } else {
@@ -117,21 +137,157 @@ struct ProjectConfig {
         }
         return t
     }
+
+    private static func isIndented(_ line: String) -> Bool {
+        line.hasPrefix(" ") || line.hasPrefix("\t")
+    }
+
+    // MARK: Contexts (`contexts:` section)
+
+    /// Parse the `.aethercodex` `contexts:` list into editable annotations.
+    /// Matches the daemon's canonical form: a YAML list of
+    /// `- name: …` entries with optional `port:`, `description:`, `tags: [...]`.
+    static func parseContexts(_ text: String) -> [ContextAnnotation] {
+        let lines = text.components(separatedBy: "\n")
+        guard let idx = lines.firstIndex(where: { lineMatchesKey($0, "contexts") }) else { return [] }
+
+        var entries: [ContextAnnotation] = []
+        var current = ContextAnnotation()
+        var i = idx + 1
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // End of the section: a non-indented, non-comment line.
+            if !isIndented(line) {
+                if trimmed.isEmpty || trimmed.hasPrefix("#") {
+                    i += 1
+                    continue
+                }
+                break
+            }
+            if trimmed.hasPrefix("- ") {
+                if current.name != "" { entries.append(current) }
+                current = ContextAnnotation()
+                let body = String(trimmed.dropFirst(2))
+                if let colon = body.firstIndex(of: ":") {
+                    let key = body[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+                    if key == "name" {
+                        current.name = stripScalar(String(body[body.index(after: colon)...]))
+                    }
+                }
+            } else if let colon = trimmed.firstIndex(of: ":") {
+                let key = trimmed[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+                let value = stripScalar(String(trimmed[trimmed.index(after: colon)...]))
+                switch key {
+                case "port":        current.port = value
+                case "description": current.description = value
+                case "tags":        current.tags = parseTags(value)
+                default: break
+                }
+            }
+            i += 1
+        }
+        if current.name != "" { entries.append(current) }
+        return entries
+    }
+
+    /// Splice the `contexts:` section back into `text`, replacing an existing
+    /// section in place or appending a fresh one — mirroring the daemon's
+    /// `CONFIG.write_contexts`. All unrelated lines stay byte-identical.
+    static func renderContexts(_ contexts: [ContextAnnotation], into text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        while lines.last?.isEmpty == true { lines.removeLast() }
+
+        let body = contextsBody(contexts)
+        let idx = lines.firstIndex(where: { lineMatchesKey($0, "contexts") })
+
+        if let idx {
+            var finish = idx + 1
+            while finish < lines.count && (isIndented(lines[finish]) || lines[finish].trimmingCharacters(in: .whitespaces).isEmpty) {
+                finish += 1
+            }
+            if body.isEmpty {
+                lines.removeSubrange(idx..<finish)
+            } else {
+                lines.replaceSubrange(idx..<finish, with: ["contexts:"] + body)
+            }
+        } else if !body.isEmpty {
+            lines.append("")
+            if !lines.contains(where: { $0.contains("RELATED CONTEXTS") }) {
+                lines.append("# === RELATED CONTEXTS (AetherLink annotations) ================================")
+            }
+            lines.append("contexts:")
+            lines.append(contentsOf: body)
+        }
+
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private static func contextsBody(_ contexts: [ContextAnnotation]) -> [String] {
+        var out: [String] = []
+        for c in contexts {
+            let name = c.name.trimmingCharacters(in: .whitespaces)
+            if name.isEmpty { continue }
+            out.append("  - name: " + scalar(name))
+            let port = c.port.trimmingCharacters(in: .whitespaces)
+            if !port.isEmpty, Int(port) != nil {
+                out.append("    port: " + port)
+            }
+            let desc = c.description.trimmingCharacters(in: .whitespaces)
+            if !desc.isEmpty {
+                out.append("    description: " + scalar(desc))
+            }
+            let tags = c.tags.trimmingCharacters(in: .whitespaces)
+            if !tags.isEmpty {
+                out.append("    tags: " + tagsArray(tags))
+            }
+        }
+        return out
+    }
+
+    private static func stripScalar(_ s: String) -> String {
+        s.trimmingCharacters(in: .whitespaces)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+    }
+
+    private static func parseTags(_ value: String) -> String {
+        var v = value.trimmingCharacters(in: .whitespaces)
+        if v.hasPrefix("[") && v.hasSuffix("]") {
+            v = String(v.dropFirst().dropLast())
+        }
+        let items = v.components(separatedBy: ",").map {
+            stripScalar($0)
+        }
+        return items.filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+
+    private static func tagsArray(_ tags: String) -> String {
+        let items = tags.components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if items.isEmpty { return "[]" }
+        return "[" + items.map { "\"" + $0 + "\"" }.joined(separator: ", ") + "]"
+    }
 }
 
 // MARK: - Controller
 
 final class ProjectSettingsViewController: NSHostingController<ProjectSettingsView> {
-    init() { super.init(rootView: ProjectSettingsView()) }
+    init(contextTab: Bool = false) {
+        super.init(rootView: ProjectSettingsView(initialTab: contextTab ? .context : .general))
+    }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    static func open() {
+    static func open(contextTab: Bool = false) {
         if let window = NSApp.windows.first(where: { $0.contentViewController is ProjectSettingsViewController }) {
             window.makeKeyAndOrderFront(nil)
+            if contextTab {
+                NotificationCenter.default.post(name: .projectSettingsOpenContextTab, object: nil)
+            }
             return
         }
-        let window = NSWindow(contentViewController: ProjectSettingsViewController())
+        let window = NSWindow(contentViewController: ProjectSettingsViewController(contextTab: contextTab))
         window.title = "Project Settings · AetherCodex"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.setContentSize(NSSize(width: 640, height: 600))
@@ -145,14 +301,21 @@ final class ProjectSettingsViewController: NSHostingController<ProjectSettingsVi
 // MARK: - View
 
 struct ProjectSettingsView: View {
+    enum Tab: Hashable { case general, context }
+
     @ObservedObject private var aetherContext = AetherContext.shared
     @State private var config = ProjectConfig()
     @State private var loaded = false
     @State private var status: SaveStatus?
+    @State private var selectedTab: Tab
 
     private enum SaveStatus: Equatable {
         case saved
         case failed(String)
+    }
+
+    init(initialTab: Tab = .general) {
+        _selectedTab = State(initialValue: initialTab)
     }
 
     private var root: String? { aetherContext.root }
@@ -171,11 +334,21 @@ struct ProjectSettingsView: View {
             if root == nil {
                 emptyState
             } else {
-                content
+                TabView(selection: $selectedTab) {
+                    content
+                        .tabItem { Label("General", systemImage: "gearshape.2") }
+                        .tag(Tab.general)
+                    contextTab
+                        .tabItem { Label("Context", systemImage: "network") }
+                        .tag(Tab.context)
+                }
             }
         }
         .frame(minWidth: 560, minHeight: 520)
         .onAppear(perform: reload)
+        .onReceive(NotificationCenter.default.publisher(for: .projectSettingsOpenContextTab)) { _ in
+            selectedTab = .context
+        }
     }
 
     // MARK: Empty state
@@ -233,6 +406,70 @@ struct ProjectSettingsView: View {
             .padding(.bottom, 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    // MARK: Context tab (ÆtherLink annotations)
+
+    private var contextTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                SectionHeader(glyph: "network", title: "ÆtherLink Context", subtitle: "Declare related contexts (peers) this project relates to. Tags are the relation labels used for routing.")
+
+                // Own identity summary — read-only, mirrors the resolved window context.
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 6) {
+                        row("Own context", value: projectName)
+                        row("Root", value: root ?? "—")
+                        row("Config", value: configPath)
+                    }
+                    .padding(8)
+                }
+                .padding(.horizontal, 4)
+
+                if config.contexts.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .foregroundStyle(.secondary)
+                        Text("No related contexts declared. Add a sibling project — live peers are discovered on the heartbeat scan (ports 4550–4610).")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 18)
+                }
+
+                ForEach($config.contexts) { $ctx in
+                    ContextAnnotationCard(annotation: $ctx, onRemove: {
+                        config.contexts.removeAll { $0.id == ctx.id }
+                    })
+                }
+
+                Button {
+                    config.contexts.append(ContextAnnotation(name: "", port: "", description: "", tags: ""))
+                } label: {
+                    Label("Add related context", systemImage: "plus.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .padding(.vertical, 10)
+
+                actionBar
+            }
+            .frame(maxWidth: 720, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.bottom, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func row(_ label: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .frame(width: 80, alignment: .trailing)
+            Text(value)
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
     }
 
     private var actionBar: some View {
@@ -303,7 +540,8 @@ struct ProjectSettingsView: View {
         guard let root else { return }
         let path = configPath
         let existing = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-        let rendered = ProjectConfig.render(text: existing, applying: config.pairs())
+        let flat = ProjectConfig.render(text: existing, applying: config.pairs())
+        let rendered = ProjectConfig.renderContexts(config.contexts, into: flat)
         do {
             let dir = (path as NSString).deletingLastPathComponent
             if !dir.isEmpty {
@@ -326,7 +564,7 @@ struct ProjectSettingsView: View {
         guard root != nil else { return }
         let path = configPath
         if !FileManager.default.fileExists(atPath: path) { save() }
-        NotificationCenter.default.post(name: .openFileInEditor, object: URL(fileURLWithPath: path))
+        FileLinkResolver.open(path)
     }
 
     private func revealInFinder() {
@@ -334,5 +572,46 @@ struct ProjectSettingsView: View {
         let path = configPath
         if !FileManager.default.fileExists(atPath: path) { save() }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+}
+
+// MARK: - Context annotation card
+
+/// One editable related-context row: name + port + description + tags.
+private struct ContextAnnotationCard: View {
+    @Binding var annotation: ContextAnnotation
+    let onRemove: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                TextField("name", text: $annotation.name)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                TextField("port", text: $annotation.port)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 90)
+                Button(action: onRemove) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .help("Remove")
+            }
+            HStack {
+                Text("desc").foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
+                TextField("description (optional)", text: $annotation.description)
+                    .textFieldStyle(.roundedBorder)
+            }
+            HStack {
+                Text("tags").foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
+                TextField("comma, separated, relation, labels", text: $annotation.tags)
+                    .textFieldStyle(.roundedBorder)
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 0.75))
+        .padding(.vertical, 4)
     }
 }

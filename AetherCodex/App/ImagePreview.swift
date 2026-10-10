@@ -204,6 +204,9 @@ final class ImagePreviewModel: ObservableObject {
 struct ImagePreviewSurface: View {
     @ObservedObject var model: ImagePreviewModel
     let theme: SyntaxTheme
+    /// Extra chrome height above the surface (the editor tab strip) that pushes
+    /// the floating controls down when the tab bar is visible.
+    var topInset: CGFloat = 0
 
     @State private var zoom: CGFloat = 1
     @State private var zoomBase: CGFloat = 1
@@ -247,18 +250,54 @@ struct ImagePreviewSurface: View {
         let fitH = pixel.height * fit
         return ZStack {
             Color.clear
-            Image(nsImage: image)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: fitW, height: fitH)
-                .scaleEffect(zoom)
-                .offset(pan)
+            imageBody(image, width: fitW, height: fitH)
+            // Progressive edge blur: a blurred copy of the image masked to the
+            // viewport's outer band, so the photo dissolves into the glass at the
+            // edges — the same scroll-edge blur the code/rich-text surfaces use.
+            ZStack {
+                imageBody(image, width: fitW, height: fitH).blur(radius: 16)
+            }
+            .frame(width: size.width, height: size.height)
+            .mask(edgeBlurMask(size: size))
+            .allowsHitTesting(false)
         }
         .frame(width: size.width, height: size.height)
         .contentShape(Rectangle())
         .gesture(magnificationGesture(fit: fit))
         .simultaneousGesture(dragGesture())
         .onTapGesture(count: 2) { toggleActualSize(fit: fit) }
+    }
+
+    /// The image at its current zoom/pan — shared by the sharp and blurred copies
+    /// so both stay locked to the same transform.
+    private func imageBody(_ image: NSImage, width: CGFloat, height: CGFloat) -> some View {
+        Image(nsImage: image)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: width, height: height)
+            .scaleEffect(zoom)
+            .offset(pan)
+    }
+
+    /// Opaque at the viewport edges, transparent toward the center — drives the
+    /// progressive blur so only the outer band shows the blurred image copy.
+    private func edgeBlurMask(size: CGSize) -> some View {
+        let band: CGFloat = 64
+        return ZStack {
+            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: band)
+                .frame(maxHeight: .infinity, alignment: .top)
+            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                .frame(height: band)
+                .frame(maxHeight: .infinity, alignment: .bottom)
+            LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: band)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                .frame(width: band)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .frame(width: size.width, height: size.height)
     }
 
     private func cropLayer(image: NSImage, pixel: NSSize, size: CGSize, fit: CGFloat) -> some View {
@@ -378,7 +417,7 @@ struct ImagePreviewSurface: View {
 
             Spacer()
         }
-        .padding(.top, 48)
+        .padding(.top, 48 + topInset)
         .padding(.trailing, 20)
     }
 
@@ -422,7 +461,7 @@ struct ImagePreviewSurface: View {
             .background(.ultraThinMaterial, in: Capsule())
             .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
             .frame(maxHeight: .infinity, alignment: .top)
-            .padding(.top, 48)
+            .padding(.top, 48 + topInset)
             .transition(.opacity)
             .animation(.easeInOut(duration: 0.2), value: model.notice)
     }

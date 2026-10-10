@@ -81,8 +81,8 @@ final class ThemeSettings {
         effectiveAppearanceIsDark ? darkThemeName : lightThemeName
     }
 
-    func themeNames(for kind: ThemeKind) -> [String] {
-        ThemeRegistry.shared.themes.filter { $0.kind == kind }.map { $0.name }
+    func themeNames(for appearance: ThemeAppearance) -> [String] {
+        ThemeRegistry.shared.themes.filter { $0.appearance == appearance }.map { $0.name }
     }
 
     /// All unique tags across all themes, sorted.
@@ -283,7 +283,7 @@ final class ThemeSettings {
     var availableMonoFamilies: [String] {
         var names = Set<String>()
         names.insert(NSFont.monospacedSystemFont(ofSize: 13, weight: .regular).familyName ?? "Menlo")
-        for fam in ["Menlo", "Monaco", "SF Mono", "JetBrains Mono", "Fira Code",
+        for fam in ["Menlo", "Monaco", "SF Mono", "Syne Mono", "JetBrains Mono", "Fira Code",
                      "Source Code Pro", "Cascadia Code", "IBM Plex Mono", "Consolas"] {
             if NSFont(name: fam, size: 13) != nil { names.insert(fam) }
         }
@@ -292,7 +292,7 @@ final class ThemeSettings {
 
     var availableProportionalFamilies: [String] {
         var names = Set<String>()
-        for fam in ["Helvetica Neue", "SF Pro Text", "New York", "Georgia", "Palatino",
+        for fam in ["Helvetica Neue", "SF Pro Text", "Syne", "New York", "Georgia", "Palatino",
                      "Avenir Next", "Hoefler Text", "Charter", "Times New Roman"] {
             if NSFont(name: fam, size: 14) != nil { names.insert(fam) }
         }

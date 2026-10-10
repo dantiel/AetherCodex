@@ -146,7 +146,7 @@ enum TokenScope: String, CaseIterable {
 /// A complete syntax theme — scopes, editor chrome, graphical effects, and trait support.
 protocol SyntaxTheme {
     var name: String { get }
-    var kind: ThemeKind { get }
+    var appearance: ThemeAppearance { get }
     /// Free-form tags for browsing / filtering — e.g. ["vibrant", "dark", "ink"].
     /// Themes can be grouped by any tag; the theme picker shows tag chips.
     var tags: [String] { get }
@@ -175,6 +175,8 @@ protocol SyntaxTheme {
     /// Translucent background drawn behind line numbers in the ruler.
     var rulerBackground: NSColor { get }
     var rulerForeground: NSColor { get }
+    /// Absolute point size for gutter line numbers (nil = derive from editor font).
+    var rulerFontSize: CGFloat? { get }
     var sidebarAccent: NSColor { get }
     var sidebarForeground: NSColor { get }
     /// Gutter selection background — drawn behind selected line numbers.
@@ -222,11 +224,12 @@ protocol SyntaxTheme {
 
 extension SyntaxTheme {
     var rulerForeground: NSColor { editorForeground.withAlphaComponent(0.65) }
+    var rulerFontSize: CGFloat? { nil }
     var sidebarAccent: NSColor { selectionColor.withAlphaComponent(1) }
     var sidebarForeground: NSColor { editorForeground }
 }
 
-enum ThemeKind: String, CaseIterable {
+enum ThemeAppearance: String, CaseIterable {
     case dark
     case light
 }
@@ -234,6 +237,30 @@ enum ThemeKind: String, CaseIterable {
 // MARK: - Theme Defaults
 
 extension SyntaxTheme {
+    /// Human-readable name derived from the raw identifier. Imported themes
+    /// carry lower-dash-case ids (`base16-atelier-dune-dark`); this yields a
+    /// proper title (`Base16 Atelier Dune Dark`) while leaving already-named
+    /// CamelCase / capitalized signatures (AetherNight, Abyss) untouched.
+    var displayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        // Separators present → split into words and title-case each.
+        if trimmed.contains(where: { $0 == "-" || $0 == "_" }) {
+            return trimmed
+                .split(whereSeparator: { $0 == "-" || $0 == "_" })
+                .map { word -> String in
+                    let s = String(word)
+                    guard let first = s.first else { return s }
+                    return String(first).uppercased() + s.dropFirst().lowercased()
+                }
+                .joined(separator: " ")
+        }
+        // No separators → capitalize first letter, preserve interior casing
+        // (so "monokai" → "Monokai", but "AetherNight" stays "AetherNight").
+        guard let first = trimmed.first else { return trimmed }
+        return String(first).uppercased() + trimmed.dropFirst()
+    }
+
     // ── Tags — empty by default ──
     var tags: [String] { [] }
     // ── Semantic class — nil by default ──
@@ -273,7 +300,7 @@ extension SyntaxTheme {
             background: sidebarBackground ?? editorBackground,
             foreground: editorForeground,
             accent: sidebarAccent,
-            kind: kind,
+            appearance: appearance,
             glassTint: glassTint,
             glassMaterialName: sidebarGlassMaterialName
         )
@@ -358,7 +385,7 @@ final class ThemeRegistry {
 
     private func persistCurrent() {
         let theme = current
-        switch theme.kind {
+        switch theme.appearance {
         case .dark:  ThemeSettings.shared.darkThemeName = theme.name
         case .light: ThemeSettings.shared.lightThemeName = theme.name
         }

@@ -6,7 +6,6 @@ struct MarkdownTableView: View {
     let rows: [[String]]
 
     var body: some View {
-        let theme = ThemeRegistry.shared.current
         ScrollView(.horizontal) {
             Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
                 GridRow {
@@ -34,6 +33,10 @@ struct MarkdownTableView: View {
             .font(.system(size: ThemeSettings.shared.proportionalFontSize, weight: header ? .semibold : .regular))
             .foregroundStyle(Color(nsColor: header ? (headerStyle.foreground ?? theme.sidebarForeground) : theme.sidebarForeground))
             .textSelection(.enabled)
+            // Wrap at the bounded column width instead of reporting a single-line
+            // ideal size to the enclosing Grid (which otherwise pins every cell to
+            // one horizontal line and pushes wide tables off-panel).
+            .fixedSize(horizontal: false, vertical: true)
             .frame(minWidth: 88, maxWidth: 220, alignment: .leading)
             .padding(.horizontal, 10).padding(.vertical, 7)
     }

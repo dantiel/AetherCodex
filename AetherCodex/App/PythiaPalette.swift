@@ -12,6 +12,10 @@ import SwiftUI
 struct PythiaPalette: Equatable {
     var background: NSColor
     var foreground: NSColor
+    /// The oracle's voice — primary message-body text. Distinct from `foreground`
+    /// (muted chrome/secondary). Argonaut declares golden amber; other themes
+    /// derive it from their complementary tone (dark) or foreground (light).
+    var baseText: NSColor
     var accent: NSColor
     var complementary: NSColor
     var codeBackground: NSColor
@@ -19,11 +23,15 @@ struct PythiaPalette: Equatable {
     var shine: NSColor
     var glassTint: CGFloat
     var glassMaterialName: String?
+    /// Prose font family for message bodies (nil = user's proportional font).
+    /// Argonaut declares Syne — the original Pythia voice.
+    var fontFamily: String?
 
     // MARK: SwiftUI projections
 
     var backgroundColor: Color { Color(nsColor: background) }
     var foregroundColor: Color { Color(nsColor: foreground) }
+    var baseTextColor: Color { Color(nsColor: baseText) }
     var accentColor: Color { Color(nsColor: accent) }
     var complementaryColor: Color { Color(nsColor: complementary) }
     var codeBackgroundColor: Color { Color(nsColor: codeBackground) }
@@ -33,6 +41,7 @@ struct PythiaPalette: Equatable {
     static func == (lhs: PythiaPalette, rhs: PythiaPalette) -> Bool {
         lhs.background.isEqual(rhs.background)
             && lhs.foreground.isEqual(rhs.foreground)
+            && lhs.baseText.isEqual(rhs.baseText)
             && lhs.accent.isEqual(rhs.accent)
             && lhs.complementary.isEqual(rhs.complementary)
             && lhs.codeBackground.isEqual(rhs.codeBackground)
@@ -40,6 +49,7 @@ struct PythiaPalette: Equatable {
             && lhs.shine.isEqual(rhs.shine)
             && lhs.glassTint == rhs.glassTint
             && lhs.glassMaterialName == rhs.glassMaterialName
+            && lhs.fontFamily == rhs.fontFamily
     }
 }
 
@@ -50,24 +60,39 @@ extension PythiaPalette {
     static func derive(background: NSColor,
                        foreground: NSColor,
                        accent: NSColor,
-                       kind: ThemeKind,
+                       appearance: ThemeAppearance,
                        glassTint: CGFloat,
                        glassMaterialName: String?) -> PythiaPalette {
-        let codeBackground = kind == .dark
+        let codeBackground = appearance == .dark
             ? background.mixed(with: .black, amount: 0.28)
             : background.mixed(with: .white, amount: 0.10)
-        let shine = accent.mixed(with: kind == .dark ? .white : .black, amount: 0.38)
+        let shine = accent.mixed(with: appearance == .dark ? .white : .black, amount: 0.38)
+        let complementary = accent.rotatingHue(by: 0.5)
+        // The oracle's voice: dark chambers speak in the complementary tone
+        // (Argonaut's golden amber), light chambers keep the legible foreground.
+        let baseText = appearance == .dark ? complementary : foreground
         return PythiaPalette(
             background: background,
             foreground: foreground,
+            baseText: baseText,
             accent: accent,
-            complementary: accent.rotatingHue(by: 0.5),
+            complementary: complementary,
             codeBackground: codeBackground,
             codeForeground: foreground,
             shine: shine,
             glassTint: glassTint,
-            glassMaterialName: glassMaterialName
+            glassMaterialName: glassMaterialName,
+            fontFamily: nil
         )
+    }
+
+    /// Resolve the prose (message body) font — the theme's declared family
+    /// (Syne for Argonaut) overrides the user's proportional font; the size
+    /// still follows the user's preference so density stays user-controlled.
+    var proseFont: NSFont {
+        let size = ThemeSettings.shared.proportionalFontSize
+        if let fam = fontFamily, let f = NSFont(name: fam, size: size) { return f }
+        return ThemeSettings.shared.resolvedProportionalFont
     }
 }
 
@@ -81,7 +106,7 @@ private struct PythiaPaletteKey: EnvironmentKey {
         background: .windowBackgroundColor,
         foreground: .labelColor,
         accent: .controlAccentColor,
-        kind: .dark,
+        appearance: .dark,
         glassTint: 0.7,
         glassMaterialName: nil
     )

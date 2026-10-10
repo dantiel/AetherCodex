@@ -28,6 +28,9 @@ final class HeuristicSyntaxEngine: SyntaxEngineProtocol {
     private let allRules: [Rule]
     /// Rules safe for prose (markdown, text). Excludes code-specific patterns.
     private let proseRules: [Rule]
+    /// Rules safe for code — excludes markup-only scopes (headings, emphasis,
+    /// blockquotes) so `#` in YAML/Ruby/shell reads as a comment, never a heading.
+    private let codeRules: [Rule]
 
     /// Prose-safe scopes — only these rules apply to markdown/text files.
     private static let proseScopes: Set<TokenScope> = [
@@ -37,6 +40,16 @@ final class HeuristicSyntaxEngine: SyntaxEngineProtocol {
         .strong, .emphasis, .strikethrough,
         .link, .linkURL,
         .punctuation,
+    ]
+
+    /// Markup-only scopes that must never fire in code files.
+    private static let markupOnlyScopes: Set<TokenScope> = [
+        .codeBlock, .inlineCode,
+        .heading, .heading1, .heading2, .heading3, .heading4, .heading5, .heading6,
+        .blockquote, .thematicBreak,
+        .strong, .emphasis, .strikethrough,
+        .link, .linkURL,
+        .checkedListItem, .markup, .markupRaw, .markupOther,
     ]
 
     init() {
@@ -49,12 +62,13 @@ final class HeuristicSyntaxEngine: SyntaxEngineProtocol {
         }
         allRules = compiled
         proseRules = compiled.filter { Self.proseScopes.contains($0.scope) }
+        codeRules = compiled.filter { !Self.markupOnlyScopes.contains($0.scope) }
     }
 
     /// - Parameter proseMode: When true, only prose-safe rules are applied
     ///   (prevents code-only patterns like .type/.keyword from firing on markdown).
     func tokenize(_ text: String, in range: NSRange, proseMode: Bool = false) -> [Token] {
-        let rules = proseMode ? proseRules : allRules
+        let rules = proseMode ? proseRules : codeRules
         var tokens: [Token] = []
         var covered = IndexSet()
 
@@ -144,11 +158,16 @@ final class SyntaxOracle {
         // heuristic engine handles all markdown constructs with deterministic
         // regex patterns — headings, code blocks, blockquotes, bold, italic,
         // strikethrough, inline code, links, lists, thematic breaks.
-        let tokens: [Token]
+        var tokens: [Token]
         if TemplateSyntaxEngine.extensions.contains(currentExtension) {
             tokens = TemplateSyntaxEngine.tokenize(text, extension: currentExtension, range: r)
         } else if isProse {
             tokens = heuristicEngine.tokenize(text, in: r, proseMode: true)
+            // Fenced code blocks with a language get real syntax highlighting
+            // from the tree-sitter engine, overlaid on the heuristic .codeBlock
+            // base (monospace + background). Deterministic regex bounds; no
+            // reliance on the markdown tree-sitter parser.
+            tokens += treeSitterEngine.tokenizeFencedCodeBlocks(in: text, range: r)
         } else if isHeuristicOnly {
             tokens = heuristicEngine.tokenize(text, in: r, proseMode: false)
         } else {
@@ -180,10 +199,19 @@ final class SyntaxOracle {
         var tokens = tokenize(text, range: range)
         let theme = ThemeRegistry.shared.current
         let baseFont = font ?? self.baseFont
+        // Line spacing must live in the text's own paragraph style: NSTextView
+        // ignores `defaultParagraphStyle.lineSpacing` for text that carries no
+        // explicit .paragraphStyle attribute (it is typing-only). The gutter
+        // measures line height from this same spacing, so omitting it here makes
+        // every line render ~Npt shorter than the number column and the two drift
+        // progressively apart down the file.
+        let baseParagraphStyle = NSMutableParagraphStyle()
+        baseParagraphStyle.lineSpacing = ThemeSettings.shared.resolvedLineSpacing(for: theme)
 
         let baseAttrs: [NSAttributedString.Key: Any] = [
             .foregroundColor: theme.editorForeground,
             .font: baseFont,
+            .paragraphStyle: baseParagraphStyle,
             .underlineStyle: 0,
             .strikethroughStyle: 0,
             .obliqueness: 0,
@@ -284,12 +312,17 @@ final class SyntaxOracle {
             if aDetail != bDetail { return aDetail }
             return false
         }
+        // Keep the first token per exact (location, length) pair — tree-sitter
+        // may emit duplicate captures for one node. Unlike the old lastEnd walk,
+        // this no longer drops *nested* tokens (embedded syntax inside a code
+        // block, escapes inside a string) whose ranges overlap but are not equal.
+        var seen = Set<String>()
         var deduped: [Token] = []
-        var lastEnd = 0
         for t in tokens {
-            if t.range.location >= lastEnd {
+            let key = "\(t.range.location):\(t.range.length)"
+            if !seen.contains(key) {
+                seen.insert(key)
                 deduped.append(t)
-                lastEnd = t.range.location + t.range.length
             }
         }
         tokens = deduped

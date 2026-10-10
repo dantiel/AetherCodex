@@ -1,4 +1,5 @@
 import Foundation
+import AetherOracleResources
 
 // MARK: - Minimal YAML Parser
 
@@ -42,8 +43,8 @@ enum SimpleYaml {
                 return loadFile(path)
             }
         }
-        // 2. SPM Bundle.module
-        if let url = Bundle.module.url(
+        // 2. SPM AetherOracleResources.bundle
+        if let url = AetherOracleResources.bundle.url(
             forResource: name, withExtension: "yml", subdirectory: subdirectory
         ) {
             return loadFile(url.path)
@@ -51,9 +52,9 @@ enum SimpleYaml {
         // 3. Dev path
         let devPath: String
         if let sub = subdirectory {
-            devPath = "AetherCodex/Resources/\(sub)/\(name).yml"
+            devPath = "AetherOracle/resources/\(sub)/\(name).yml"
         } else {
-            devPath = "AetherCodex/Resources/\(name).yml"
+            devPath = "AetherOracle/resources/\(name).yml"
         }
         if FileManager.default.fileExists(atPath: devPath) {
             return loadFile(devPath)

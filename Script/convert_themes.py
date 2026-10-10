@@ -589,6 +589,89 @@ def _find_scope_color(scopes, target):
                 return style["color"].strip('"')
     return None
 
+def _chamber_accent(scopes, selection, foreground):
+    """Pick the oracle-chamber accent — the most vibrant, mid-luminance scope
+    color, mirroring how curated themes (Argonaut) hand-select a lively hue
+    (azure) over the muted sidebar accent. Falls back to selection, then fg."""
+    candidates = []
+    for scope in ("comment", "keyword", "constant", "string", "support.function",
+                  "entity.name.function", "storage", "support.type"):
+        c = _find_scope_color(scopes, scope)
+        if c:
+            candidates.append(opaque_color(c))
+    if selection:
+        candidates.append(opaque_color(selection))
+    best = None
+    best_score = -1.0
+    for c in candidates:
+        try:
+            h, l, s = hex_to_hsl(c)
+        except Exception:
+            continue
+        if s < 0.20:
+            continue  # too gray to act as an accent
+        # Reward saturation; penalize extreme darkness/brightness so the
+        # chamber accent reads on both the void and lifted glass surfaces.
+        score = s - abs(l - 0.5) * 0.4
+        if score > best_score:
+            best_score = score
+            best = c
+    return best or opaque_color(foreground)
+
+def derive_pythia_palette(global_bg, global_fg, scopes, selection, kind, glass):
+    """Derive the `pythia:` oracle-chamber block — Staffel 2 (extra values not
+    defined in the .tmTheme source). Mirrors PythiaPalette.derive() in Swift so
+    every theme ships a self-contained, individually-refinable chamber palette
+    instead of leaning on the runtime fallback."""
+    is_dark = kind == "dark"
+    bg = global_bg or ("0x0D0D0D" if is_dark else "0xF5F5F5")
+    fg = global_fg or ("0xEEEEEE" if is_dark else "0x333333")
+    accent = _chamber_accent(scopes, selection, fg)
+    complementary = shift_hue(accent, 180)
+
+    # codeBackground: deepen (dark) / lift (light) the editor void.
+    code_bg = blend_color(bg, "0x000000" if is_dark else "0xFFFFFF",
+                          0.28 if is_dark else 0.10)
+    # shine: accent lifted toward white (dark) / black (light).
+    shine = blend_color(accent, "0xFFFFFF" if is_dark else "0x000000", 0.38)
+    # The oracle's voice: dark chambers speak in the complementary tone,
+    # light chambers keep the legible foreground.
+    base_text = complementary if is_dark else fg
+
+    return {
+        "background": f'"{bg}"',
+        "foreground": f'"{fg}"',
+        "baseText": f'"{base_text}"',
+        "accent": f'"{accent}"',
+        "complementary": f'"{complementary}"',
+        "codeBackground": f'"{code_bg}"',
+        "codeForeground": f'"{fg}"',
+        "shine": f'"{shine}"',
+        "glassTint": glass.get("glassTint", 0.70 if is_dark else 0.30),
+        "glassMaterial": glass.get("pythiaGlassMaterial", "menu"),
+    }
+
+def extract_pythia_block(path):
+    """Return the raw lines of an existing `pythia:` block, or None.
+    A curated block is authoritative — the decorator never overwrites it."""
+    if not path.exists():
+        return None
+    try:
+        lines = path.read_text().split("\n")
+        start = None
+        for i, line in enumerate(lines):
+            if line.startswith("pythia:"):
+                start = i
+                break
+        if start is None:
+            return None
+        end = start + 1
+        while end < len(lines) and (lines[end].startswith("  ") or lines[end].strip() == ""):
+            end += 1
+        return lines[start:end]
+    except Exception:
+        return None
+
 def slugify(name):
     slug = re.sub(r"[‘’']", '', name.lower())
     slug = re.sub(r'[^a-z0-9]+', '-', slug)
@@ -745,9 +828,11 @@ def main():
             gutter.update(palette)
             sidebar_bg = palette['sidebarBackground']
             tags = derive_tags(semantic_class, name, kind)
+            pythia = derive_pythia_palette(global_bg, global_fg, scopes, global_sel, kind, glass)
 
             # ── Merge with existing ──
             existing = parse_existing_yaml(out_path)
+            curated_pythia = extract_pythia_block(out_path)
 
             # Build YAML lines
             lines = []
@@ -765,6 +850,7 @@ def main():
                 lines.append(f"tags: [{tag_str}]")
 
             lines.append("")
+            lines.append("# ── Staffel 1: Imported from .tmTheme ──")
             lines.append("# Global editor colors")
             lines.append("editor:")
             lines.append(f'  background: "{global_bg or "0x0D0D0D"}"')
@@ -783,7 +869,8 @@ def main():
                         lines.append(f"  {trait}: true")
 
             lines.append("")
-            lines.append("# ── AetherCodex Chrome (auto-decorated) ──")
+            lines.append("# ── Staffel 2: Derived extras (not in source) ──")
+            lines.append("# AetherCodex Chrome (auto-decorated)")
             for key in ["glassTintColor", "glassTint", "glassBlurStrength", "glassStyle",
                          "textShadowStrength", "lineSpacing", "editorBackgroundOpacity",
                          "sidebarBackgroundOpacity", "rootBlurMaterial", "rootBlendingMode",
@@ -815,7 +902,23 @@ def main():
             else:
                 lines.append(f"{sb_key}: {sidebar_bg}")
 
+            # ── Pythia Oracle Chamber ──
+            # A curated `pythia:` block is authoritative and preserved verbatim;
+            # otherwise the decorator derives a self-contained chamber palette.
             lines.append("")
+            lines.append("# ── Pythia Oracle Chamber (derived; refine per theme) ──")
+            if curated_pythia:
+                lines.extend(curated_pythia)
+            else:
+                lines.append("pythia:")
+                for key in ["background", "foreground", "baseText", "accent",
+                            "complementary", "codeBackground", "codeForeground", "shine"]:
+                    lines.append(f"  {key}: {pythia[key]}")
+                lines.append(f"  glassTint: {pythia['glassTint']}")
+                lines.append(f"  glassMaterial: {pythia['glassMaterial']}")
+
+            lines.append("")
+            lines.append("# ── Staffel 1 (continued): Scopes ──")
             lines.append("scopes:")
 
             # ── Plain base ──

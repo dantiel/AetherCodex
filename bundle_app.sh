@@ -12,7 +12,7 @@ else
 fi
 BUILD_DIR="${1:-$DEFAULT_DIR}"
 BINARY="$BUILD_DIR/AetherCodex"
-RESOURCE_BUNDLE="$BUILD_DIR/AetherCodex_AetherCodex.bundle"
+RESOURCE_BUNDLE="$BUILD_DIR/AetherCodex_AetherOracleResources.bundle"
 APP_DIR="AetherCodex.app"
 ICON_PNG="appicon.png"
 
@@ -61,6 +61,11 @@ if [ -d "$RESOURCE_BUNDLE" ]; then
     # Syntax .yml files (heuristic, languages, tree-sitter-*) go to Syntax/
     # Theme .yml files go to Themes/ — they have 'kind:' field; others will be rejected by ThemeLoader
     cp "$RESOURCE_BUNDLE"/*.yml "$APP_DIR/Contents/Resources/Themes/" 2>/dev/null || true
+    # Bundled typefaces — Syne & Syne Mono ship in their own Fonts/ directory.
+    mkdir -p "$APP_DIR/Contents/Resources/Fonts"
+    cp "$RESOURCE_BUNDLE"/*.ttf "$APP_DIR/Contents/Resources/Fonts/" 2>/dev/null || true
+    cp "$RESOURCE_BUNDLE"/*.otf "$APP_DIR/Contents/Resources/Fonts/" 2>/dev/null || true
+    cp "$RESOURCE_BUNDLE"/OFL-*.txt "$APP_DIR/Contents/Resources/Fonts/" 2>/dev/null || true
     cp "$RESOURCE_BUNDLE"/heuristic.yml "$APP_DIR/Contents/Resources/Syntax/" 2>/dev/null || true
     cp "$RESOURCE_BUNDLE"/languages.yml "$APP_DIR/Contents/Resources/Syntax/" 2>/dev/null || true
     cp "$RESOURCE_BUNDLE"/tree-sitter-*.yml "$APP_DIR/Contents/Resources/Syntax/" 2>/dev/null || true
@@ -80,7 +85,7 @@ else
 fi
 
 # Copy the full Ruby intelligence core (1:1 mirror of the plugin brain)
-RUBY_DIR="Ruby"
+RUBY_DIR="AetherOracle/ruby"
 if [ -d "$RUBY_DIR" ]; then
     mkdir -p "$APP_DIR/Contents/Resources/Ruby"
     cp -R "$RUBY_DIR/." "$APP_DIR/Contents/Resources/Ruby/"

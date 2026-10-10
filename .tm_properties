@@ -1,0 +1,18 @@
+projectDirectory = "$CWD"
+windowTitle = "AetherCodex Native — $CWD"
+
+includeFiles = "{$includeFiles,.aethercodex,.tm_properties,.gitignore}"
+exclude = "{*.xcodeproj,*.xcworkspace,build/,DerivedData/}"
+excludeDirectories    = "{$excludeDirectories}"
+excludeInFileChooser  = "{$excludeInFileChooser,AetherCodex.app}"
+excludeInFolderSearch = "{$excludeInFolderSearch,AetherCodex.app}"
+
+[ *.swift ]
+fileType = "source.swift"
+softTabs = true
+tabSize = 4
+
+[ *.rb ]
+fileType = "source.ruby"
+softTabs = true
+tabSize = 2

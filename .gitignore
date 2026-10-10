@@ -39,6 +39,14 @@ DerivedData/
 # Vendored Ruby dependencies (rebuilt locally via bundle install)
 # ---------------------------------------------------------------------------
 Ruby/.vendor_bundle/
+AetherOracle/ruby/.vendor_bundle/
+
+# ---------------------------------------------------------------------------
+# AetherOracle — the extracted shared core. Lives in its own repository
+# (https://github.com/dantiel/AetherOracle), not tracked by this monorepo.
+# ---------------------------------------------------------------------------
+AetherOracle/
+=======
 
 # ---------------------------------------------------------------------------
 # Logs and diagnostics
@@ -79,6 +87,19 @@ Thumbs.db
 *.tmp
 *.temp
 *~
+
+# ---------------------------------------------------------------------------
+# AI conjuration scratch — oracle run-scripts must never live in the project
+# root. Ephemeral "hello æther" code poetry and one-shot smoke scripts are
+# written to `.aether/` (already ignored) or `/tmp`, never beside the repo.
+# ---------------------------------------------------------------------------
+hello_aether*
+hello_æther*
+aether.swift
+aether_greet*
+aether_hello*
+aether_veil*
+ether_veil*
 
 # ---------------------------------------------------------------------------
 # Personal config (keep out of repo)

@@ -1,4 +1,5 @@
 import Foundation
+import AetherOracleResources
 
 // MARK: - Syntax Config Loader
 
@@ -7,7 +8,7 @@ enum SyntaxLoader {
 
     // MARK: - Resource Resolution
 
-    /// Locate a YAML resource — tries Bundle.module (SPM), Bundle.main (app bundle), dev path.
+    /// Locate a YAML resource — tries AetherOracleResources.bundle (SPM), Bundle.main (app bundle), dev path.
     private static func loadYaml(_ name: String, subdirectory: String) -> [String: Any] {
         // 1. App bundle (most reliable for bundled apps)
         if let resURL = Bundle.main.resourceURL {
@@ -17,22 +18,44 @@ enum SyntaxLoader {
                 return SimpleYaml.loadFile(fileURL.path)
             }
         }
-        // 2. SPM Bundle.module with subdirectory
-        if let url = Bundle.module.url(forResource: name, withExtension: "yml",
+        // 2. SPM AetherOracleResources.bundle with subdirectory
+        if let url = AetherOracleResources.bundle.url(forResource: name, withExtension: "yml",
                                        subdirectory: subdirectory) {
             return SimpleYaml.loadFile(url.path)
         }
-        // 3. SPM Bundle.module flat (SPM flattens directory structure)
-        if let url = Bundle.module.url(forResource: name, withExtension: "yml",
+        // 3. SPM AetherOracleResources.bundle flat (SPM flattens directory structure)
+        if let url = AetherOracleResources.bundle.url(forResource: name, withExtension: "yml",
                                        subdirectory: nil) {
             return SimpleYaml.loadFile(url.path)
         }
         // 4. Dev path
-        let devPath = URL(fileURLWithPath: "AetherCodex/Resources/\(subdirectory)/\(name).yml")
+        let devPath = URL(fileURLWithPath: "AetherOracle/resources/\(subdirectory)/\(name).yml")
         if FileManager.default.fileExists(atPath: devPath.path) {
             return SimpleYaml.loadFile(devPath.path)
         }
         return [:]
+    }
+
+    /// Locate a non-YAML resource file (e.g. a TextMate grammar) by name under a
+    /// subdirectory. Mirrors `loadYaml`'s multi-location strategy, but returns a
+    /// path instead of parsing the file — grammars are XML/JSON, not YAML config.
+    static func resolveResourceFile(_ name: String, subdirectory: String) -> String? {
+        // File-existence checks rather than `Bundle.url(forResource:)` — grammar
+        // filenames carry dots (`source.python.tmLanguage`) that Bundle's
+        // resource/extension split would misparse.
+        var candidates: [String] = []
+        if let resURL = Bundle.main.resourceURL {
+            candidates.append(resURL.appendingPathComponent(subdirectory)
+                                  .appendingPathComponent(name).path)
+        }
+        if let bundleURL = AetherOracleResources.bundle.resourceURL {
+            candidates.append(bundleURL.appendingPathComponent(subdirectory)
+                                  .appendingPathComponent(name).path)
+            // SPM `.process` flattens directory structure into the bundle root.
+            candidates.append(bundleURL.appendingPathComponent(name).path)
+        }
+        candidates.append("AetherOracle/resources/\(subdirectory)/\(name)")
+        return candidates.first { FileManager.default.fileExists(atPath: $0) }
     }
 
     // MARK: - Heuristic Rules
@@ -108,8 +131,25 @@ enum SyntaxLoader {
             }
             return result
         }()
-
-    // MARK: - Built-in Fallback
+       
+   /// TextMate grammar registry (extension → scopeName). Unlike the tree-sitter
+   /// registry, this maps a file extension straight to the TextMate grammar's
+   /// `scopeName`; the grammar file lives at `Syntax/grammars/<scopeName>.tmLanguage`.
+   static func loadTextmateRegistry() -> [String: String] {
+       textmateRegistryCache
+   }
+       
+   private static let textmateRegistryCache: [String: String] = {
+       let dict = loadYaml("textmate_languages", subdirectory: "Syntax")
+       var result: [String: String] = [:]
+       for (ext, value) in dict {
+           guard let scope = value as? String else { continue }
+           result[ext.lowercased()] = scope
+       }
+       return result
+   }()
+       
+   // MARK: - Built-in Fallback
 
     private static func builtInHeuristicRules() -> [(scope: TokenScope, pattern: String)] {
         [

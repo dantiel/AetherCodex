@@ -93,7 +93,7 @@ enum FlashAetherConjurer {
             15-40 lines. \(isPlain ? "Poetic, plain prose" : "Clean, idiomatic, compiles or runs as-is"). Motif: the veil,
             the moon, or the serpent — ætheric, not generic. \(isPlain ? "Output nothing but prose." : "Output nothing but code.")
             """
-            guard let raw = try await RubyBridge.shared.chat(
+            guard let raw = try await RubyBridge.shared.conjureFlash(
                 messages: [["role": "user", "content": user]],
                 system: system
             ) else {

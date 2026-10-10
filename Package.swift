@@ -1,6 +1,13 @@
 // swift-tools-version:5.9
 import PackageDescription
 
+// AetherCodex — the macOS editor shell.
+//
+// The shared brain lives in `AetherOracle/` (the extracted core): the Ruby
+// oracle (ruby/), the tree-sitter engine (treesitter/), the portable assets
+// (resources/), and the per-OS platform shims (platform/). This package only
+// *wires* the pieces that macOS needs; the iOS companion (Pythia-iOS) and the
+// future WinUI3/GTK shells each wire their own slice of the same core.
 let package = Package(
     name: "AetherCodex",
     platforms: [.macOS("26.0")],
@@ -11,7 +18,7 @@ let package = Package(
     targets: [
         .target(
             name: "CTreeSitter",
-            path: "AetherCodex/Vendor/CTreeSitter",
+            path: "AetherOracle/treesitter",
             sources: [
                 "core/lib.c",
                 "bridge.c",
@@ -52,15 +59,18 @@ let package = Package(
             sources: ["SafeLayoutBridge.m"],
             publicHeadersPath: "include"
         ),
+        .target(
+            name: "AetherOracleResources",
+            path: "AetherOracle",
+            sources: ["AetherOracleResources.swift"],
+            resources: [.process("resources")]
+        ),
         .executableTarget(
             name: "AetherCodex",
-            dependencies: ["CTreeSitter", "CSafeLayout"],
+            dependencies: ["CTreeSitter", "CSafeLayout", "AetherOracleResources"],
             path: "AetherCodex",
             exclude: ["Vendor", "Info.plist", "AetherCodex.entitlements"],
-            sources: ["App", "Bridge"],
-            resources: [
-                .process("Resources")
-            ]
+            sources: ["App", "Bridge"]
         ),
         .testTarget(
             name: "AetherCodexTests",

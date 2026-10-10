@@ -19,6 +19,22 @@ enum MarkdownRichCodec {
 
     enum ListKind { case bullet, ordered, task }
 
+    /// Renders a todo marker as a fixed column glyph instead of AppKit's small
+    /// native checkbox/checkmark: `◯` (open) vs `✔` (done). Subclassing
+    /// `NSTextList` lets us override the marker string per item while keeping the
+    /// native list layout (indent, hanging marker, paragraph flow).
+    final class TaskMarkerList: NSTextList {
+        let checked: Bool
+        init(checked: Bool) {
+            self.checked = checked
+            super.init(markerFormat: .box, options: 0)
+        }
+        required init?(coder: NSCoder) { fatalError("not used") }
+        override func marker(forItemNumber itemNum: Int) -> String {
+            checked ? "✔" : "◯"
+        }
+    }
+
     static var baseAttributes: [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 2
@@ -178,7 +194,7 @@ enum MarkdownRichCodec {
             var list = shared
             if kind == .task {
                 let done = info.marker.lowercased().contains("[x]")
-                list = NSTextList(markerFormat: done ? .check : .box, options: 0)
+                list = TaskMarkerList(checked: done)
             }
             guard let list else { break }
             let last = i == lines.count - 1

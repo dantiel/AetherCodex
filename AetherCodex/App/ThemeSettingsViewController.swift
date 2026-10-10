@@ -51,7 +51,7 @@ struct ThemePreferencesView: View {
             HStack {
                 Text("Changes apply immediately").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                Text(theme.name).font(.caption.weight(.medium)).lineLimit(1)
+                Text(theme.displayName).font(.caption.weight(.medium)).lineLimit(1)
             }.padding(18)
         }
         .frame(minWidth: 560, minHeight: 540)
@@ -62,8 +62,8 @@ struct ThemePreferencesView: View {
         Form {
             Section("Theme collection") {
                 TextField("Filter by name or tag", text: $search)
-                themePicker("Dark appearance", kind: .dark, key: \.darkThemeName)
-                themePicker("Light appearance", kind: .light, key: \.lightThemeName)
+                themePicker("Dark appearance", appearance: .dark, key: \.darkThemeName)
+                themePicker("Light appearance", appearance: .light, key: \.lightThemeName)
                 Text("Follows the system appearance. Each theme supplies its own palette and glass defaults.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -86,19 +86,20 @@ struct ThemePreferencesView: View {
         }.formStyle(.grouped)
     }
 
-    private func themePicker(_ title: String, kind: ThemeKind,
+    private func themePicker(_ title: String, appearance: ThemeAppearance,
                              key: ReferenceWritableKeyPath<ThemeSettings, String>) -> some View {
-        let names = ThemeRegistry.shared.themes.filter {
-            $0.kind == kind && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)
+        let matches = ThemeRegistry.shared.themes.filter {
+            $0.appearance == appearance && (search.isEmpty || $0.name.localizedCaseInsensitiveContains(search)
+                || $0.displayName.localizedCaseInsensitiveContains(search)
                 || $0.tags.contains { $0.localizedCaseInsensitiveContains(search) }
                 || $0.name == settings[keyPath: key])
-        }.map(\.name).sorted()
+        }.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         return Picker(title, selection: Binding(get: { settings[keyPath: key] }, set: {
             settings[keyPath: key] = $0
             ThemeRegistry.shared.activate(named: settings.activeThemeName)
             revision += 1
         })) {
-            ForEach(names, id: \.self) { Text($0).tag($0) }
+            ForEach(matches, id: \.name) { Text($0.displayName).tag($0.name) }
         }
     }
 

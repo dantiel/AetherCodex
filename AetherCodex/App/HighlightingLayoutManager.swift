@@ -16,6 +16,13 @@ struct GhostSuggestion {
 /// V1: ghost text rendering. V2: tree-sitter scope backgrounds, animated overlays.
 final class HighlightingLayoutManager: NSLayoutManager {
 
+    /// Include the leading padding only when selection reaches this visual
+    /// line's first character. A partial first line must not gain a false band.
+    static func selectionCoversLeadingEdge(_ selection: NSRange, lineStart: Int) -> Bool {
+        selection.location != NSNotFound && selection.length > 0
+            && selection.location <= lineStart && NSMaxRange(selection) > lineStart
+    }
+
     // MARK: - Highlighting Gate
 
     /// When true, skip custom drawing phases (line highlight, ghost, inline boxes, borders)
@@ -140,15 +147,18 @@ final class HighlightingLayoutManager: NSLayoutManager {
            let tv = tc.textView,
            tv.string.count > 0 {
             let nsStr = tv.string as NSString
-            let selLoc = tv.selectedRange().location
-            if selLoc < (textStorage?.length ?? 0) {
+            let selRange = tv.selectedRange()
+            let selLoc = selRange.location
+            // During a multi-line selection the native selection band is the
+            // highlight; a second caret band on the anchor line reads as wrong.
+            let hasSelection = selRange.length > 0
+            if !hasSelection, selLoc < (textStorage?.length ?? 0) {
                 let paraRange = nsStr.safeLineRange(for: NSRange(location: selLoc, length: 0))
                 let paraGlyphRange = SafeGlyphRangeForCharacterRange(self, paraRange, nil)
                 if paraGlyphRange.location != NSNotFound,
                    paraGlyphRange.length > 0,
                    NSMaxRange(paraGlyphRange) <= numberOfGlyphs,
                    NSIntersectionRange(glyphsToShowSafe, paraGlyphRange).length > 0 {
-                    let insetTop = tv.textContainerInset.height
                     var frags: [(y: CGFloat, h: CGFloat)] = []
                     var currentGlyph = paraGlyphRange.location
                     let maxGlyph = min(NSMaxRange(paraGlyphRange), numberOfGlyphs)
@@ -167,16 +177,29 @@ final class HighlightingLayoutManager: NSLayoutManager {
                         currentGlyph = next
                     }
                     if let first = frags.first, let last = frags.last {
-                        let combinedY = insetTop + first.y
+                        // The fragment rects are in text-container coordinates; `origin`
+                        // is where that container sits in the text view, so the band lands
+                        // on the same line the glyphs are drawn on (never a stale inset).
+                        let combinedY = origin.y + first.y
                         let combinedH = (last.y + last.h) - first.y
-                        if combinedH > 0, !combinedH.isNaN, tc.size.width > 0 {
-                            let fullRect = NSRect(x: 0, y: combinedY, width: tc.size.width, height: combinedH)
+                        // The adopted editor uses an unbounded container (width ==
+                        // greatestFiniteMagnitude). Filling an infinitely wide rect
+                        // overflows the rasteriser and collapses the band to a sliver,
+                        // so span the view's real content width instead.
+                        let bandWidth = max(tv.bounds.width, 1)
+                        if combinedH > 0, !combinedH.isNaN, bandWidth > 0 {
+                            // Unlike glyphs, the band includes the view's inset:
+                            // its left edge remains flush with the gutter at x=0.
+                            let insetLeft: CGFloat = 0
+                            let bandRectWidth = bandWidth
+                            let fullRect = NSRect(x: insetLeft, y: combinedY,
+                                                  width: bandRectWidth, height: combinedH)
                             hlColor.withAlphaComponent(0.40).setFill()
                             fullRect.fill()
                             if lineHighlightBorderColor != nil {
                                 lineHighlightBorders = (
-                                    NSRect(x: 0, y: combinedY, width: tc.size.width, height: 1),
-                                    NSRect(x: 0, y: combinedY + combinedH - 1, width: tc.size.width, height: 1)
+                                    NSRect(x: insetLeft, y: combinedY, width: bandRectWidth, height: 1),
+                                    NSRect(x: insetLeft, y: combinedY + combinedH - 1, width: bandRectWidth, height: 1)
                                 )
                             }
                         }
@@ -186,6 +209,31 @@ final class HighlightingLayoutManager: NSLayoutManager {
         }
 
         // ═══ Phase 2: Text attribute backgrounds (selection, block backgrounds) ═══
+        // Native selection starts at the text-container origin, leaving the
+        // NSTextView inset unpainted. Extend only that missing strip, using the
+        // same selected background color and live line-fragment geometry.
+        if !isApplyingHighlighting, let tv = textContainers.first?.textView,
+           origin.x > 0,
+           let color = tv.selectedTextAttributes[.backgroundColor] as? NSColor {
+            let selections = tv.selectedRanges.map(\.rangeValue).filter { $0.length > 0 }
+            if !selections.isEmpty {
+                color.setFill()
+                var glyph = glyphsToShowSafe.location
+                while glyph < NSMaxRange(glyphsToShowSafe) {
+                    var fragmentRange = NSRange()
+                    let fragment = SafeLineFragmentRect(self, UInt(glyph), &fragmentRange)
+                    guard fragmentRange.location != NSNotFound, fragmentRange.length > 0 else { break }
+                    let start = characterIndexForGlyph(at: fragmentRange.location)
+                    if selections.contains(where: { Self.selectionCoversLeadingEdge($0, lineStart: start) }) {
+                        NSRect(x: 0, y: origin.y + fragment.minY,
+                               width: origin.x, height: fragment.height).fill()
+                    }
+                    let next = NSMaxRange(fragmentRange)
+                    guard next > glyph else { break }
+                    glyph = next
+                }
+            }
+        }
         super.drawBackground(forGlyphRange: glyphsToShowSafe, at: origin)
 
         // ═══ Phase 3: Line highlight borders (above text backgrounds) ═══

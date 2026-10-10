@@ -90,6 +90,12 @@ enum SidebarSheetGeometry {
                width: max(0, size.width - leading - trailing),
                height: max(0, size.height - 2 * vertical))
     }
+
+    /// Height of the floating tab-bar band docked to the sheet's lower edge. The
+    /// `sidebarTabBar` modifier gives the bar exactly this height, so each pane's
+    /// scroller insets its own content by the same measure — the last row clears
+    /// the capsule while the content still travels *behind* it.
+    static let tabBarBand: CGFloat = 48
 }
 
 /// The canvas and both safe-area bars share exactly these widths. Reserve a

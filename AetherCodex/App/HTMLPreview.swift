@@ -115,6 +115,9 @@ private struct HTMLWebView: NSViewRepresentable {
 struct HTMLPreviewSurface: View {
     @ObservedObject var model: HTMLPreviewModel
     let theme: SyntaxTheme
+    /// Extra chrome height above the surface (the editor tab strip) that pushes
+    /// the floating toolbar down when the tab bar is visible.
+    var topInset: CGFloat = 0
     var onShowSource: () -> Void
 
     var body: some View {
@@ -174,7 +177,7 @@ struct HTMLPreviewSurface: View {
         .padding(.vertical, 6)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
-        .padding(.top, 48)
+        .padding(.top, 48 + topInset)
         .padding(.trailing, 20)
     }
 }

@@ -1,5 +1,6 @@
 import CTreeSitter
 import Cocoa
+import AetherOracleResources
 
 // MARK: - Tree-Sitter Engine
 
@@ -180,19 +181,19 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
             return try? String(contentsOf: url)
         }
         // 2. SPM resource bundle root — query files are flattened here
-        if let url = Bundle.module.url(forResource: name, withExtension: "scm",
+        if let url = AetherOracleResources.bundle.url(forResource: name, withExtension: "scm",
                                         subdirectory: nil) {
             print("[TS] loadQuery module: \(url.path)")
             return try? String(contentsOf: url)
         }
         // 3. SPM resource bundle with subdirectory (belt and suspenders)
-        if let url = Bundle.module.url(forResource: name, withExtension: "scm",
+        if let url = AetherOracleResources.bundle.url(forResource: name, withExtension: "scm",
                                         subdirectory: "Syntax/queries") {
             print("[TS] loadQuery module sub: \(url.path)")
             return try? String(contentsOf: url)
         }
         // 4. Dev path relative to project root
-        let devPath = "AetherCodex/Resources/Syntax/queries/\(name).scm"
+        let devPath = "AetherOracle/resources/Syntax/queries/\(name).scm"
         let cwd = FileManager.default.currentDirectoryPath
         print("[TS] loadQuery dev: \(devPath) cwd=\(cwd) exists=\(FileManager.default.fileExists(atPath: devPath))")
         if FileManager.default.fileExists(atPath: devPath) {
@@ -274,8 +275,26 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
 
     /// Two-phase: 1) scan tree-sitter .string tokens for detail,
     /// 2) raw-text scan for interpolated strings tree-sitter missed.
+    /// UTF-16 code-unit constants. String-detail scanning indexes by UTF-16
+    /// offset (NSRange-aligned). Operating on grapheme clusters (`Array(text)`)
+    /// breaks once emoji/surrogate pairs appear: each such grapheme collapses
+    /// two UTF-16 units into one, shifting every later index so the closing
+    /// quote is missed and the string — and everything after it — loses its
+    /// highlight. Code units keep index and NSRange in lockstep.
+    private enum U16 {
+        static let quote: UInt16 = 0x22      // "
+        static let backslash: UInt16 = 0x5C  // \
+        static let newline: UInt16 = 0x0A    // \n
+        static let lparen: UInt16 = 0x28     // (
+        static let rparen: UInt16 = 0x29     // )
+        static let lbrace: UInt16 = 0x7B     // {
+        static let rbrace: UInt16 = 0x7D     // }
+        static let u: UInt16 = 0x75          // u
+        static let simpleEscapes: Set<UInt16> = [0x30, 0x74, 0x6E, 0x72, 0x22, 0x27, 0x5C] // 0 t n r " ' \
+    }
+
     private func addStringDetailTokens(in tokens: inout [Token], text: String, range: NSRange) {
-        let chars = Array(text)
+        let chars = Array(text.utf16)
 
         // Phase 1: tree-sitter .string tokens → detail scan only
         let tsStrings = tokens.filter { $0.scope == .string }
@@ -285,12 +304,12 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
             let contentStart: Int
             let contentEnd: Int
             if loc < chars.count, end <= chars.count, end - loc >= 2,
-               chars[loc] == "\"", chars[end - 1] == "\"" {
+               chars[loc] == U16.quote, chars[end - 1] == U16.quote {
                 contentStart = loc + 1
                 contentEnd = end - 1
             } else if loc + 2 < chars.count, end <= chars.count, end - loc >= 6,
-                      chars[loc] == "\"", chars[loc+1] == "\"", chars[loc+2] == "\"",
-                      chars[end-3] == "\"", chars[end-2] == "\"", chars[end-1] == "\"" {
+                      chars[loc] == U16.quote, chars[loc+1] == U16.quote, chars[loc+2] == U16.quote,
+                      chars[end-3] == U16.quote, chars[end-2] == U16.quote, chars[end-1] == U16.quote {
                 contentStart = loc + 3
                 contentEnd = end - 3
             } else {
@@ -319,11 +338,11 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
             guard !isCovered(i) else { i += 1; continue }
 
             // Check for """ (multiline)
-            if i + 2 < chars.count, chars[i] == "\"", chars[i+1] == "\"", chars[i+2] == "\"" {
+            if i + 2 < chars.count, chars[i] == U16.quote, chars[i+1] == U16.quote, chars[i+2] == U16.quote {
                 let strStart = i
                 i += 3
                 while i + 2 < chars.count {
-                    if chars[i] == "\"", chars[i+1] == "\"", chars[i+2] == "\"" {
+                    if chars[i] == U16.quote, chars[i+1] == U16.quote, chars[i+2] == U16.quote {
                         tokens.append(Token(range: NSRange(location: strStart, length: 3),
                                             scope: .string))
                         let hasDetail = stringHasDetailContent(chars: chars,
@@ -347,15 +366,15 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
             }
 
             // Check for " (single-line)
-            if chars[i] == "\"" {
-                if i + 2 < chars.count, chars[i+1] == "\"", chars[i+2] == "\"" {
+            if chars[i] == U16.quote {
+                if i + 2 < chars.count, chars[i+1] == U16.quote, chars[i+2] == U16.quote {
                     i += 1; continue
                 }
                 let strStart = i
                 i += 1
                 while i < chars.count {
-                    if chars[i] == "\\" { i += 2; continue }
-                    if chars[i] == "\"" {
+                    if chars[i] == U16.backslash { i += 2; continue }
+                    if chars[i] == U16.quote {
                         tokens.append(Token(range: NSRange(location: strStart, length: 1),
                                             scope: .string))
                         let hasDetail = stringHasDetailContent(chars: chars,
@@ -373,7 +392,7 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
                         i += 1
                         break
                     }
-                    if chars[i] == "\n" { break }
+                    if chars[i] == U16.newline { break }
                     i += 1
                 }
                 continue
@@ -386,21 +405,21 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
     /// Returns true if the string literal content contains detail that
     /// our heuristic should process: \\( interpolation, \\n/\\t/\\r escapes,
     /// \\u{…} unicode escapes, or \\\" / \\' / \\\\ / \\0 escapes.
-    private func stringHasDetailContent(chars: [Character],
+    private func stringHasDetailContent(chars: [UInt16],
                                          start: Int, end: Int) -> Bool {
         var j = start
         while j + 1 < end {
-            guard chars[j] == "\\" else { j += 1; continue }
+            guard chars[j] == U16.backslash else { j += 1; continue }
             let next = chars[j + 1]
-            if next == "(" { return true }           // \\( … interpolation
-            if "0tnr\"'\\".contains(next) { return true } // \0 \t \n \r \" \' \\
-            if next == "u" { return true }            // \u{…} unicode
+            if next == U16.lparen { return true }           // \\( … interpolation
+            if U16.simpleEscapes.contains(next) { return true } // \0 \t \n \r \" \' \\
+            if next == U16.u { return true }            // \u{…} unicode
             j += 2
         }
         return false
     }
 
-    private func processStringContent(chars: [Character], baseLoc: Int,
+    private func processStringContent(chars: [UInt16], baseLoc: Int,
                                        contentStart: Int, contentEnd: Int,
                                        into tokens: inout [Token],
                                        emitStringGaps: Bool = true) {
@@ -419,12 +438,12 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
 
         while i < contentEnd {
             guard i < chars.count else { break }
-            guard chars[i] == "\\" else { i += 1; continue }
+            guard chars[i] == U16.backslash else { i += 1; continue }
             guard i + 1 < chars.count else { break }
 
             let next = chars[i + 1]
 
-            if next == "(" {
+            if next == U16.lparen {
                 flushPlain(i)
                 tokens.append(Token(
                     range: NSRange(location: i, length: 2),
@@ -433,8 +452,8 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
                 var depth = 1
                 var j = i + 2
                 while j < contentEnd, depth > 0 {
-                    if chars[j] == "("  { depth += 1 }
-                    else if chars[j] == ")" { depth -= 1 }
+                    if chars[j] == U16.lparen  { depth += 1 }
+                    else if chars[j] == U16.rparen { depth -= 1 }
                     j += 1
                 }
                 let innerLen = j - 1 - (i + 2)
@@ -449,17 +468,17 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
 
                 i = j
                 plainStart = i
-            } else if "0tnr\"\'\\\\".contains(next) {
+            } else if U16.simpleEscapes.contains(next) {
                 flushPlain(i)
                 tokens.append(Token(
                     range: NSRange(location: i, length: 2),
                     scope: .constantCharacterEscape))
                 i += 2
                 plainStart = i
-            } else if next == "u", i + 2 < contentEnd, chars[i + 2] == "{" {
+            } else if next == U16.u, i + 2 < contentEnd, chars[i + 2] == U16.lbrace {
                 flushPlain(i)
                 var j = i + 3
-                while j < contentEnd, chars[j] != "}" { j += 1 }
+                while j < contentEnd, chars[j] != U16.rbrace { j += 1 }
                 if j < contentEnd { j += 1 }
                 tokens.append(Token(
                     range: NSRange(location: i, length: j - i),
@@ -737,7 +756,8 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
             "php": "php",
             "java": "java", "kotlin": "java", "kt": "java",
         ]
-        return map[info.lowercased().trimmingCharacters(in: .whitespaces)]
+        let firstWord = info.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+        return map[firstWord.lowercased()]
     }
 
     private func collectFencedCodeTokens(root: UnsafeMutableRawPointer,
@@ -755,9 +775,7 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
             guard infoEndUTF16 > infoStartUTF16 else { continue }
             let infoStr = nsText.substring(
                 with: NSRange(location: infoStartUTF16, length: infoEndUTF16 - infoStartUTF16))
-            guard let langKey = resolveEmbeddedLanguage(infoStr),
-                  let langFn = languageLoaders[langKey],
-                  let langPtr = langFn() else { continue }
+            guard let langKey = resolveEmbeddedLanguage(infoStr) else { continue }
 
             let contentStartUTF16 = byteToUTF16[safe: block.contentStartByte] ?? 0
             let contentEndUTF16 = byteToUTF16[safe: block.contentEndByte] ?? contentStartUTF16
@@ -765,93 +783,112 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
             let contentText = nsText.substring(
                 with: NSRange(location: contentStartUTF16, length: contentEndUTF16 - contentStartUTF16))
 
-            // Parse content with embedded language
-            let embParser = ts_bridge_parser_new()
-            ts_bridge_parser_set_language(embParser, langPtr)
-            let embNs = contentText as NSString
-            let embCStr = embNs.utf8String!
-            let embTreePtr = ts_bridge_parser_parse_string(embParser, nil, embCStr,
-                                                           UInt32(contentText.utf8.count))
-            guard let embTree = embTreePtr,
-                  let embRoot = ts_bridge_tree_root_node(embTree) else {
-                ts_bridge_parser_delete(embParser)
-                continue
-            }
+            tokens.append(contentsOf: tokenizeEmbeddedBlock(content: contentText,
+                                                            language: langKey,
+                                                            baseUTF16: contentStartUTF16,
+                                                            range: range))
+        }
+    }
 
-            // Load highlight query for embedded language
-            guard let querySrc = loadQuerySource(name: "\(langKey)_highlights") else {
-                ts_bridge_node_free(embRoot)
-                ts_bridge_tree_delete(embTree)
-                ts_bridge_parser_delete(embParser)
-                continue
-            }
-            var errOffset: UInt32 = 0
-            var errType: UInt32 = 0
-            guard let query = ts_bridge_query_new(langPtr, querySrc,
-                                                   UInt32(querySrc.utf8.count),
-                                                   &errOffset, &errType) else {
-                ts_bridge_node_free(embRoot)
-                ts_bridge_tree_delete(embTree)
-                ts_bridge_parser_delete(embParser)
-                continue
-            }
+    /// Tokenize a fenced-code-block's content with its embedded language,
+    /// returning tokens in document UTF-16 coordinates (offset by `baseUTF16`).
+    private func tokenizeEmbeddedBlock(content: String, language langKey: String,
+                                       baseUTF16: Int, range: NSRange) -> [Token] {
+        guard let langFn = languageLoaders[langKey], let langPtr = langFn() else { return [] }
 
-            guard let qc = ts_bridge_query_cursor_new() else {
-                ts_bridge_query_delete(query)
-                ts_bridge_node_free(embRoot)
-                ts_bridge_tree_delete(embTree)
-                ts_bridge_parser_delete(embParser)
-                continue
-            }
-
-            ts_bridge_query_cursor_exec(qc, query, embRoot)
-
-            // Collect captures, offset to document coordinates
-            var matchId: UInt32 = 0
-            var captureIdx: UInt32 = 0
-            var nodeOut: UnsafeMutableRawPointer? = nil
-
-            while ts_bridge_query_cursor_next_capture(qc, &matchId, &captureIdx, &nodeOut) {
-                guard let capNode = nodeOut else { continue }
-
-                var capNameLen: UInt32 = 0
-                guard let capNamePtr = ts_bridge_query_capture_name_for_id(query, captureIdx,
-                                                                            &capNameLen) else {
-                    ts_bridge_node_free(capNode)
-                    continue
-                }
-                let capNameStr = String(cString: capNamePtr)
-                guard let scope = CaptureScopeMapper.scope(for: capNameStr) else {
-                    ts_bridge_node_free(capNode)
-                    continue
-                }
-
-                let innerStart = Int(ts_bridge_node_start_byte(capNode))
-                let innerEnd = Int(ts_bridge_node_end_byte(capNode))
-                ts_bridge_node_free(capNode)
-
-                // Offset to document byte position
-                let globalStart = block.contentStartByte + innerStart
-                let globalEnd = block.contentStartByte + innerEnd
-
-                let startUTF16 = byteToUTF16[safe: globalStart] ?? 0
-                let endUTF16 = byteToUTF16[safe: globalEnd] ?? startUTF16
-                let len = endUTF16 - startUTF16
-
-                guard len > 0 else { continue }
-                let r = NSRange(location: startUTF16, length: len)
-                guard r.location >= range.location,
-                      r.upperBound <= range.upperBound else { continue }
-
-                tokens.append(Token(range: r, scope: scope))
-            }
-
-            ts_bridge_query_cursor_delete(qc)
-            ts_bridge_query_delete(query)
+        let embParser = ts_bridge_parser_new()
+        ts_bridge_parser_set_language(embParser, langPtr)
+        let embNs = content as NSString
+        let embCStr = embNs.utf8String!
+        let embTreePtr = ts_bridge_parser_parse_string(embParser, nil, embCStr,
+                                                       UInt32(content.utf8.count))
+        guard let embTree = embTreePtr,
+              let embRoot = ts_bridge_tree_root_node(embTree) else {
+            ts_bridge_parser_delete(embParser)
+            return []
+        }
+        defer {
             ts_bridge_node_free(embRoot)
             ts_bridge_tree_delete(embTree)
             ts_bridge_parser_delete(embParser)
         }
+
+        guard let querySrc = loadQuerySource(name: "\(langKey)_highlights") else { return [] }
+        var errOffset: UInt32 = 0
+        var errType: UInt32 = 0
+        guard let query = ts_bridge_query_new(langPtr, querySrc,
+                                               UInt32(querySrc.utf8.count),
+                                               &errOffset, &errType) else { return [] }
+        defer { ts_bridge_query_delete(query) }
+        guard let qc = ts_bridge_query_cursor_new() else { return [] }
+        defer { ts_bridge_query_cursor_delete(qc) }
+
+        ts_bridge_query_cursor_exec(qc, query, embRoot)
+        let contentByteToUTF16 = buildByteToUTF16(content)
+
+        var tokens: [Token] = []
+        var matchId: UInt32 = 0
+        var captureIdx: UInt32 = 0
+        var nodeOut: UnsafeMutableRawPointer? = nil
+
+        while ts_bridge_query_cursor_next_capture(qc, &matchId, &captureIdx, &nodeOut) {
+            guard let capNode = nodeOut else { continue }
+
+            var capNameLen: UInt32 = 0
+            guard let capNamePtr = ts_bridge_query_capture_name_for_id(query, captureIdx,
+                                                                        &capNameLen) else {
+                ts_bridge_node_free(capNode)
+                continue
+            }
+            let capNameStr = String(cString: capNamePtr)
+            guard let scope = CaptureScopeMapper.scope(for: capNameStr) else {
+                ts_bridge_node_free(capNode)
+                continue
+            }
+
+            let innerStart = Int(ts_bridge_node_start_byte(capNode))
+            let innerEnd = Int(ts_bridge_node_end_byte(capNode))
+            ts_bridge_node_free(capNode)
+
+            let startUTF16 = baseUTF16 + (contentByteToUTF16[safe: innerStart] ?? 0)
+            let endUTF16 = baseUTF16 + (contentByteToUTF16[safe: innerEnd] ?? (contentByteToUTF16[safe: innerStart] ?? 0))
+            let len = endUTF16 - startUTF16
+
+            guard len > 0 else { continue }
+            let r = NSRange(location: startUTF16, length: len)
+            guard r.location >= range.location,
+                  r.upperBound <= range.upperBound else { continue }
+
+            tokens.append(Token(range: r, scope: scope))
+        }
+        return tokens
+    }
+
+    /// Regex-driven fenced-code-block highlighting for the heuristic markdown
+    /// path (which bypasses tree-sitter's unreliable markdown parser). Finds
+    /// ```lang / ~~~lang blocks, resolves the language, and tokenizes content.
+    func tokenizeFencedCodeBlocks(in text: String, range: NSRange) -> [Token] {
+        let nsText = text as NSString
+        guard let re = try? NSRegularExpression(
+            pattern: "(?m)^(`{3,}|~{3,})[ \\t]*([^\\n]*)\\n([\\s\\S]*?)^\\1[ \\t]*$",
+            options: []
+        ) else { return [] }
+
+        var tokens: [Token] = []
+        let full = NSRange(location: 0, length: nsText.length)
+        re.enumerateMatches(in: text, options: [], range: full) { m, _, _ in
+            guard let m = m, m.numberOfRanges >= 4 else { return }
+            let info = nsText.substring(with: m.range(at: 2))
+            guard let langKey = self.resolveEmbeddedLanguage(info) else { return }
+            let contentRange = m.range(at: 3)
+            guard contentRange.length > 0 else { return }
+            let content = nsText.substring(with: contentRange)
+            tokens.append(contentsOf: self.tokenizeEmbeddedBlock(content: content,
+                                                                 language: langKey,
+                                                                 baseUTF16: contentRange.location,
+                                                                 range: range))
+        }
+        return tokens
     }
     private func collectFencedBlockWalk(_ node: UnsafeMutableRawPointer,
                                          results: inout [(contentStartByte: Int, contentEndByte: Int,

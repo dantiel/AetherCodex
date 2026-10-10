@@ -11,6 +11,11 @@ import CSafeLayout
 final class EditorDocumentModel: ObservableObject {
     @Published var attributedString: NSAttributedString = NSAttributedString()
     @Published var revision: Int = 0
+    /// Document shape, updated on every edit without copying the attributed
+    /// string. These two numbers drive the scroll extent + gutter width, so a
+    /// keystroke never forces a full-document copy, split, or layout.
+    @Published var lineCount: Int = 1
+    @Published var maxLineWidth: Int = 0
 }
 
 // MARK: - Gutter style
@@ -20,6 +25,10 @@ final class EditorDocumentModel: ObservableObject {
 /// the horizontal text scroller, so line numbers stay put during horizontal scroll.
 struct EditorGutterStyle {
     var activeLine: Int = 1
+    /// 1-based inclusive range of lines covered by the current multi-line
+    /// selection (nil when there is no selection). The gutter paints these
+    /// line numbers with the selection background instead of the caret band.
+    var selectedLineRange: ClosedRange<Int>? = nil
     var width: CGFloat = 0
     var font: NSFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
     /// Height of one *code* line — the gutter highlight must never be shorter
@@ -31,8 +40,67 @@ struct EditorGutterStyle {
     /// Tint for the glass gutter surface — the sidebar surface color, applied at
     /// reduced opacity over a frosted material by `TextKit2ScrollSurface`.
     var backgroundColor: NSColor? = nil
+    /// Band behind the caret line when no selection is active.
+    var lineHighlightColor: NSColor = NSColor(white: 0.12, alpha: 1.0)
+    /// Foreground for the caret line number when no selection is active —
+    /// brighter than the dim ruler text, but distinct from the selection
+    /// foreground so the caret line never reads as "selected".
+    var activeLineForeground: NSColor = .labelColor
     var selectionBackground: NSColor = .controlAccentColor
     var selectionForeground: NSColor = .labelColor
+    /// 1px top/bottom borders around the selected region (TextMate gutter style).
+    var selectionBorder: NSColor = NSColor(red: 0.00, green: 0.22, blue: 0.44, alpha: 0.8)
+    /// 1px top/bottom borders on the caret line band — mirrors the code band's
+    /// `lineHighlightBorder` so the gutter and code edges read as one surface.
+    var lineHighlightBorder: NSColor = NSColor(white: 0.30, alpha: 0.5)
+    /// Extra width on the left edge — extends the gutter toward the floating
+    /// sidebar sheet so the active-line highlight connects to the file browser.
+    var leftOverhang: CGFloat = 8
+}
+
+extension EditorGutterStyle {
+    /// Line numbers render slightly smaller than the code face — one shared
+    /// scale keeps the SwiftUI gutter and the AppKit ruler identical.
+    static let rulerFontScale: CGFloat = 0.8
+
+    /// Left breathing room before the widest line number. The number column is
+    /// right-aligned against the fold gutter, so widening this only grows the
+    /// column's left side — the numbers never kiss the sidebar edge.
+    static let numberLeftPadding: CGFloat = 12
+
+    /// Resolve the gutter face for a code font. Tracks the per-filetype
+    /// `.aether-properties` font size (`SyntaxOracle.shared.baseFont`) so the
+    /// numbers shrink/grow with the code instead of snapping to a fixed size.
+    /// Themes may pin an absolute size via `pinnedSize`.
+    static func rulerFont(for codeFont: NSFont, pinnedSize: CGFloat? = nil) -> NSFont {
+        let size = pinnedSize ?? (codeFont.pointSize * rulerFontScale)
+        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    /// Exact baseline-to-baseline pitch for one code line. `defaultLineHeight(for:)`
+    /// includes the font's `leading`, but real layout uses `ceil(ascender − descender)
+    /// + lineSpacing`. For faces like Monaco the two differ by ~1pt/line — an
+    /// arithmetic guess therefore drifts one line-height per hundred lines. Measure
+    /// the actual fragment height instead of guessing it.
+    static func measuredLineHeight(for font: NSFont, lineSpacing: CGFloat) -> CGFloat {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = lineSpacing
+        let attributed = NSAttributedString(
+            string: "A\nB\nC",
+            attributes: [.font: font, .paragraphStyle: paragraph]
+        )
+        let storage = NSTextStorage(attributedString: attributed)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 100_000, height: 100_000))
+        container.widthTracksTextView = false
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        guard layout.numberOfGlyphs > 0 else {
+            return layout.defaultLineHeight(for: font) + lineSpacing
+        }
+        return layout.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
+    }
 }
 
 // MARK: - TextKit 2 measurement
@@ -41,7 +109,25 @@ struct EditorGutterStyle {
 /// any view. Used to size the SwiftUI `ScrollView` content so SwiftUI owns the
 /// scrolling and the native scroll-edge effect can engage.
 enum TextKit2Layout {
-    static func measure(_ attributedString: NSAttributedString, containerWidth: CGFloat) -> CGSize {
+    /// Files with more lines than this skip full-document layout and use a
+    /// linear-time estimate. `ensureLayout(for: documentRange)` on a huge
+    /// attributed string is what freezes the editor on open; the estimate has
+    /// no layout cost and keeps vertical extent + horizontal scroll sane.
+    static let largeFileLineThreshold = 20_000
+
+    static func measure(_ attributedString: NSAttributedString,
+                        containerWidth: CGFloat,
+                        lineHeight: CGFloat = 17) -> CGSize {
+        let text = attributedString.string as NSString
+        // The code editor never wraps (`containerWidth == 0`) and uses a uniform
+        // monospaced face, so the full TextKit 2 `ensureLayout(for:)` below is
+        // pure overhead — it is what froze the editor on every keystroke for
+        // mid-sized files. The arithmetic estimate is exact for a non-wrapping
+        // monospaced document and has no glyph-layout cost.
+        if containerWidth <= 0 || Self.lineCount(text) > largeFileLineThreshold {
+            return estimate(attributedString, lineHeight: lineHeight)
+        }
+
         let storage = NSTextContentStorage()
         let layout = NSTextLayoutManager()
         storage.addTextLayoutManager(layout)
@@ -64,6 +150,48 @@ enum TextKit2Layout {
             return true
         }
         return union.size
+    }
+
+    /// Linear-time measurement: count lines for height, scan for the widest line
+    /// for horizontal scroll extent. No layout manager involved.
+    private static func estimate(_ attributedString: NSAttributedString,
+                                 lineHeight: CGFloat) -> CGSize {
+        let text = attributedString.string as NSString
+        let lines = lineCount(text)
+        let widest = maxLineLength(text)
+        var charWidth = max(lineHeight * 0.6, 1)
+        if text.length > 0,
+           let font = attributedString.attribute(.font, at: 0, effectiveRange: nil) as? NSFont {
+            let advance = ("0" as NSString).size(withAttributes: [.font: font]).width
+            if advance > 0 { charWidth = advance }
+        }
+        return CGSize(width: CGFloat(widest) * charWidth,
+                      height: CGFloat(max(lines, 1)) * lineHeight)
+    }
+
+    private static func lineCount(_ text: NSString) -> Int {
+        guard text.length > 0 else { return 0 }
+        var count = 1
+        var i = 0
+        while i < text.length {
+            if text.character(at: i) == 0x0A { count += 1 }
+            i += 1
+        }
+        return count
+    }
+
+    private static func maxLineLength(_ text: NSString) -> Int {
+        var maxLen = 0
+        var lineStart = 0
+        var i = 0
+        while i <= text.length {
+            if i == text.length || text.character(at: i) == 0x0A {
+                maxLen = max(maxLen, i - lineStart)
+                lineStart = i + 1
+            }
+            i += 1
+        }
+        return maxLen
     }
 }
 
@@ -104,12 +232,15 @@ final class TextKit2EditorView: NSView {
 
     private func commonInit() {
         // TextKit 1 pipeline (matches EditorViewController)
-        layoutManager = NSLayoutManager()
+        layoutManager = HighlightingLayoutManager()
 
         // TextContainer: no width limit for horizontal scroll
         textContainer = NSTextContainer(size: CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
         textContainer.widthTracksTextView = false
         textContainer.heightTracksTextView = false
+        // Keep fragment padding zero; the view inset below supplies breathing
+        // room, and HighlightingLayoutManager paints selection across that inset.
+        textContainer.lineFragmentPadding = 0
         layoutManager.addTextContainer(textContainer)
 
         // NSTextView using TextKit 1
@@ -120,8 +251,10 @@ final class TextKit2EditorView: NSView {
         textView.drawsBackground = false
         textView.backgroundColor = .clear
         // Vertical breathing room is owned by TextKit2ScrollSurface so the
-        // editable and passive render paths share identical geometry.
-        textView.textContainerInset = NSSize(width: 8, height: 0)
+        // editable and passive render paths share identical geometry. Horizontal
+        // inset belongs to the text view, not a SwiftUI spacer, so backgrounds
+        // can connect to the gutter while glyphs remain comfortably inset.
+        textView.textContainerInset = NSSize(width: EditorChromeMetrics.codeLeadingPadding, height: 0)
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.isVerticallyResizable = true
@@ -147,7 +280,8 @@ final class TextKit2EditorView: NSView {
         textContainer = editor.textContainer
         editor.removeFromSuperview()
         editor.drawsBackground = false
-        editor.textContainerInset = NSSize(width: 8, height: 0)
+        editor.textContainerInset = NSSize(width: EditorChromeMetrics.codeLeadingPadding, height: 0)
+        textContainer.lineFragmentPadding = 0
         editor.autoresizingMask = []
         editor.isHorizontallyResizable = true
         editor.isEditable = true
@@ -155,6 +289,14 @@ final class TextKit2EditorView: NSView {
         textContainer.widthTracksTextView = false
         addSubview(editor)
         needsLayout = true
+    }
+
+    deinit {
+        // When a tab is switched away, SwiftUI destroys this surface (its `.id`
+        // is the tab's identity). Detach the adopted NSTextView so it does not
+        // retain a dangling superview; `EditorViewController` still owns it and
+        // re-adopts it into a fresh surface when the tab returns.
+        textView?.removeFromSuperview()
     }
 
     override func layout() {
@@ -248,26 +390,36 @@ final class TextKit2RenderView: NSView {
 /// horizontal text scroller, so it scrolls vertically with the document (line
 /// numbers stay aligned with their lines) but never moves sideways.
 final class GutterRenderView: NSView {
-    private let contentStorage = NSTextContentStorage()
-    private let layoutManager = NSTextLayoutManager()
-    private var lineOrigins: [(number: Int, rect: CGRect)] = []
+    private var cachedStringIdentity: ObjectIdentifier? = nil
+    private var cachedSourceLength: Int = -1
+    private var lineCount: Int = 0
+    /// UTF-16 offsets of the first character of each line, in document order
+    /// (`[0, offsetOfLine2, …]`, one entry per line). Built once per document
+    /// change so a character offset maps to a line number in O(log n) — the
+    /// layout manager gives us exact per-line fragment rects, but not the line's
+    /// ordinal.
+    private var lineStartOffsets: [Int] = []
 
     /// Line-number gutter configuration (width + colors), resolved from the theme.
     var gutter: EditorGutterStyle = EditorGutterStyle() {
         didSet { needsDisplay = true }
     }
 
-    /// The editor's live TextKit 1 layout manager. Line origins are derived from
-    /// its *actual* line-fragment rects, so numbers and the active-line highlight
-    /// stay locked to the text even when syntax highlighting gives each line its
-    /// own font size / line height. Falls back to uniform spacing when nil.
+    /// Live layout manager of the adopted editor. Its per-line fragment rects are
+    /// the source of truth for each number's origin, so a taller line (emoji, a
+    /// larger inline face) keeps its number locked instead of drifting.
     weak var sourceLayoutManager: NSLayoutManager? {
-        didSet { needsDisplay = true }
+        didSet {
+            rewireSelectionObserver()
+            needsDisplay = true
+        }
     }
 
     private let foldGutterWidth: CGFloat = 14
-    private let numberLeftPad: CGFloat = 6
     private let numberGap: CGFloat = 12
+    /// Observer for the adopted text view's selection changes (see
+    /// `rewireSelectionObserver()`). Held so it can be removed on deinit.
+    private var selectionObserver: NSObjectProtocol? = nil
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -279,133 +431,261 @@ final class GutterRenderView: NSView {
         commonInit()
     }
 
-    private func commonInit() {
-        contentStorage.addTextLayoutManager(layoutManager)
+    deinit {
+        if let observer = selectionObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
 
-        // Same unconstrained container as the text view, so line origins match.
-        let container = NSTextContainer(size: CGSize(width: 0, height: 0))
-        container.widthTracksTextView = false
-        layoutManager.textContainer = container
+    private func commonInit() {
+        // Line origins are read from the live editor layout manager in `draw`;
+        // no secondary TextKit pipeline is owned here.
+    }
+
+    /// Directly repaint the gutter on every selection change of the adopted text
+    /// view. `NSTextView` posts `didChangeSelectionNotification` synchronously
+    /// during a mouse drag; observing it here (rather than through SwiftUI's
+    /// `.onReceive` → `@State` → `updateNSView` round-trip, which the event
+    /// tracking loop defers until mouse-up) is what keeps the line-number column
+    /// selection glued to the cursor in real time.
+    private func rewireSelectionObserver() {
+        if let observer = selectionObserver {
+            NotificationCenter.default.removeObserver(observer)
+            selectionObserver = nil
+        }
+        guard let tv = sourceLayoutManager?.textContainers.first?.textView else { return }
+        selectionObserver = NotificationCenter.default.addObserver(
+            forName: NSTextView.didChangeSelectionNotification,
+            object: tv,
+            queue: nil
+        ) { [weak self] _ in
+            self?.needsDisplay = true
+        }
     }
 
     override var isFlipped: Bool { true }
 
     func setAttributedString(_ attributedString: NSAttributedString) {
-        rebuildLineOrigins(from: attributedString)
+        // Prefer the live layout manager's text storage (the exact text the
+        // fragments are laid out from) so line starts never lag the SwiftUI
+        // snapshot. Rebuild line count + line-start index only when the document
+        // actually changed — never on a scroll/selection change, which is what
+        // caused the gutter to re-walk the whole layout manager every frame before.
+        let liveString = sourceLayoutManager?.textStorage?.string as NSString?
+        let source = liveString ?? (attributedString.string as NSString)
+        let identity = ObjectIdentifier(attributedString)
+        if identity != cachedStringIdentity || source.length != cachedSourceLength {
+            cachedStringIdentity = identity
+            cachedSourceLength = source.length
+            lineCount = source.length > 0 ? 1 : 0
+            lineStartOffsets = []
+            if source.length > 0 {
+                lineStartOffsets.append(0)
+                var i = 0
+                while i < source.length {
+                    if source.character(at: i) == 0x0A {
+                        lineCount += 1
+                        lineStartOffsets.append(i + 1)
+                    }
+                    i += 1
+                }
+            }
+        }
         needsDisplay = true
     }
 
-    /// Derives per-line origins from the live layout manager's fragment rects.
-    /// The editor is non-wrapping, so each source line is one fragment — but line
-    /// *heights* vary per line (headings, emphasis, image lines, …), so a single
-    /// constant `lineHeight` can never keep numbers aligned with the text.
-    private func rebuildLineOrigins(from attributedString: NSAttributedString) {
+    /// Uniform per-line pitch, used only as a fallback when no live layout manager
+    /// is attached (passive render path). The editable path places every number at
+    /// its own fragment origin instead.
+    private var liveLineHeight: CGFloat {
+        if let lm = sourceLayoutManager, lm.numberOfGlyphs > 0 {
+            let height = lm.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
+            if height > 0 { return height }
+        }
+        return gutter.lineHeight
+    }
+
+    /// Exact line rect for a 1-based line number, read from the live layout
+    /// manager's fragment for that line. A taller line (emoji, larger inline face)
+    /// keeps its number locked to it. Falls back to the uniform pitch when no
+    /// layout manager is attached.
+    private func rect(forLine number: Int) -> CGRect {
         if let lm = sourceLayoutManager, lm.numberOfGlyphs > 0,
-           let storage = lm.textStorage {
-            lineOrigins = Self.lineOrigins(from: lm, string: storage.string as NSString,
-                                           width: gutter.width)
-            return
-        }
-        // Passive fallback: no live layout manager — assume uniform height.
-        let lineCount = attributedString.string.components(separatedBy: "\n").count
-        let height = max(gutter.lineHeight, 1)
-        lineOrigins = (1...lineCount).map { number in
-            (number: number, rect: CGRect(x: 0, y: CGFloat(number - 1) * height,
-                                           width: gutter.width, height: height))
-        }
-    }
-
-    /// Walks the layout manager's fragments top-to-bottom and maps each to its
-    /// 1-based source line. Wrapped continuations merge into their paragraph so a
-    /// single number + one full-height highlight covers the whole visual line.
-    private static func lineOrigins(from lm: NSLayoutManager, string: NSString,
-                                    width: CGFloat) -> [(number: Int, rect: CGRect)] {
-        var result: [(number: Int, rect: CGRect)] = []
-        let starts = lineStarts(for: string)
-        var startIdx = 0
-        var currentGlyph = 0
-        let maxGlyph = lm.numberOfGlyphs
-        var guardCount = 0
-
-        while currentGlyph < maxGlyph, guardCount < 200_000 {
-            guardCount += 1
-            var fragGlyphRange = NSRange(location: 0, length: 0)
-            let fragRect = SafeLineFragmentRect(lm, UInt(currentGlyph), &fragGlyphRange)
-            guard fragGlyphRange.location != NSNotFound, fragGlyphRange.length > 0 else { break }
-
-            let fragCharRange = SafeCharacterRangeForGlyphRange(lm, fragGlyphRange)
-            if fragCharRange.location != NSNotFound, fragCharRange.length > 0 {
-                while startIdx + 1 < starts.count && starts[startIdx + 1] <= fragCharRange.location {
-                    startIdx += 1
-                }
-                let lineNumber = startIdx + 1
-                let top = fragRect.minY
-                let bottom = fragRect.minY + fragRect.height
-                if let last = result.last, last.number == lineNumber {
-                    let newTop = min(last.rect.minY, top)
-                    let newBottom = max(last.rect.maxY, bottom)
-                    result[result.count - 1] = (number: lineNumber,
-                                                rect: CGRect(x: 0, y: newTop, width: width, height: newBottom - newTop))
-                } else {
-                    result.append((number: lineNumber,
-                                   rect: CGRect(x: 0, y: top, width: width, height: bottom - top)))
-                }
+           number > 0, number - 1 < lineStartOffsets.count {
+            let charOffset = lineStartOffsets[number - 1]
+            let glyphRange = lm.glyphRange(forCharacterRange: NSRange(location: charOffset, length: 0),
+                                           actualCharacterRange: nil)
+            if glyphRange.location < lm.numberOfGlyphs {
+                let rect = lm.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+                if rect.height > 0 { return rect }
             }
-
-            let next = NSMaxRange(fragGlyphRange)
-            if next <= currentGlyph { break }
-            currentGlyph = next
         }
-        return result
+        let lineHeight = liveLineHeight
+        return CGRect(x: 0, y: CGFloat(number - 1) * lineHeight,
+                      width: bounds.width, height: lineHeight)
     }
 
-    /// Character index of each line start (line 1 begins at 0; each \n or \r
-    /// opens the next line immediately after it).
-    private static func lineStarts(for string: NSString) -> [Int] {
-        var starts: [Int] = [0]
-        var i = 0
-        while i < string.length {
-            let ch = string.character(at: i)
-            if ch == 0x0A || ch == 0x0D { starts.append(i + 1) }
-            i += 1
+    /// 0-based line index for a UTF-16 character offset (binary search).
+    private func lineNumber(forUTF16Offset offset: Int) -> Int {
+        var low = 0
+        var high = lineStartOffsets.count
+        while low < high {
+            let mid = (low + high) / 2
+            if lineStartOffsets[mid] <= offset {
+                low = mid + 1
+            } else {
+                high = mid
+            }
         }
-        return starts
+        return low > 0 ? low - 1 : 0
+    }
+
+    /// Visible `(lineNumber, fragmentRect)` pairs intersecting `dirtyRect`, read
+    /// straight from the live layout manager. Only the visible lines are visited;
+    /// each number lands on its own fragment's origin so variable line heights can
+    /// never desynchronise the gutter from the code.
+    private func visibleNumberLines(in dirtyRect: NSRect) -> [(Int, CGRect, Bool)] {
+        guard let lm = sourceLayoutManager, lm.numberOfGlyphs > 0,
+              let tc = lm.textContainers.first,
+              dirtyRect.width > 0, dirtyRect.height > 0 else {
+            return arithmeticNumberLines(in: dirtyRect)
+        }
+        let glyphRange = lm.glyphRange(forBoundingRect: dirtyRect, in: tc)
+        guard glyphRange.length > 0 else { return [] }
+        var lines: [(Int, CGRect, Bool)] = []
+        lm.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, fragGlyphRange, _ in
+            let charRange = lm.characterRange(forGlyphRange: fragGlyphRange, actualGlyphRange: nil)
+            let lineIndex = self.lineNumber(forUTF16Offset: charRange.location)
+            // A fragment that does not begin at its logical line's first character
+            // is a soft-wrapped continuation — same line number, extra visual row.
+            let isContinuation = lineIndex < self.lineStartOffsets.count
+                && charRange.location != self.lineStartOffsets[lineIndex]
+            lines.append((lineIndex + 1, rect, isContinuation))
+        }
+        return lines
+    }
+
+    /// Uniform-spacing fallback for the passive (non-editable) render path.
+    private func arithmeticNumberLines(in dirtyRect: NSRect) -> [(Int, CGRect, Bool)] {
+        let lineHeight = liveLineHeight
+        guard lineHeight > 0, lineCount > 0 else { return [] }
+        let first = max(1, Int(floor(dirtyRect.minY / lineHeight)) + 1)
+        let last = min(lineCount, Int(ceil(dirtyRect.maxY / lineHeight)))
+        guard first <= last else { return [] }
+        // Uniform-pitch fallback has no soft-wrap context: every row is a real line.
+        return (first...last).map { ($0, rect(forLine: $0), false) }
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard gutter.width > 0 else { return }
+        guard gutter.width > 0, lineCount > 0 else { return }
 
         // The gutter background is a translucent glass surface applied by
         // `TextKit2ScrollSurface` (material + tint). This view stays transparent
         // so the frosted material behind it shows through as blur, not flat fill.
+        // Numbers, divider and the selection/current-line bands all span the
+        // gutter's own width (left overhang included).
+        let contentWidth = bounds.width
         let attrs: [NSAttributedString.Key: Any] = [
             .font: gutter.font,
             .foregroundColor: gutter.textColor,
         ]
+        // Resolve the live caret + selection straight from the adopted editor so
+        // the gutter tracks a drag in real time — no SwiftUI round-trip, which is
+        // why a dragged selection previously froze until mouse-up.
+        var activeLine = gutter.activeLine
+        var selectedLines = gutter.selectedLineRange
+        if let tv = sourceLayoutManager?.textContainers.first?.textView {
+            let len = sourceLayoutManager?.textStorage?.length ?? 0
+            let sel = tv.selectedRange()
+            if len > 0 {
+                activeLine = lineNumber(forUTF16Offset: min(sel.location, max(len - 1, 0))) + 1
+                if sel.length > 0, sel.location < len {
+                    let start = lineNumber(forUTF16Offset: sel.location) + 1
+                    let endIdx = max(sel.location, min(NSMaxRange(sel) - 1, max(len - 1, 0)))
+                    let end = lineNumber(forUTF16Offset: endIdx) + 1
+                    selectedLines = start...end
+                } else {
+                    selectedLines = nil
+                }
+            } else {
+                selectedLines = nil
+            }
+        }
+        let hasSelection = selectedLines != nil
 
-        for entry in lineOrigins {
-            let frame = entry.rect
-            guard frame.intersects(dirtyRect) else { continue }
-            let text = "\(entry.number)" as NSString
+        // ── Viewport-only drawing ──
+        // Exact per-line fragment rects from the live layout manager: only the
+        // visible lines are visited, and each number lands on its own line even
+        // when an emoji or a larger inline face changes that line's height.
+        let visibleLines = visibleNumberLines(in: dirtyRect)
+        guard !visibleLines.isEmpty else { return }
+        let firstVisible = visibleLines.first!.0
+        let lastVisible = visibleLines.last!.0
+
+        // ── Pass 1: selection band (multi-line selection) ──
+        // TextMate convention: full-width background over every selected line,
+        // with a single 1px border only on the run's top and bottom edges.
+        if hasSelection, let selectedLines {
+            let bandFirst = max(selectedLines.lowerBound, firstVisible)
+            let bandLast = min(selectedLines.upperBound, lastVisible)
+            if bandFirst <= bandLast {
+                let top = rect(forLine: bandFirst).minY
+                let bottom = rect(forLine: bandLast).maxY
+                gutter.selectionBackground.setFill()
+                NSRect(x: 0, y: top, width: contentWidth, height: bottom - top).fill()
+                // Edge borders only where the run meets an unselected line.
+                gutter.selectionBorder.setFill()
+                if bandFirst == selectedLines.lowerBound {
+                    NSRect(x: 0, y: top, width: contentWidth, height: 1).fill()
+                }
+                if bandLast == selectedLines.upperBound {
+                    NSRect(x: 0, y: bottom - 1, width: contentWidth, height: 1).fill()
+                }
+            }
+        }
+
+        // ── Pass 2: line numbers + caret band ──
+        for (number, frame, isContinuation) in visibleLines {
+            // Soft-wrapped continuation rows keep their line number but show a
+            // middot instead — TextMate's convention for "this is still line N".
+            let text = (isContinuation ? "·" : "\(number)") as NSString
             let size = text.size(withAttributes: attrs)
-            // Right-align numbers, leaving the fold gutter + gap to the separator.
-            let x = gutter.width - foldGutterWidth - numberGap - size.width
+            // Right-align numbers (and continuation middots), leaving the fold
+            // gutter + gap to the separator.
+            let x = contentWidth - foldGutterWidth - numberGap - size.width
             let y = frame.origin.y + (frame.height - size.height) / 2
             var numberAttributes = attrs
-            if entry.number == gutter.activeLine {
-                gutter.selectionBackground.setFill()
-                NSRect(x: 0, y: frame.minY, width: gutter.width, height: frame.height).fill()
+            let isSelected = selectedLines?.contains(number) ?? false
+            if isSelected {
                 numberAttributes[.foregroundColor] = gutter.selectionForeground
+            } else if number == activeLine && !hasSelection {
+                // Caret band only when nothing is selected — otherwise the
+                // selection band is the highlight and a second band is noise.
+                // Matches the code band's 0.40 alpha so both halves of the
+                // current-line gutter read as one continuous surface.
+                gutter.lineHighlightColor.withAlphaComponent(0.40).setFill()
+                NSRect(x: 0, y: frame.minY, width: contentWidth, height: frame.height).fill()
+                gutter.lineHighlightBorder.setFill()
+                NSRect(x: 0, y: frame.minY, width: contentWidth, height: 1).fill()
+                NSRect(x: 0, y: frame.maxY - 1, width: contentWidth, height: 1).fill()
+                numberAttributes[.foregroundColor] = gutter.activeLineForeground
+            }
+            if isContinuation {
+                // The band above still draws (same logical line), but the middot
+                // stays the dim ruler color — it is a marker, not a line number.
+                numberAttributes[.foregroundColor] = gutter.textColor
             }
             text.draw(at: NSPoint(x: x, y: y), withAttributes: numberAttributes)
         }
 
-        if let separator = gutter.separatorColor {
-            separator.setFill()
-            let sepRect = NSRect(x: gutter.width - 1, y: dirtyRect.minY,
-                                 width: 1, height: dirtyRect.height)
-            sepRect.fill()
+        // ── Vertical divider: 1px rule between the number column and code ──
+        // Drawn here (not in the material surface) because this view is the one
+        // guaranteed to render; a trailing `Color.frame(width: 1)` inside the
+        // fixed material ZStack was collapsing to zero height and vanishing.
+        if let divider = gutter.separatorColor {
+            divider.setFill()
+            NSRect(x: contentWidth - 1, y: 0, width: 1, height: bounds.height).fill()
         }
     }
 }
@@ -505,38 +785,136 @@ struct TextKit2ScrollSurface: View {
     let gutter: EditorGutterStyle
     let leadingChromeWidth: CGFloat
     let trailingChromeWidth: CGFloat
+    /// Chrome rows (tab strip) sitting above the surface: their height is added
+    /// to the top scroll inset so the first code line clears them at rest.
+    let topChromeInset: CGFloat
     /// Shared text storage from EditorViewController — when provided, editor becomes editable
     var sharedTextStorage: NSTextStorage? = nil
     var existingEditor: NSTextView? = nil
+    /// Incremental-search state owned by `EditorViewController`, rendered + scrolled here.
+    @ObservedObject var searchModel: QuickSearchModel
+    /// TextMate-style find & replace state, rendered + scrolled here too.
+    @ObservedObject var findReplace: FindReplaceModel
+    /// Wrap-column guide (vertical rule at a fixed character column).
+    let showWrapColumn: Bool
+    let wrapColumn: Int
+    /// Lightweight document shape. The scroll extent is derived from these two
+    /// numbers arithmetically — never from a full-document layout — so a keystroke
+    /// or scroll frame is O(1) instead of O(document).
+    let lineCount: Int
+    let maxLineWidth: Int
+
     @State private var scrollOffset: CGPoint = .zero
     @State private var activeLine = 1
+    @State private var selectedLineRange: ClosedRange<Int>? = nil
+
+    init(attributedString: NSAttributedString,
+         backgroundColor: Color,
+         gutter: EditorGutterStyle,
+         leadingChromeWidth: CGFloat,
+         trailingChromeWidth: CGFloat,
+         topChromeInset: CGFloat = 0,
+         sharedTextStorage: NSTextStorage? = nil,
+         existingEditor: NSTextView? = nil,
+         searchModel: QuickSearchModel,
+         findReplace: FindReplaceModel,
+         showWrapColumn: Bool = false,
+         wrapColumn: Int = 80,
+         lineCount: Int = 1,
+         maxLineWidth: Int = 0) {
+        self.attributedString = attributedString
+        self.backgroundColor = backgroundColor
+        self.gutter = gutter
+        self.leadingChromeWidth = leadingChromeWidth
+        self.trailingChromeWidth = trailingChromeWidth
+        self.topChromeInset = topChromeInset
+        self.sharedTextStorage = sharedTextStorage
+        self.existingEditor = existingEditor
+        self.searchModel = searchModel
+        self.findReplace = findReplace
+        self.showWrapColumn = showWrapColumn
+        self.wrapColumn = wrapColumn
+        self.lineCount = lineCount
+        self.maxLineWidth = maxLineWidth
+    }
+
+    /// Advance width of the document's monospaced face (the code editor uses one
+    /// uniform font, so a single "0" measurement is exact for every line).
+    private static func monospaceAdvance(for attributedString: NSAttributedString,
+                                         fallbackLineHeight: CGFloat) -> CGFloat {
+        if attributedString.length > 0,
+           let font = attributedString.attribute(.font, at: 0, effectiveRange: nil) as? NSFont {
+            let advance = ("0" as NSString).size(withAttributes: [.font: font]).width
+            if advance > 0 { return advance }
+        }
+        return max(fallbackLineHeight * 0.6, 1)
+    }
+
+    /// The live per-line pitch from the adopted editor's layout manager — the same
+    /// value `GutterRenderView` uses. Deriving the scroll extent + reveal targets
+    /// from this (rather than the synthetic `gutter.lineHeight` seed) keeps the
+    /// vertical extent exactly matched to the rendered text for any font/size/spacing.
+    private static func liveLineHeight(_ lm: NSLayoutManager?, fallback: CGFloat) -> CGFloat {
+        guard let lm = lm, lm.numberOfGlyphs > 0 else { return fallback }
+        let height = lm.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
+        return height > 0 ? height : fallback
+    }
 
     var body: some View {
         GeometryReader { proxy in
-            // Two visual code lines of breathing room below the floating title.
+            // Two visual code lines of breathing room below the floating title,
+            // plus whatever chrome rows (the tab strip) sit above the surface.
             // This is part of the scroll content, so it naturally disappears as
             // the user scrolls down instead of becoming another fixed toolbar.
-            let topContentInset: CGFloat = 34
-            let docSize = TextKit2Layout.measure(attributedString, containerWidth: 0)
+            let topContentInset: CGFloat = EditorChromeMetrics.baseContentInset + topChromeInset
+                + (topChromeInset > 0 ? EditorChromeMetrics.tabBarContentClearance : 0)
             let visibleEditorWidth = max(proxy.size.width - leadingChromeWidth - trailingChromeWidth, 1)
             let viewportTextWidth = max(visibleEditorWidth - gutter.width, 1)
-            let textContentWidth = max(docSize.width + 24, viewportTextWidth)
-            let renderedHeight = max(docSize.height, proxy.size.height - topContentInset)
+            // Live pitch from the adopted editor — keeps the scroll extent locked
+            // to the real text height even when the seed drifts (font/size override).
+            let effectiveLineHeight = Self.liveLineHeight(existingEditor?.layoutManager,
+                                                          fallback: gutter.lineHeight)
+            // Arithmetic extent from document shape — no layout, no copy.
+            let charWidth = Self.monospaceAdvance(for: attributedString,
+                                                  fallbackLineHeight: gutter.lineHeight)
+            let docWidth = CGFloat(max(maxLineWidth, 1)) * charWidth
+            let docHeight = CGFloat(max(lineCount, 1)) * effectiveLineHeight
+            let textContentWidth = max(docWidth + 24, viewportTextWidth)
+            let renderedHeight = max(docHeight, proxy.size.height - topContentInset)
+            // Reach toward the floating sidebar sheet only when it is present.
+            let leftOverhang: CGFloat = leadingChromeWidth > 0 ? gutter.leftOverhang : 0
             let numbersOnlyGutter = EditorGutterStyle(
                 activeLine: activeLine,
+                selectedLineRange: selectedLineRange,
                 width: gutter.width,
                 font: gutter.font,
                 lineHeight: gutter.lineHeight,
                 textColor: gutter.textColor,
-                separatorColor: nil,
+                separatorColor: gutter.separatorColor,
                 backgroundColor: nil,
+                lineHighlightColor: gutter.lineHighlightColor,
                 selectionBackground: gutter.selectionBackground,
-                selectionForeground: gutter.selectionForeground
+                selectionForeground: gutter.selectionForeground,
+                selectionBorder: gutter.selectionBorder,
+                lineHighlightBorder: gutter.lineHighlightBorder,
+                leftOverhang: leftOverhang
             )
+
+            // Vertical center of the search-reveal target, in the scroll content's
+            // own coordinate space (relative to the HStack top). The reveal anchor
+            // below is positioned here and scrolled into view on each match.
+            // Exact layout-manager Y when available; arithmetic estimate as a
+            // fallback while the adopted editor's layout is still warming up.
+            let revealY = searchModel.currentMatchCenterY
+                ?? CGFloat((searchModel.pendingRevealLine ?? 1) - 1) * effectiveLineHeight
+                    + effectiveLineHeight / 2
+            let findReplaceRevealY = CGFloat((findReplace.pendingRevealLine ?? 1) - 1) * effectiveLineHeight
+                + effectiveLineHeight / 2
 
             ZStack(alignment: .topLeading) {
                 Color(backgroundColor)
 
+                ScrollViewReader { scrollProxy in
                 ScrollView([.vertical, .horizontal], showsIndicators: true) {
                     HStack(alignment: .top, spacing: 0) {
                         // These are real scroll-content spacers, rather than
@@ -548,17 +926,40 @@ struct TextKit2ScrollSurface: View {
                             .frame(width: leadingChromeWidth + gutter.width,
                                    height: renderedHeight)
 
-                        if let storage = sharedTextStorage {
-                            TextKit2EditorRepresentable(attributedString: attributedString, sharedTextStorage: storage, existingEditor: existingEditor)
-                                .frame(width: textContentWidth, height: renderedHeight)
-                        } else {
-                            TextKit2RenderRepresentable(attributedString: attributedString)
-                                .frame(width: textContentWidth, height: renderedHeight)
+                        ZStack(alignment: .topLeading) {
+                            if let storage = sharedTextStorage {
+                                TextKit2EditorRepresentable(attributedString: attributedString, sharedTextStorage: storage, existingEditor: existingEditor)
+                                    .frame(width: textContentWidth, height: renderedHeight)
+                            } else {
+                                TextKit2RenderRepresentable(attributedString: attributedString)
+                                    .frame(width: textContentWidth, height: renderedHeight)
+                            }
+
+                            // Wrap-column guide — a subtle vertical rule at the
+                            // fixed character column. Scrolls with the text.
+                            if showWrapColumn {
+                                Rectangle()
+                                    .fill(Color(nsColor: gutter.separatorColor ?? NSColor(white: 0.5, alpha: 0.35)))
+                                    .frame(width: 1, height: renderedHeight)
+                                    .offset(x: EditorChromeMetrics.codeLeadingPadding + CGFloat(wrapColumn) * charWidth)
+                                    .allowsHitTesting(false)
+                            }
                         }
+                        .frame(width: textContentWidth, height: renderedHeight)
 
                         Color.clear
                             .frame(width: trailingChromeWidth,
                                    height: renderedHeight)
+                    }
+                    .overlay(alignment: .topLeading) {
+                        Color.clear
+                            .frame(width: 1, height: 1)
+                            .id("quick-search-reveal")
+                            .position(x: 0, y: revealY)
+                        Color.clear
+                            .frame(width: 1, height: 1)
+                            .id("find-replace-reveal")
+                            .position(x: 0, y: findReplaceRevealY)
                     }
                     .padding(.top, topContentInset)
                     .frame(minWidth: visibleEditorWidth,
@@ -567,7 +968,16 @@ struct TextKit2ScrollSurface: View {
                 }
                 // Document-height overlays must not enlarge the scroll viewport.
                 .frame(width: proxy.size.width, height: proxy.size.height)
+                // Progressive blur lives on the *scroll content only* — the
+                // background color must stay solid to the very top of the window.
+                .scrollEdgeEffectStyle(.soft, for: [.top, .leading, .trailing])
                 .scrollIndicators(.visible)
+                // The vertical scroller stops below the floating chrome (tab strip
+                // when visible, the title row otherwise) so it never runs up behind
+                // the transparent top bars; the code itself keeps scrolling past
+                // them into the progressive blur.
+                .contentMargins(.top, EditorChromeMetrics.scrollIndicatorTopInset(showsTabBar: topChromeInset > 0),
+                                for: .scrollIndicators)
                 // Keep the bottom scroller out of the fixed line-number column.
                 // The trailing safe-area bar independently keeps its end clear
                 // of Pythia when that inspector is visible.
@@ -583,6 +993,19 @@ struct TextKit2ScrollSurface: View {
                 } action: { _, newOffset in
                     scrollOffset = newOffset
                 }
+                .onChange(of: searchModel.revealToken) { _, _ in
+                    guard searchModel.pendingRevealLine != nil else { return }
+                    DispatchQueue.main.async {
+                        scrollProxy.scrollTo("quick-search-reveal", anchor: .center)
+                    }
+                }
+                .onChange(of: findReplace.revealToken) { _, _ in
+                    guard findReplace.pendingRevealLine != nil else { return }
+                    DispatchQueue.main.async {
+                        scrollProxy.scrollTo("find-replace-reveal", anchor: .center)
+                    }
+                }
+                }
 
                 // One uninterrupted fixed material surface above the scrolling
                 // code. Only the numbers participate in the native progressive
@@ -591,10 +1014,13 @@ struct TextKit2ScrollSurface: View {
                     Rectangle().fill(.ultraThinMaterial)
                     Color(nsColor: (gutter.backgroundColor ?? NSColor.clear).withAlphaComponent(1)).opacity(0.86)
                     if let separator = gutter.separatorColor {
-                        Color(nsColor: separator).frame(width: 1)
+                        // Rectangle (not Color) guarantees a full-height 1px rule;
+                        // a bare Color.frame(width: 1) collapses to zero height and
+                        // the divider silently disappears.
+                        Rectangle().fill(Color(nsColor: separator)).frame(width: 1)
                     }
                 }
-                .frame(width: gutter.width)
+                .frame(width: gutter.width + leftOverhang)
                 .frame(maxHeight: .infinity)
                 .mask {
                     if leadingChromeWidth == 0 {
@@ -608,7 +1034,7 @@ struct TextKit2ScrollSurface: View {
                         Color.black
                     }
                 }
-                .offset(x: leadingChromeWidth)
+                .offset(x: leadingChromeWidth - leftOverhang)
                 .allowsHitTesting(false)
 
                 // The numbers must sit above the material (otherwise it blurs
@@ -620,20 +1046,78 @@ struct TextKit2ScrollSurface: View {
                                          contentHeight: renderedHeight,
                                          verticalOffset: topContentInset - scrollOffset.y,
                                          sourceLayoutManager: existingEditor?.layoutManager)
-                    .frame(width: gutter.width, height: proxy.size.height, alignment: .top)
-                    .offset(x: leadingChromeWidth)
+                    .frame(width: gutter.width + leftOverhang, height: proxy.size.height, alignment: .top)
+                    .offset(x: leadingChromeWidth - leftOverhang)
                     .allowsHitTesting(false)
+
+                // Incremental quick-search bar (Ctrl+S), floating above the
+                // status bar. Kept in this ZStack so it hovers over the code
+                // and never enlarges the scroll viewport. Bottom-aligned and
+                // inset past the gutter + chrome so it stays clear of the
+                // sidebar and the line-number column.
+                if searchModel.isVisible {
+                    HStack {
+                        Spacer()
+                        QuickSearchBar(model: searchModel)
+                        Spacer()
+                    }
+                    .padding(.leading, leadingChromeWidth + gutter.width)
+                    .padding(.trailing, trailingChromeWidth)
+                    .padding(.bottom, 30)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(2)
+                }
+
+                // TextMate-style find & replace dialog (⌘F / ⌘⌥F). Floats above
+                // the same bottom band, polymorphic around scope + replace mode.
+                if findReplace.isVisible {
+                    HStack {
+                        Spacer()
+                        FindReplaceBar(model: findReplace)
+                        Spacer()
+                    }
+                    .padding(.leading, leadingChromeWidth + gutter.width)
+                    .padding(.trailing, trailingChromeWidth)
+                    .padding(.bottom, 30)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(3)
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .clipped()
+            .animation(.easeInOut(duration: 0.18), value: searchModel.isVisible)
+            .animation(.easeInOut(duration: 0.18), value: findReplace.isVisible)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onReceive(NotificationCenter.default.publisher(for: NSTextView.didChangeSelectionNotification)) { notification in
             guard let view = notification.object as? NSTextView, view === existingEditor else { return }
             let string = view.string as NSString
-            let cursor = min(view.selectedRange().location, string.length)
-            activeLine = string.substring(to: cursor).reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+            let sel = view.selectedRange()
+            let cursor = min(sel.location, string.length)
+            activeLine = Self.lineNumber(at: cursor, in: string)
+            if sel.length > 0, sel.location < string.length {
+                let start = Self.lineNumber(at: sel.location, in: string)
+                let endIdx = max(sel.location, min(NSMaxRange(sel) - 1, max(string.length - 1, 0)))
+                let end = Self.lineNumber(at: endIdx, in: string)
+                selectedLineRange = start...end
+            } else {
+                selectedLineRange = nil
+            }
         }
+    }
+
+    /// 1-based line number for a character index, counting only newlines.
+    private static func lineNumber(at index: Int, in string: NSString) -> Int {
+        let end = min(max(index, 0), string.length)
+        var line = 1
+        var i = 0
+        while i < end {
+            if string.character(at: i) == 0x0A { line += 1 }
+            i += 1
+        }
+        return line
     }
 }
 
@@ -686,7 +1170,7 @@ private struct ProgressiveGutterNumbers: View {
         GutterRenderRepresentable(attributedString: attributedString,
                                   gutter: gutter,
                                   sourceLayoutManager: sourceLayoutManager)
-            .frame(width: gutter.width, height: contentHeight)
+            .frame(width: gutter.width + gutter.leftOverhang, height: contentHeight)
             .offset(y: verticalOffset)
     }
 }

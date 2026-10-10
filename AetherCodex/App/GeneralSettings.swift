@@ -37,7 +37,7 @@ final class GeneralSettings: ObservableObject {
     static let shared = GeneralSettings()
 
     private enum Key: String {
-        case newFileMode, newFileLanguageMode, newFileLanguageName
+        case newFileMode, newFileLanguageMode, newFileLanguageName, alwaysShowTabBar, gitExternalEditor
     }
 
     /// Languages offered for the "specific language" choice — kept in sync with
@@ -56,6 +56,15 @@ final class GeneralSettings: ObservableObject {
     @Published var newFileLanguageName: String {
         didSet { defaults.set(newFileLanguageName, forKey: Key.newFileLanguageName.rawValue) }
     }
+    /// Keep the editor tab strip visible even with a single open document.
+    @Published var alwaysShowTabBar: Bool {
+        didSet { defaults.set(alwaysShowTabBar, forKey: Key.alwaysShowTabBar.rawValue) }
+    }
+    /// External Git editor command for the diff "open in external editor" action.
+    /// Empty string = auto-detect (`git config core.editor`, then env vars).
+    @Published var gitExternalEditor: String {
+        didSet { defaults.set(gitExternalEditor, forKey: Key.gitExternalEditor.rawValue) }
+    }
 
     private let defaults = UserDefaults.standard
 
@@ -63,6 +72,8 @@ final class GeneralSettings: ObservableObject {
         newFileMode = NewFileMode(rawValue: defaults.string(forKey: Key.newFileMode.rawValue) ?? "") ?? .flash
         newFileLanguageMode = NewFileLanguageMode(rawValue: defaults.string(forKey: Key.newFileLanguageMode.rawValue) ?? "") ?? .random
         newFileLanguageName = defaults.string(forKey: Key.newFileLanguageName.rawValue) ?? "swift"
+        alwaysShowTabBar = defaults.bool(forKey: Key.alwaysShowTabBar.rawValue)
+        gitExternalEditor = defaults.string(forKey: Key.gitExternalEditor.rawValue) ?? ""
     }
 
     /// Resolve the language a fresh flash conjuration should speak. Safe to call

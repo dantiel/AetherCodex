@@ -8,6 +8,17 @@ final class FileItem: NSObject {
     var children: [FileItem]?
     var isLoaded = false
 
+    /// Global veil toggle — when lifted, dotfiles enter every directory.
+    /// A single switch for the whole tree keeps the hermetic symmetry:
+    /// what is hidden is hidden everywhere, or revealed everywhere.
+    static var showsHiddenFiles = false
+
+    /// Forget loaded children so the next expansion re-reads the disk.
+    func invalidate() {
+        children = nil
+        isLoaded = false
+    }
+
     init(url: URL, isDirectory: Bool) {
         self.url = url
         self.name = url.lastPathComponent
@@ -23,7 +34,7 @@ final class FileItem: NSObject {
         guard let contents = try? fm.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
+            options: FileItem.showsHiddenFiles ? [] : [.skipsHiddenFiles]
         ) else {
             children = []
             return

@@ -76,6 +76,12 @@ final class SessionState {
         set { defaults.set(newValue, forKey: "session.lastOpenFile") }
     }
 
+    /// All open document tabs, in order — restored on launch as separate tabs.
+    var openTabs: [String] {
+        get { defaults.stringArray(forKey: "session.openTabs") ?? [] }
+        set { defaults.set(newValue, forKey: "session.openTabs") }
+    }
+
     var windowFrame: SessionData.WindowFrame? {
         get {
             guard let dict = defaults.dictionary(forKey: "session.windowFrame"),

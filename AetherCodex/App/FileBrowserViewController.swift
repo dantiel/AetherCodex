@@ -7,8 +7,65 @@ final class FileBrowserScrollModel: ObservableObject {
     @Published var revision = 0
     @Published var foreground: NSColor = .labelColor
     @Published var accent: NSColor = .controlAccentColor
+    /// Expanded directory paths — the single source of truth for node disclosure.
+    /// (A per-node `@State` could not be driven from outside the view tree.)
+    @Published var expandedPaths: Set<String> = []
+    /// Path to scroll into view once the tree has realized it (reveal target).
+    @Published var revealID: String?
+    /// Lift the veil — show dotfiles in the tree (wired to FileItem.showsHiddenFiles).
+    @Published var showsHidden = false
     var open: (URL) -> Void = { _ in }
-    var navigate: (URL) -> Void = { _ in }
+
+    /// Action bar handlers — wired by FileBrowserViewController (the SwiftUI
+    /// surface has no AppKit knowledge, so the controller lends its hands).
+    var reload: () -> Void = {}
+    var collapseAll: () -> Void = {}
+    var openFolder: () -> Void = {}
+    var goToFile: () -> Void = {}
+
+    func isExpanded(_ url: URL) -> Bool { expandedPaths.contains(url.path) }
+
+    func toggle(_ url: URL) {
+        if expandedPaths.contains(url.path) { expandedPaths.remove(url.path) }
+        else { expandedPaths.insert(url.path) }
+    }
+
+    /// Reveal a file *inside the current root* — expand every ancestor folder,
+    /// select the file, and request a scroll-to. The root is never re-homed;
+    /// files outside the root are ignored (the caller falls back to openFolder).
+    func reveal(_ url: URL) {
+        guard let root = root else { return }
+        let rootPath = root.url.path
+        let filePath = url.path
+        guard filePath != rootPath, filePath.hasPrefix(rootPath + "/") else { return }
+
+        var ancestorDirs: [URL] = []
+        var dir = url.deletingLastPathComponent()
+        while dir.path != rootPath, dir.path.hasPrefix(rootPath + "/") {
+            ancestorDirs.append(dir)
+            dir = dir.deletingLastPathComponent()
+        }
+        ancestorDirs.reverse()
+
+        var node = root
+        var newExpanded = expandedPaths
+        for dirURL in ancestorDirs {
+            node.loadChildren()
+            newExpanded.insert(dirURL.path)
+            if let child = node.children?.first(where: { $0.url.path == dirURL.path }) {
+                node = child
+            } else {
+                let placeholder = FileItem(url: dirURL, isDirectory: true)
+                node.children = (node.children ?? []) + [placeholder]
+                node = placeholder
+            }
+        }
+        node.loadChildren()
+
+        expandedPaths = newExpanded
+        selection = url
+        revealID = filePath
+    }
 }
 
 /// SwiftUI owns this scroller and its bar in the same hosting graph, allowing
@@ -16,209 +73,80 @@ final class FileBrowserScrollModel: ObservableObject {
 @available(macOS 26.0, *)
 private struct FileBrowserScrollContent: View {
     @ObservedObject var model: FileBrowserScrollModel
+    @ObservedObject var chrome: EditorChromeState
 
     var body: some View {
-        ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(model.root?.children ?? [], id: \.url) { item in
-                    FileBrowserNode(item: item, model: model)
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                LazyVStack(alignment: .leading, spacing: 3) {
+                    ForEach(model.root?.children ?? [], id: \.url) { item in
+                        FileBrowserNode(item: item, model: model)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+            .onChange(of: model.revealID) { id in
+                guard let id else { return }
+                // Let the expanded ancestors realize their rows before scrolling;
+                // a lazy stack cannot jump to a row it has not materialized yet.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                    withAnimation { proxy.scrollTo(id, anchor: .center) }
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .scrollEdgeEffectStyle(.soft, for: .top)
         .safeAreaBar(edge: .top, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                Color.clear.frame(height: 64)
-                PathBreadcrumbHeader(model: model)
-                    .padding(.horizontal, 6)
-                    .frame(height: 28)
-            }
-        }
-    }
-}
-
-/// One breadcrumb segment — name plus the URL it resolves to.
-private struct PathComponent: Identifiable {
-    let id = UUID()
-    let name: String
-    let url: URL
-}
-
-/// Glass breadcrumb trail with an editable monospaced path field.
-/// Pure SwiftUI — no AppKit controls.
-@available(macOS 26.0, *)
-private struct PathBreadcrumbHeader: View {
-    @ObservedObject var model: FileBrowserScrollModel
-    @State private var isEditing = false
-    @State private var pathText = ""
-    @State private var invalidPath = false
-    @FocusState private var focused: Bool
-
-    private func components(from path: String) -> [PathComponent] {
-        var result = [PathComponent(name: "/", url: URL(fileURLWithPath: "/"))]
-        var running = URL(fileURLWithPath: "/")
-        for part in URL(fileURLWithPath: path).pathComponents.dropFirst() where part != "/" {
-            running.appendPathComponent(part)
-            result.append(PathComponent(name: part, url: running))
-        }
-        return result
-    }
-
-    private func navigateToPath() {
-        var expanded = pathText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if expanded.hasPrefix("~") {
-            expanded = (expanded as NSString).expandingTildeInPath
-        }
-        let standardized = (expanded as NSString).standardizingPath
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: standardized, isDirectory: &isDir),
-              isDir.boolValue else {
-            invalidPath = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                invalidPath = false
-            }
-            return
-        }
-        // Clear any lingering error flash so a successful navigation followed
-        // by a quick re-entry into edit mode never shows a stale red border.
-        invalidPath = false
-        model.navigate(URL(fileURLWithPath: standardized))
-        isEditing = false
-    }
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if isEditing {
-                inputField
-                    .transition(.opacity)
-            } else {
-                breadcrumbs
-                    .transition(.opacity)
-            }
-        }
-        .animation(.easeInOut(duration: 0.18), value: isEditing)
-        .onChange(of: isEditing) { _, editing in
-            if editing {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    focused = true
-                }
-            }
-        }
-    }
-
-    // MARK: Breadcrumb mode
-
-    private var breadcrumbs: some View {
-        HStack(spacing: 2) {
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 2) {
-                        let comps = components(from: model.root?.url.path ?? "/")
-                        ForEach(Array(comps.enumerated()), id: \.element.id) { index, comp in
-                            let isLast = index == comps.count - 1
-                            Button {
-                                model.navigate(comp.url)
-                            } label: {
-                                Text(comp.name)
-                                    .font(.system(size: 11, weight: isLast ? .bold : .medium))
-                                    .lineLimit(1)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Color(nsColor: model.foreground).opacity(isLast ? 1.0 : 0.85))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
-                            .id(comp.id)
-                            if !isLast {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 8, weight: .semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
+            VStack(spacing: 0) {
+                // The breadcrumb + sidebar toggle live in the enclosing sidebar
+                // safe-area bar; this column reserves the traffic-light band
+                // and the header height so scroll rows begin below both.
+                Color.clear.frame(height: 46)
+                HStack(spacing: 2) {
+                    actionButton(model.showsHidden ? "eye" : "eye.slash",
+                                 help: model.showsHidden ? "Hide hidden files" : "Show hidden files (the Veil)",
+                                 active: model.showsHidden) {
+                        model.showsHidden.toggle()
+                        model.reload()
                     }
-                    .padding(.trailing, 4)
-                }
-                .onChange(of: model.root?.url.path) { _, _ in
-                    if let last = components(from: model.root?.url.path ?? "/").last {
-                        proxy.scrollTo(last.id, anchor: .trailing)
+                    actionButton("arrow.clockwise", help: "Refresh file list", disabled: model.root == nil) {
+                        model.reload()
+                    }
+                    actionButton("rectangle.compress.vertical", help: "Collapse all folders") {
+                        model.collapseAll()
+                    }
+                    actionButton("folder.badge.plus", help: "Open folder…") {
+                        model.openFolder()
+                    }
+                    actionButton("magnifyingglass", help: "Go to file…", disabled: model.root == nil) {
+                        model.goToFile()
                     }
                 }
-                .onAppear {
-                    if let last = components(from: model.root?.url.path ?? "/").last {
-                        proxy.scrollTo(last.id, anchor: .trailing)
-                    }
-                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                Divider().opacity(0.4)
             }
-            Button {
-                pathText = model.root?.url.path ?? ""
-                isEditing = true
-            } label: {
-                Image(systemName: "pencil")
-                    .font(.system(size: 9, weight: .medium))
-                    .frame(width: 22, height: 22)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color(nsColor: model.foreground).opacity(0.55))
-            .background(.ultraThinMaterial, in: Circle())
-            .overlay(Circle().strokeBorder(.white.opacity(0.10), lineWidth: 0.5))
-            .help("Edit path")
         }
+        .sidebarTabBar(chrome)
     }
 
-    // MARK: Input mode
-
-    private var inputField: some View {
-        HStack(spacing: 4) {
-            TextField("Path", text: $pathText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 11, design: .monospaced))
-                .focused($focused)
-                .onSubmit { navigateToPath() }
-                .onExitCommand { isEditing = false }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .strokeBorder(
-                            invalidPath ? Color.red.opacity(0.85)
-                                        : (focused ? Color.accentColor.opacity(0.6) : .white.opacity(0.18)),
-                            lineWidth: invalidPath ? 1.0 : 0.75
-                        )
-                )
-                .foregroundStyle(invalidPath ? .red : Color(nsColor: model.foreground))
-
-            Button {
-                navigateToPath()
-            } label: {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .semibold))
-                    .frame(width: 22, height: 22)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-            .background(.ultraThinMaterial, in: Circle())
-            .help("Navigate to path")
-
-            Button {
-                isEditing = false
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .frame(width: 22, height: 22)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color(nsColor: model.foreground).opacity(0.6))
-            .background(.ultraThinMaterial, in: Circle())
-            .help("Cancel")
+    /// A quiet square action in the pane's top bar — secondary by default,
+    /// accent when active (the veil lifted), disabled dims to a whisper.
+    private func actionButton(_ symbol: String, help: String,
+                              disabled: Bool = false, active: Bool = false,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 24, height: 24)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .foregroundStyle(disabled ? Color.secondary.opacity(0.35)
+                                 : active ? Color(nsColor: model.accent) : Color.secondary)
+        .disabled(disabled)
+        .help(help)
     }
 }
 
@@ -226,43 +154,62 @@ private struct PathBreadcrumbHeader: View {
 private struct FileBrowserNode: View {
     let item: FileItem
     @ObservedObject var model: FileBrowserScrollModel
-    @State private var expanded = false
+    @State private var hovered = false
+
+    private var isSelected: Bool { model.selection == item.url }
+    private var isExpanded: Bool { model.isExpanded(item.url) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             Button {
                 if item.isDirectory {
                     item.loadChildren()
-                    expanded.toggle()
+                    model.toggle(item.url)
                 } else {
                     model.selection = item.url
                     model.open(item.url)
                 }
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: item.isDirectory ? (expanded ? "chevron.down" : "chevron.right") : "doc.text")
-                        .frame(width: 12)
-                        .foregroundStyle(Color(nsColor: model.accent))
-                    if item.isDirectory { Image(systemName: "folder").foregroundStyle(Color(nsColor: model.accent)) }
-                    Text(item.name).lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 8) {
+                    if item.isDirectory {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(Color(nsColor: model.accent).opacity(0.8))
+                            .frame(width: 12)
+                        Image(systemName: isExpanded ? "folder.fill" : "folder")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color(nsColor: model.accent))
+                    } else {
+                        Image(systemName: FileIcon.symbol(for: item.url))
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color(nsColor: model.foreground).opacity(0.7))
+                            .frame(width: 18)
+                    }
+                    Text(item.name)
+                        .fontWeight(item.isDirectory ? .semibold : .regular)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     Spacer(minLength: 0)
                 }
-                .font(.system(size: 12))
+                .font(.system(size: 13))
                 .foregroundStyle(Color(nsColor: model.foreground))
-                .padding(.horizontal, 6)
-                .frame(height: 24)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
-                .background(model.selection == item.url ? Color(nsColor: model.accent).opacity(0.22) : Color.clear,
-                            in: RoundedRectangle(cornerRadius: 5))
+                .background(Color(nsColor: model.accent).opacity(isSelected ? 0.20 : hovered ? 0.08 : 0),
+                            in: RoundedRectangle(cornerRadius: 8))
             }
             .buttonStyle(.plain)
-            if expanded {
+            .onHover { hovered = $0 }
+            if isExpanded {
                 ForEach(item.children ?? [], id: \.url) { child in
                     FileBrowserNode(item: child, model: model)
                 }
-                .padding(.leading, 14)
+                .padding(.leading, 16)
             }
         }
+        .id(item.url.path)
     }
 }
 
@@ -282,6 +229,11 @@ private final class TransparentRowView: NSTableRowView {
 final class FileBrowserViewController: NSViewController {
     private let scrollModel = FileBrowserScrollModel()
 
+    /// Shared chrome — the SwiftUI pane docks the sidebar's floating tab bar in
+    /// its own hosting graph, so it needs the roster and the selection. Injected
+    /// by the window controller before the view is loaded.
+    var chrome: EditorChromeState!
+
     // MARK: - Views
 
     @objc private(set) var outlineView: NSOutlineView!
@@ -294,6 +246,15 @@ final class FileBrowserViewController: NSViewController {
     func reloadOutline() {
         outlineView?.reloadData()
         scrollModel.revision += 1
+    }
+
+    /// Forget every loaded child in the tree (recursively) — refresh and the
+    /// veil toggle call this so the next expansion re-reads the disk.
+    private func invalidateTree(_ node: FileItem?) {
+        guard let node else { return }
+        let kids = node.children
+        node.invalidate()
+        for child in kids ?? [] { invalidateTree(child) }
     }
     
     /// Theme foreground color applied to sidebar text.
@@ -387,8 +348,25 @@ final class FileBrowserViewController: NSViewController {
         if #available(macOS 26.0, *) {
             scrollModel.root = rootItem
             scrollModel.open = { [weak self] url in self?.onFileOpen?(url) }
-            scrollModel.navigate = { [weak self] url in self?.openFolder(url) }
-            let host = NSHostingView(rootView: FileBrowserScrollContent(model: scrollModel))
+            scrollModel.reload = { [weak self] in
+                guard let self else { return }
+                FileItem.showsHiddenFiles = self.scrollModel.showsHidden
+                let tree = self.scrollModel.root
+                self.invalidateTree(tree)
+                self.reloadOutline()
+            }
+            scrollModel.collapseAll = { [weak self] in
+                self?.scrollModel.expandedPaths = []
+            }
+            scrollModel.openFolder = { [weak self] in
+                self?.browseForFolder()
+            }
+            scrollModel.goToFile = { [weak self] in
+                guard let self, let root = self.scrollModel.root?.url else { return }
+                let opener = self.scrollModel.open
+                GoToFilePanel.show(projectRoot: root, onSelect: opener)
+            }
+            let host = NSHostingView(rootView: FileBrowserScrollContent(model: scrollModel, chrome: chrome))
             host.translatesAutoresizingMaskIntoConstraints = false
             // Keep the old outline available to existing controller callers;
             // only the SwiftUI scroll surface participates in visible layout.
@@ -453,7 +431,7 @@ final class FileBrowserViewController: NSViewController {
         scrollView.automaticallyAdjustsContentInsets = false
         // The enclosing SwiftUI safeAreaBar already contributes 64 pt. These
         // smaller internal insets account only for the path label and row gap.
-        scrollView.contentInsets = NSEdgeInsets(top: 28, left: 0, bottom: 0, right: 0)
+        scrollView.contentInsets = NSEdgeInsets(top: 28, left: 10, bottom: 0, right: 10)
         scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
 
         view.addSubview(scrollView)
@@ -480,6 +458,20 @@ final class FileBrowserViewController: NSViewController {
         rootItem = item
     }
 
+    /// Reveal a file inside the current root without re-homing the sidebar:
+    /// expand its ancestor folders, select it, and scroll it into view. Returns
+    /// false when the file lives outside the current root (caller should fall
+    /// back to `openFolder`).
+    @discardableResult
+    func revealFile(_ url: URL) -> Bool {
+        guard let root = rootItem else { return false }
+        let rootPath = root.url.path
+        let filePath = url.path
+        guard filePath.hasPrefix(rootPath + "/") else { return false }
+        scrollModel.reveal(url)
+        return true
+    }
+
     /// Present an open-panel and set the root.
     func browseForFolder() {
         let panel = NSOpenPanel()
@@ -496,9 +488,14 @@ final class FileBrowserViewController: NSViewController {
 
     @objc private func doubleClicked(_ sender: Any) {
         let row = outlineView.clickedRow
-        guard row >= 0, let item = outlineView.item(atRow: row) as? FileItem,
-              !item.isDirectory else { return }
-        onFileOpen?(item.url)
+        guard row >= 0, let item = outlineView.item(atRow: row) as? FileItem else { return }
+        if item.isDirectory {
+            // Double-clicking a folder drills into it: it becomes the browser's
+            // top level and the breadcrumb's current (topmost) location.
+            openFolder(item.url)
+        } else {
+            onFileOpen?(item.url)
+        }
     }
 }
 
@@ -579,21 +576,8 @@ extension FileBrowserViewController: NSOutlineViewDelegate {
             cell!.imageView?.contentTintColor = .secondaryLabelColor
             cell!.textField?.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         } else {
-            let ext = fileItem.url.pathExtension.lowercased()
-            let symbol: String
-            switch ext {
-            case "swift": symbol = "swift"
-            case "rb":    symbol = "ruby"
-            case "py":    symbol = "py"
-            case "js","ts": symbol = "js"
-            case "c","h","cpp","hpp": symbol = "c"
-            case "go":    symbol = "go"
-            case "rs":    symbol = "rust"
-            case "yaml","yml": symbol = "yaml"
-            case "json","plist": symbol = "json"
-            case "md","txt","rdoc": symbol = "doc.text"
-            default:      symbol = "doc"
-            }
+            // Shared registry — the same glyph the tab strip and window title use.
+            let symbol = FileIcon.symbol(for: fileItem.url)
             cell!.imageView?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "file")
             cell!.imageView?.contentTintColor = .tertiaryLabelColor
             cell!.textField?.font = NSFont.systemFont(ofSize: 12, weight: .regular)

@@ -7,11 +7,62 @@ import CSafeLayout
 /// SIGILL crashes from AppKit private layout methods when the glyph tree
 /// is transiently inconsistent after text storage mutations.
 private final class HermeticTextView: NSTextView {
+    /// Weak back-pointer so ⌥-drag column selection and ⌥-click multi-caret can
+    /// be routed into `EditorViewController` (which owns the layout helpers).
+    weak var multiCaretOwner: EditorViewController?
+
+    private var optionDragActive = false
+    private var optionDragBegan = false
+    private var optionDragAnchor: NSPoint = .zero
+
     override func draw(_ dirtyRect: NSRect) {
         if !SafeCallBlock({ super.draw(dirtyRect) }) {
             backgroundColor.setFill()
             dirtyRect.fill()
         }
+    }
+
+    // ── ⌥ (Option) mouse: click = add caret, drag = column (box) selection ──
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.option) {
+            optionDragActive = true
+            optionDragBegan = false
+            optionDragAnchor = convert(event.locationInWindow, from: nil)
+            multiCaretOwner?.beginOptionMouse(at: optionDragAnchor)
+            return
+        }
+        optionDragActive = false
+        multiCaretOwner?.resetColumnSelectionIfNeeded()
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        if optionDragActive {
+            let p = convert(event.locationInWindow, from: nil)
+            if !optionDragBegan {
+                let d = hypot(p.x - optionDragAnchor.x, p.y - optionDragAnchor.y)
+                if d > 3 { optionDragBegan = true }
+            }
+            if optionDragBegan {
+                multiCaretOwner?.dragColumnSelection(to: p)
+            }
+            return
+        }
+        super.mouseDragged(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if optionDragActive {
+            optionDragActive = false
+            if optionDragBegan {
+                multiCaretOwner?.endColumnSelection(at: convert(event.locationInWindow, from: nil))
+            } else {
+                multiCaretOwner?.toggleCaret(at: optionDragAnchor)
+            }
+            return
+        }
+        super.mouseUp(with: event)
     }
 }
 
@@ -139,6 +190,11 @@ class EditorViewController: NSViewController {
     /// document whenever it changes, feeding the SwiftUI TextKit 2 surface.
     var onDocumentChange: ((NSAttributedString) -> Void)?
 
+    /// Set by MainWindowController — called with cheap (lineCount, maxLineWidth)
+    /// on every edit. Lets the SwiftUI surface size its scroll content without a
+    /// full attributed-string copy + layout on each keystroke.
+    var onDocumentMetricsChange: ((Int, Int) -> Void)?
+
     // MARK: - Hermetic Text Pipeline
 
     private var layoutManager: HighlightingLayoutManager?
@@ -202,18 +258,19 @@ class EditorViewController: NSViewController {
     private var _lastGutterChangeTime: CFTimeInterval = 0
 
     /// Total width from sidebar right edge to first character of text:
-    /// gutter width + textContainerInset.x (8px). Used for titlebar spacer alignment.
+    /// gutter width (the text container sits flush — inset 0).
     var effectiveGutterWidth: CGFloat {
-        (lineNumberGutter?.gutterWidth ?? 52) + 8
+        (lineNumberGutter?.gutterWidth ?? 52)
     }
 
     // MARK: - Incremental Search (Ctrl+S)
 
-    var incrementalSearchBar: IncrementalSearchBar!
-    private var searchMatches: [NSRange] = []
-    private var currentSearchIndex: Int = 0
-    private var preSearchSelection: NSRange?
-    private var searchOrigin: Int = 0
+    /// SwiftUI-owned quicksearch. The AppKit `IncrementalSearchBar` was orphaned
+    /// when the editor moved into the SwiftUI TextKit 2 surface; this model is the
+    /// new single source of truth and is observed by `TextKit2ScrollSurface`.
+    let quickSearch = QuickSearchModel()
+    /// TextMate-style find & replace state (⌘F / ⌘⌥F / ⌘G / ⌘E).
+    let findReplace = FindReplaceModel()
 
     // MARK: - Proximity Titlebar (mouse-move monitor — mask + traffic lights)
 
@@ -235,6 +292,22 @@ class EditorViewController: NSViewController {
     
     /// Inline rename text field (shown on double-click in titlebar).
     private var renameField: NSTextField?
+
+    // MARK: - Multiple Selections / Column (Box) Selection
+
+    /// Guard so our own `selectedRanges` writes don't trip `selectionDidChange`
+    /// into resetting the ⌘D occurrence state or column-drag bookkeeping.
+    private var isApplyingMultiSelection = false
+
+    /// ⌘D "Select Next Occurrence" — the literal being matched, and the char
+    /// index right after the most recently added match (search cursor).
+    private var occurrenceSearchString: String?
+
+    /// ⌥-drag column selection anchor (layout-manager coordinate space):
+    /// line content start of the mouse-down line, and its caret x-offset.
+    private var columnAnchorLineStart: Int = 0
+    private var columnAnchorX: CGFloat = 0
+    private var columnSelectionActive = false
 
     // MARK: - Lifecycle
 
@@ -268,7 +341,8 @@ class EditorViewController: NSViewController {
             self?.isDirty = true
             self?.updateTitle()
         }
-        incrementalSearchBar = IncrementalSearchBar(frame: .zero)
+        quickSearch.textView = textView
+        findReplace.textView = textView
         applyThemeChrome()
 
         settingsObserver = NotificationCenter.default.addObserver(
@@ -701,6 +775,7 @@ class EditorViewController: NSViewController {
         // NSTextView → swap NSLayoutManager for HighlightingLayoutManager.
         let initialWidth = max(view.bounds.width, 800)
         textView = HermeticTextView(frame: NSRect(x: 0, y: 0, width: initialWidth, height: 0))
+        (textView as? HermeticTextView)?.multiCaretOwner = self
 
         guard let ts = textView.textStorage else {
             fatalError("NSTextView.textStorage is nil — text system broken")
@@ -737,7 +812,7 @@ class EditorViewController: NSViewController {
         textView.allowsDocumentBackgroundColorChange = false
         textView.drawsBackground = false
         textView.backgroundColor = .clear
-        textView.textContainerInset = NSSize(width: 8, height: 28)
+        textView.textContainerInset = NSSize(width: EditorChromeMetrics.codeLeadingPadding, height: 28)
         textView.delegate = self
 
         // Disable macOS smart quotes/dashes — code editor, not word processor
@@ -747,15 +822,15 @@ class EditorViewController: NSViewController {
 
         // Ctrl+Shift+P → scope inspector; Ctrl+S → search; Shift+Ctrl+S → prev
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, self.view.window?.isKeyWindow == true else { return event }
+            guard let self, self.textView.window?.isKeyWindow == true else { return event }
 
             // ── Auto-recover focus: if window is key but text view lost responder
             //     (e.g., user clicked glass titlebar or dismissed search), restore it.
-            if !self.incrementalSearchBar.isVisible,
-               let fr = self.view.window?.firstResponder,
+            if !self.quickSearch.isVisible,
+               let fr = self.textView.window?.firstResponder,
                fr !== self.textView,
                !(fr is NSText) {
-                self.view.window?.makeFirstResponder(self.textView)
+                self.textView.window?.makeFirstResponder(self.textView)
             }
 
             let rawFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -769,15 +844,22 @@ class EditorViewController: NSViewController {
 
             // ── Shift+Ctrl+S → navigate previous (when search visible) ──
             if rawFlags == [.control, .shift], char == "s",
-               self.incrementalSearchBar.isVisible {
-                self.navigateSearch(forward: false)
+               self.quickSearch.isVisible {
+                self.searchNavigateBackward()
                 return nil
             }
 
             // ── Esc while search bar visible ──
-            if self.incrementalSearchBar.isVisible,
+            if self.quickSearch.isVisible,
                event.keyCode == 53 {
-                self.dismissIncrementalSearch()
+                self.quickSearch.cancel()
+                return nil
+            }
+
+            // ── Esc collapses multiple selections to the primary caret ──
+            if event.keyCode == 53,
+               self.textView.selectedRanges.count > 1 {
+                self.collapseMultipleSelections()
                 return nil
             }
 
@@ -833,9 +915,10 @@ class EditorViewController: NSViewController {
 
         scrollView.tile()
 
-        // Left padding between separator and code.
+        // Glyph padding is inside NSTextView. The layout manager extends
+        // selection and current-line backgrounds through it to the gutter.
         // Top inset pushes first line below the unified toolbar (~52pt).
-        textView.textContainerInset = NSSize(width: 8, height: 52)
+        textView.textContainerInset = NSSize(width: EditorChromeMetrics.codeLeadingPadding, height: 52)
 
         // Re-highlight newly visible text on scroll.
         NotificationCenter.default.addObserver(
@@ -975,6 +1058,13 @@ class EditorViewController: NSViewController {
         lineNumberGutter?.needsDisplay = true
         updateStatusBar()
 
+        // A normal (non-programmatic) collapse back to a single selection means
+        // the user has dismissed the multi-selection context — forget the ⌘D
+        // occurrence literal so the next ⌘D starts a fresh search.
+        if !isApplyingMultiSelection, textView.selectedRanges.count <= 1 {
+            resetOccurrenceState()
+        }
+
         // Search bar visible: keep it open but do NOT re-search on click.
         // User may click to inspect code while search remains active.
         // Navigation (Ctrl+S / Shift+Ctrl+S) still works from current match.
@@ -1017,6 +1107,12 @@ class EditorViewController: NSViewController {
 
             if let scopeFont = ss.resolveFont(scope: scope) {
                 font = scopeFont
+            } else if let scopeSize = ss.resolveFontSize(scope: scope) {
+                // `fontSize`-only override (no `fontName`): keep the resolved face
+                // and change its size, so per-filetype sizes in `.aether-properties`
+                // actually take effect and cascade to the line-number column.
+                let desc = font.fontDescriptor.withSize(CGFloat(scopeSize))
+                font = NSFont(descriptor: desc, size: CGFloat(scopeSize)) ?? font
             }
             // softWrap: per-window override → .aether-properties → default true.
             if let showInvis = ss.resolveShowInvisibles(scope: scope) {
@@ -1039,18 +1135,21 @@ class EditorViewController: NSViewController {
         // leaking into next line after Return). Without this, when the cursor lands on
         // a heading line after async highlight, the large heading font becomes the
         // typing font for subsequent keystrokes.
+        let typingParagraphStyle = NSMutableParagraphStyle()
+        typingParagraphStyle.lineSpacing = settings.resolvedLineSpacing(for: theme)
         textView.typingAttributes = [
             .font: font,
-            .foregroundColor: theme.editorForeground
+            .foregroundColor: theme.editorForeground,
+            .paragraphStyle: typingParagraphStyle
         ]
         SyntaxOracle.shared.baseFont = font   // clean base for fallback + multipliers
 
         // DIAGNOSTIC: Top inset 0 — let text underlap the toolbar for scroll-edge test.
-        // Left inset provides padding between separator and code.
-        textView.textContainerInset = NSSize(width: 8, height: 0)
+        // Preserve glyph padding on theme changes; background painting extends to x=0.
+        textView.textContainerInset = NSSize(width: EditorChromeMetrics.codeLeadingPadding, height: 0)
         if let ruler = lineNumberGutter {
             ruler.textColor = theme.editorForeground.withAlphaComponent(0.50)
-            ruler.font = NSFont.monospacedSystemFont(ofSize: font.pointSize * 0.85, weight: .regular)
+            ruler.font = EditorGutterStyle.rulerFont(for: font)
             ruler.lineHighlightColor = settings.highlightCurrentLine ? settings.lineHighlightColor : nil
             ruler.separatorColor = theme.rulerSeparator
             // No solid background — gutterBlurView provides the blur material behind.
@@ -1081,8 +1180,7 @@ class EditorViewController: NSViewController {
             textView.setValue(nil, forKey: "shadow")
         }
 
-        // ── Search bar follows theme when visible ──
-        incrementalSearchBar?.updateTheme()
+        // ── Search bar follows theme when visible (SwiftUI observes chrome.theme) ──
 
         let spacing = settings.resolvedLineSpacing(for: theme)
         if let ps = NSParagraphStyle.default.mutableCopy() as? NSMutableParagraphStyle {
@@ -1118,13 +1216,48 @@ class EditorViewController: NSViewController {
         return NSAttributedString(attributedString: storage)
     }
 
-    /// Pushes the current highlighted document to the SwiftUI surface via
-    /// `onDocumentChange`.
+    /// Pushes cheap document-shape metrics on every edit. This avoids copying the
+    /// full attributed string (and forcing a layout) on each keystroke — the
+    /// editable TextKit 1 surface reads `textStorage` live, so it only needs the
+    /// line count / max width to size its scroll content.
     private func notifyDocumentChange() {
+        guard let storage = textStorage else { return }
+        let text = storage.string as NSString
+        let metrics = Self.documentMetrics(for: text)
+        onDocumentMetricsChange?(metrics.lineCount, metrics.maxLineWidth)
+    }
+
+    /// Pushes the fully-highlighted snapshot — used only when the document is
+    /// replaced (load/new/reload), where the passive render path may need it.
+    private func notifyDocumentReplaced() {
+        notifyDocumentChange()
         onDocumentChange?(highlightedDocument())
     }
 
-    func newDocument() {
+    /// One-pass line count + widest line. O(n) char scan of the plain string —
+    /// no attributed copy, no attribute-run traversal, no layout.
+    private static func documentMetrics(for text: NSString) -> (lineCount: Int, maxLineWidth: Int) {
+        guard text.length > 0 else { return (1, 0) }
+        var lineCount = 1
+        var maxWidth = 0
+        var lineStart = 0
+        var i = 0
+        while i <= text.length {
+            if i == text.length || text.character(at: i) == 0x0A {
+                maxWidth = max(maxWidth, i - lineStart)
+                if i < text.length { lineCount += 1 }
+                lineStart = i + 1
+            }
+            i += 1
+        }
+        return (lineCount, maxWidth)
+    }
+
+    /// `conjure` distinguishes a *fresh window* (⌘N, the first tab) from a
+    /// *new tab* (⌘⇧N). Only a fresh window honours the Flash code-poetry
+    /// setting; a new tab is always a blank, untitled document — code poetry
+    /// belongs to the birth of a window, not the birth of a tab.
+    func newDocument(conjure: Bool = true) {
         guard confirmReplacingRichDocument() else { return }
         richDocument.active = false
         imagePreview.clear()
@@ -1140,7 +1273,7 @@ class EditorViewController: NSViewController {
         // New-window contract (GeneralSettings): a blank pane or a flash
         // conjuration. Blank = truly empty, plain text; flash = placeholder
         // that the Oracle replaces asynchronously.
-        let mode = GeneralSettings.shared.newFileMode
+        let mode = conjure ? GeneralSettings.shared.newFileMode : .blank
         currentLanguageName = mode == .blank ? "Plain Text" : "Swift"
         SyntaxOracle.shared.setLanguage(forExtension: mode == .blank ? "text" : "swift")
         // suppressTextDidChange managed by caller
@@ -1153,7 +1286,7 @@ class EditorViewController: NSViewController {
         detectFolds()
         updateTitle()
         updateStatusBar()
-        notifyDocumentChange()
+        notifyDocumentReplaced()
 
         // ZIEL A — the window never stays a mere placeholder: a fresh hermetic
         // "hello æther" script is conjured asynchronously. The synchronous
@@ -1203,7 +1336,7 @@ class EditorViewController: NSViewController {
         detectFolds()
         updateTitle()
         updateStatusBar()
-        notifyDocumentChange()
+        notifyDocumentReplaced()
     }
 
     func openFile(_ url: URL) {
@@ -1298,7 +1431,7 @@ class EditorViewController: NSViewController {
                 }
 
                 detectFolds()
-                notifyDocumentChange()
+                notifyDocumentReplaced()
             } catch {
                 print("Failed to open: \(error)")
             }
@@ -1378,7 +1511,7 @@ class EditorViewController: NSViewController {
             applyThemeChrome()
             highlightFullDocument()
             detectFolds()
-            notifyDocumentChange()
+            notifyDocumentReplaced()
             htmlSourceLoadedFor = url
         } catch { NSApp.presentError(error) }
     }
@@ -1588,137 +1721,747 @@ class EditorViewController: NSViewController {
     // MARK: - Incremental Search (Ctrl+S)
 
     @objc func toggleIncrementalSearch() {
-        if incrementalSearchBar.isVisible {
-            // Ctrl+S with bar visible:
-            //   • If we have matches → navigate FORWARD
-            //   • If no matches (just reopened with old text) → fire search from origin
-            if searchMatches.isEmpty {
-                incrementalSearchBar.fireSearchFromCurrent()
-            } else {
-                navigateSearch(forward: true)
-            }
-            return
-        }
-
-        let centerX = view.bounds.midX
-        let barY: CGFloat = 52   // near bottom of editor — 16px margin + 36px bar height
-        incrementalSearchBar.show(in: view, centerX: centerX, bottomY: barY)
-        preSearchSelection = textView.selectedRange()
-        searchOrigin = preSearchSelection?.location ?? 0
-        incrementalSearchBar.onSearchChange = { [weak self] text, ignoreCase, wrap in
-            self?.performSearch(text: text, ignoreCase: ignoreCase, wrapAround: wrap)
-        }
-        incrementalSearchBar.onNavigate = { [weak self] forward in
-            self?.navigateSearch(forward: forward)
-        }
-        incrementalSearchBar.onConfirm = { [weak self] in
-            // Enter → navigate forward, then dismiss (stay at match)
-            self?.navigateSearch(forward: true)
-            self?.dismissIncrementalSearch()
-        }
-        incrementalSearchBar.onDismiss = { [weak self] in
-            self?.dismissSearchCleanup()
-        }
-    }
-
-    func dismissIncrementalSearch() {
-        guard incrementalSearchBar.isVisible else { return }
-        incrementalSearchBar.hide()
+        quickSearch.toggle()
     }
 
     /// Called from Edit → Find menu — navigates forward through search matches.
     @objc func searchNavigateForward() {
-        if incrementalSearchBar.isVisible, !searchMatches.isEmpty {
-            navigateSearch(forward: true)
+        if quickSearch.isVisible { quickSearch.next() }
+    }
+
+    /// Shift+Ctrl+S — navigates backward through search matches.
+    @objc func searchNavigateBackward() {
+        if quickSearch.isVisible { quickSearch.previous() }
+    }
+
+    // MARK: - Find & Replace (TextMate-style)
+
+    @objc func showFindDialog(_ sender: Any?) { findReplace.show(replace: false) }
+    @objc func showFindReplaceDialog(_ sender: Any?) { findReplace.show(replace: true) }
+    @objc func useSelectionForFind(_ sender: Any?) { findReplace.useSelectionForFind() }
+    @objc func findReplaceNext(_ sender: Any?) { findReplace.next() }
+    @objc func findReplacePrevious(_ sender: Any?) { findReplace.previous() }
+}
+
+// MARK: - Standard Edit Actions
+
+extension EditorViewController {
+
+    // MARK: Comment syntax
+
+    /// Line-comment token for the current file (or `nil` for languages that
+    /// only support block comments / have no comments).
+    private static func lineCommentToken(forExt ext: String) -> String? {
+        switch ext {
+        case "swift", "c", "h", "cpp", "cc", "cxx", "hpp", "m", "mm",
+             "rs", "js", "jsx", "ts", "tsx", "go", "java", "kt", "kts",
+             "scala", "cs", "php":
+            return "//"
+        case "rb", "py", "pyw", "sh", "bash", "zsh", "yaml", "yml", "toml",
+             "pl", "pm", "r", "rbi":
+            return "#"
+        case "sql":
+            return "--"
+        default:
+            return nil
         }
     }
 
-    /// Clean up search state WITHOUT restoring cursor — user stays where they navigated.
-    private func dismissSearchCleanup() {
-        preSearchSelection = nil
-        searchMatches = []
-        currentSearchIndex = 0
-        textView?.needsDisplay = true
-        lineNumberGutter?.needsDisplay = true
-        view.window?.makeFirstResponder(textView)
+    /// Block-comment delimiters for the current file, or `nil` when unsupported.
+    private static func blockCommentTokens(forExt ext: String) -> (open: String, close: String)? {
+        switch ext {
+        case "swift", "c", "h", "cpp", "cc", "cxx", "hpp", "m", "mm",
+             "rs", "js", "jsx", "ts", "tsx", "go", "java", "kt", "kts",
+             "scala", "cs", "php", "css", "scss", "less":
+            return ("/*", "*/")
+        case "html", "htm", "xml", "plist", "svg", "md", "markdown", "mkdn", "mdown":
+            return ("<!--", "-->")
+        default:
+            return nil
+        }
     }
 
-    @objc func navigateSearch(forward: Bool) {
-        guard !searchMatches.isEmpty else { return }
-        if forward {
-            currentSearchIndex = (currentSearchIndex + 1) % searchMatches.count
+    private var currentFileExtension: String {
+        if let ext = currentFile?.pathExtension.lowercased(), !ext.isEmpty { return ext }
+        // New documents have no file — fall back to the resolved language name.
+        switch currentLanguageName.lowercased() {
+        case "swift": return "swift"
+        case "ruby": return "rb"
+        case "python": return "py"
+        case "shell", "bash", "zsh": return "sh"
+        case "javascript": return "js"
+        case "typescript", "tsx": return "ts"
+        default: return ""
+        }
+    }
+
+    // MARK: Undo-aware text replacement
+
+    /// Canonical programmatic edit: routes through `shouldChangeText` /
+    /// `didChangeText` so the change is registered with the text view's undo
+    /// manager and re-highlighting/fold detection run exactly once.
+    private func replaceText(in range: NSRange, with string: String) {
+        guard let ts = textStorage else { return }
+        guard textView.shouldChangeText(in: range, replacementString: string) else { return }
+        textStorage.replaceCharacters(in: range, with: string)
+        textView.didChangeText()
+    }
+
+    // MARK: Line enumeration
+
+    private struct LineEdit {
+        let contentRange: NSRange
+        let terminator: String
+    }
+
+    /// Enumerates full lines (content + terminator) covered by `range`.
+    private func lineEdits(in range: NSRange) -> [LineEdit] {
+        let ns = textView.string as NSString
+        var edits: [LineEdit] = []
+        var loc = range.location
+        let limit = NSMaxRange(range)
+        while loc < limit {
+            var start = 0, end = 0, contentsEnd = 0
+            ns.getLineStart(&start, end: &end, contentsEnd: &contentsEnd,
+                            for: NSRange(location: loc, length: 0))
+            let contentRange = NSRange(location: start, length: contentsEnd - start)
+            let terminator = end > contentsEnd
+                ? ns.substring(with: NSRange(location: contentsEnd, length: end - contentsEnd))
+                : ""
+            edits.append(LineEdit(contentRange: contentRange, terminator: terminator))
+            if end <= loc { break }
+            loc = end
+        }
+        return edits
+    }
+
+    private static func leadingWhitespaceCount(_ s: String) -> Int {
+        s.prefix(while: { $0.isWhitespace }).count
+    }
+
+    private static func isLineCommented(_ line: String, token: String) -> Bool {
+        let ws = leadingWhitespaceCount(line)
+        return line.dropFirst(ws).hasPrefix(token)
+    }
+
+    private static func commentLine(_ line: String, token: String) -> String {
+        let ws = line.prefix(while: { $0.isWhitespace })
+        let rest = line.dropFirst(ws.count)
+        return String(ws) + token + " " + String(rest)
+    }
+
+    private static func uncommentLine(_ line: String, token: String) -> String {
+        let ws = line.prefix(while: { $0.isWhitespace })
+        var rest = String(line.dropFirst(ws.count))
+        if rest.hasPrefix(token) {
+            rest.removeFirst(token.count)
+            if rest.first == " " { rest.removeFirst() }
+            else if rest.first == "\t" { rest.removeFirst() }
+        }
+        return String(ws) + rest
+    }
+
+    // MARK: Comment actions
+
+    /// ⌘/ — toggle line comments on the selected lines (or current line).
+    @objc func toggleComment(_ sender: Any?) {
+        guard textView != nil, textStorage.length > 0 else { return }
+        guard let token = Self.lineCommentToken(forExt: currentFileExtension) else {
+            NSSound.beep()
+            return
+        }
+        let ns = textView.string as NSString
+        var sel = textView.selectedRange()
+        if sel.length > 0, sel.location + sel.length > 0,
+           ns.substring(with: NSRange(location: sel.location + sel.length - 1, length: 1)) == "\n" {
+            sel.length -= 1
+        }
+        let lineRange = ns.lineRange(for: sel)
+        let edits = lineEdits(in: lineRange)
+        guard !edits.isEmpty else { return }
+
+        let allCommented = edits.allSatisfy {
+            Self.isLineCommented(ns.substring(with: $0.contentRange), token: token)
+        }
+
+        var newText = ""
+        for e in edits {
+            let line = ns.substring(with: e.contentRange)
+            if allCommented {
+                newText += Self.uncommentLine(line, token: token) + e.terminator
+            } else {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                newText += (trimmed.isEmpty ? line : Self.commentLine(line, token: token)) + e.terminator
+            }
+        }
+        guard newText != ns.substring(with: lineRange) else { return }
+        replaceText(in: lineRange, with: newText)
+    }
+
+    /// ⇧⌘/ — wrap/unwrap the selection (or current line) in a block comment.
+    @objc func toggleBlockComment(_ sender: Any?) {
+        guard textView != nil, textStorage.length > 0 else { return }
+        guard let pair = Self.blockCommentTokens(forExt: currentFileExtension) else {
+            NSSound.beep()
+            return
+        }
+        let ns = textView.string as NSString
+        var sel = textView.selectedRange()
+        if sel.length == 0 {
+            sel = ns.lineRange(for: sel)
+        }
+        let text = ns.substring(with: sel)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix(pair.open) && trimmed.hasSuffix(pair.close) {
+            var inner = text
+            if let r = inner.range(of: pair.open) { inner.removeSubrange(r) }
+            if let r = inner.range(of: pair.close, options: .backwards) { inner.removeSubrange(r) }
+            replaceText(in: sel, with: inner)
         } else {
-            currentSearchIndex = (currentSearchIndex - 1 + searchMatches.count) % searchMatches.count
+            replaceText(in: sel, with: pair.open + text + pair.close)
         }
-        selectCurrentMatch()
     }
 
-    private func performSearch(text: String, ignoreCase: Bool, wrapAround: Bool) {
-        guard let storage = textStorage, storage.length > 0 else {
-            searchMatches = []
-            currentSearchIndex = 0
-            incrementalSearchBar.updateMatch(current: 0, total: 0)
+    // MARK: Indentation
+
+    /// ⌘] — indent the selected lines (or insert a tab at the cursor).
+    @objc func indentSelection(_ sender: Any?) {
+        guard let textView else { return }
+        let sel = textView.selectedRange()
+        if sel.length == 0 {
+            replaceText(in: sel, with: "\t")
+            textView.setSelectedRange(NSRange(location: sel.location + 1, length: 0))
             return
         }
+        let ns = textView.string as NSString
+        let lineRange = ns.lineRange(for: sel)
+        let edits = lineEdits(in: lineRange)
+        let newText = edits.map { e in
+            let line = ns.substring(with: e.contentRange)
+            return (line.trimmingCharacters(in: .whitespaces).isEmpty ? line : "\t" + line) + e.terminator
+        }.joined()
+        if newText != ns.substring(with: lineRange) {
+            replaceText(in: lineRange, with: newText)
+        }
+    }
 
-        guard !text.isEmpty else {
-            searchMatches = []
-            currentSearchIndex = 0
-            incrementalSearchBar.updateMatch(current: 0, total: 0)
-            return
+    /// ⌘[ — outdent the selected lines.
+    @objc func outdentSelection(_ sender: Any?) {
+        guard let textView else { return }
+        let ns = textView.string as NSString
+        let sel = textView.selectedRange()
+        let lineRange = ns.lineRange(for: sel)
+        let edits = lineEdits(in: lineRange)
+        let newText = edits.map { e in
+            var line = ns.substring(with: e.contentRange)
+            if line.hasPrefix("\t") {
+                line.removeFirst()
+            } else if line.hasPrefix("    ") {
+                line.removeFirst(4)
+            }
+            return line + e.terminator
+        }.joined()
+        if newText != ns.substring(with: lineRange) {
+            replaceText(in: lineRange, with: newText)
+        }
+    }
+
+    // MARK: Line operations
+
+    /// ⇧⌘L — select the full current line(s).
+    @objc func selectCurrentLine(_ sender: Any?) {
+        guard let textView else { return }
+        let ns = textView.string as NSString
+        let lineRange = ns.lineRange(for: textView.selectedRange())
+        textView.setSelectedRange(lineRange)
+    }
+
+    // MARK: Multiple selections & column (box) selection
+
+    /// ⌃⇧W — "Edit Each Line in Selection": replace the current (multi-line)
+    /// selection with one caret per line, all anchored to the visual column of
+    /// the selection's start. Lines shorter than the anchor column get a caret
+    /// at their end. Typing then inserts at every caret simultaneously.
+    @objc func editEachLineInSelection(_ sender: Any?) {
+        guard textView != nil, textStorage.length > 0 else { return }
+        let ns = textView.string as NSString
+        var sel = textView.selectedRange()
+        // Trim a trailing newline so a full-line selection doesn't spawn a caret
+        // on an empty phantom line after the block.
+        if sel.length > 0 {
+            let lastLoc = sel.location + sel.length - 1
+            if lastLoc < ns.length, ns.character(at: lastLoc) == 0x0A {
+                sel.length -= 1
+            }
+        }
+        let lineRange = ns.lineRange(for: sel)
+        let edits = lineEdits(in: lineRange)
+        guard !edits.isEmpty else { return }
+
+        let anchorX = caretXOffset(at: sel.location)
+        var ranges: [NSRange] = []
+        for e in edits {
+            let idx = insertionIndex(atColumnX: anchorX, inLine: e.contentRange)
+            ranges.append(NSRange(location: idx, length: 0))
+        }
+        guard !ranges.isEmpty else { return }
+
+        resetOccurrenceState()
+        isApplyingMultiSelection = true
+        textView.setSelectedRanges(ranges.map { NSValue(range: $0) }, affinity: .upstream, stillSelecting: false)
+        isApplyingMultiSelection = false
+        textView.scrollRangeToVisible(NSRange(location: ranges[0].location, length: 0))
+    }
+
+    /// ⌘D — "Select Next Occurrence": add the next match of the current
+    /// selection (or word under the caret) to the set of selections.
+    @objc func selectNextOccurrence(_ sender: Any?) {
+        guard textView != nil, textStorage.length > 0 else { return }
+        let ns = textView.string as NSString
+        var ranges = textView.selectedRanges.map { $0.rangeValue }
+
+        // First invocation derives the search literal from the selection or word.
+        if occurrenceSearchString == nil {
+            let primary = ranges.last ?? textView.selectedRange()
+            let literal: String
+            if primary.length > 0 {
+                literal = ns.substring(with: primary)
+            } else {
+                let word = wordRange(at: primary.location)
+                guard word.length > 0 else { NSSound.beep(); return }
+                literal = ns.substring(with: word)
+                ranges = [word]  // caret → whole-word selection
+            }
+            guard !literal.isEmpty else { NSSound.beep(); return }
+            occurrenceSearchString = literal
+
+            isApplyingMultiSelection = true
+            textView.setSelectedRanges(ranges.map { NSValue(range: $0) }, affinity: .upstream, stillSelecting: false)
+            isApplyingMultiSelection = false
         }
 
-        let nsStr = storage.string as NSString
-        let fullRange = NSRange(location: 0, length: nsStr.length)
-        var opts: NSString.CompareOptions = []
-        if ignoreCase { opts.insert(.caseInsensitive) }
+        guard let literal = occurrenceSearchString else { return }
+
+        let lastEnd = ranges.last.map { NSMaxRange($0) } ?? 0
+        let searchRange = NSRange(location: lastEnd, length: max(0, ns.length - lastEnd))
+        var found = ns.range(of: literal, options: [], range: searchRange)
+        if found.location == NSNotFound {
+            // Wrap to the top.
+            found = ns.range(of: literal, options: [], range: NSRange(location: 0, length: ns.length))
+        }
+        guard found.location != NSNotFound, found.length > 0 else { NSSound.beep(); return }
+        guard !ranges.contains(where: { NSEqualRanges($0, found) }) else { NSSound.beep(); return }
+
+        ranges.append(found)
+        isApplyingMultiSelection = true
+        textView.setSelectedRanges(ranges.map { NSValue(range: $0) }, affinity: .upstream, stillSelecting: false)
+        isApplyingMultiSelection = false
+        textView.scrollRangeToVisible(found)
+    }
+
+    /// ⌃⌘G — "Select All Occurrences": select every match of the current
+    /// selection (or word under the caret) across the whole document at once.
+    @objc func selectAllOccurrences(_ sender: Any?) {
+        guard textView != nil, textStorage.length > 0 else { return }
+        let ns = textView.string as NSString
+        let primary = textView.selectedRanges.last?.rangeValue ?? textView.selectedRange()
+
+        let literal: String
+        if primary.length > 0 {
+            literal = ns.substring(with: primary)
+        } else {
+            let word = wordRange(at: primary.location)
+            guard word.length > 0 else { NSSound.beep(); return }
+            literal = ns.substring(with: word)
+        }
+        guard !literal.isEmpty else { NSSound.beep(); return }
+        resetOccurrenceState()
 
         var matches: [NSRange] = []
-        var searchRange = fullRange
+        var searchRange = NSRange(location: 0, length: ns.length)
         while true {
-            let found = nsStr.range(of: text, options: opts, range: searchRange)
-            if found.location == NSNotFound { break }
+            let found = ns.range(of: literal, options: [], range: searchRange)
+            guard found.location != NSNotFound, found.length > 0 else { break }
             matches.append(found)
-            let nextLoc = found.location + found.length
-            if nextLoc >= nsStr.length { break }
-            searchRange = NSRange(location: nextLoc, length: nsStr.length - nextLoc)
+            let nextLoc = NSMaxRange(found)
+            if nextLoc >= ns.length { break }
+            searchRange = NSRange(location: nextLoc, length: ns.length - nextLoc)
         }
-        searchMatches = matches
+        guard !matches.isEmpty else { NSSound.beep(); return }
 
-        if matches.isEmpty {
-            currentSearchIndex = 0
-            incrementalSearchBar.updateMatch(current: 0, total: 0)
-            return
+        isApplyingMultiSelection = true
+        textView.setSelectedRanges(matches.map { NSValue(range: $0) }, affinity: .upstream, stillSelecting: false)
+        isApplyingMultiSelection = false
+        textView.scrollRangeToVisible(matches[0])
+    }
+
+    /// Esc — collapse all carets/selections back to the primary caret.
+    func collapseMultipleSelections() {
+        guard textView != nil else { return }
+        resetOccurrenceState()
+        columnSelectionActive = false
+        isApplyingMultiSelection = true
+        if let last = textView.selectedRanges.last?.rangeValue {
+            textView.setSelectedRange(NSRange(location: last.location, length: 0))
         }
+        isApplyingMultiSelection = false
+    }
 
-        let idx = matches.firstIndex { $0.location >= searchOrigin } ?? 0
-        currentSearchIndex = idx
-        incrementalSearchBar.updateMatch(current: currentSearchIndex + 1, total: searchMatches.count)
+    // MARK: Option-click / Option-drag (column selection)
 
-        // Defer selection — setting it from within the search field's
-        // textDidChange notification can cause display pass entanglement.
-        let matchRange = matches[idx]
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let tv = self.textView,
-                  matchRange.location + matchRange.length <= self.textStorage.length else { return }
-            tv.setSelectedRange(matchRange)
-            tv.scrollRangeToVisible(matchRange)
+    func beginOptionMouse(at point: NSPoint) {
+        guard textView != nil, textStorage.length > 0 else { return }
+        let idx = textView.characterIndexForInsertion(at: point)
+        let content = lineContentRange(at: idx)
+        columnAnchorLineStart = content.location
+        columnAnchorX = caretXOffset(at: idx)
+        columnSelectionActive = true
+    }
+
+    func dragColumnSelection(to point: NSPoint) {
+        guard columnSelectionActive, textStorage.length > 0 else { return }
+        let idx = textView.characterIndexForInsertion(at: point)
+        let content = lineContentRange(at: idx)
+        let ranges = columnRanges(fromLineStart: columnAnchorLineStart, startX: columnAnchorX,
+                                  toLineStart: content.location, endX: caretXOffset(at: idx))
+        isApplyingMultiSelection = true
+        textView.setSelectedRanges(ranges.map { NSValue(range: $0) }, affinity: .upstream, stillSelecting: true)
+        isApplyingMultiSelection = false
+    }
+
+    func endColumnSelection(at point: NSPoint) {
+        guard columnSelectionActive else { return }
+        columnSelectionActive = false
+        guard textStorage.length > 0 else { return }
+        dragColumnSelection(to: point)
+        isApplyingMultiSelection = true
+        textView.setSelectedRanges(textView.selectedRanges, affinity: .upstream, stillSelecting: false)
+        isApplyingMultiSelection = false
+        resetOccurrenceState()
+    }
+
+    func toggleCaret(at point: NSPoint) {
+        guard textView != nil, textStorage.length > 0 else { return }
+        let idx = textView.characterIndexForInsertion(at: point)
+        var ranges = textView.selectedRanges.map { $0.rangeValue }
+        if let existing = ranges.firstIndex(where: { $0.length == 0 && $0.location == idx }) {
+            ranges.remove(at: existing)
+        } else {
+            ranges.append(NSRange(location: idx, length: 0))
+        }
+        guard !ranges.isEmpty else { return }
+        isApplyingMultiSelection = true
+        textView.setSelectedRanges(ranges.map { NSValue(range: $0) }, affinity: .upstream, stillSelecting: false)
+        isApplyingMultiSelection = false
+        resetOccurrenceState()
+    }
+
+    func resetColumnSelectionIfNeeded() {
+        columnSelectionActive = false
+    }
+
+    // MARK: Multi-selection geometry helpers
+
+    private func resetOccurrenceState() {
+        occurrenceSearchString = nil
+    }
+
+    private func wordRange(at location: Int) -> NSRange {
+        guard textView != nil, textStorage.length > 0 else { return NSRange(location: location, length: 0) }
+        return textView.selectionRange(forProposedRange: NSRange(location: location, length: 0),
+                                       granularity: .selectByWord)
+    }
+
+    /// Content range (without line terminator) of the line containing `location`.
+    private func lineContentRange(at location: Int) -> NSRange {
+        let ns = textView.string as NSString
+        var start = 0, end = 0, contentsEnd = 0
+        ns.getLineStart(&start, end: &end, contentsEnd: &contentsEnd,
+                        for: NSRange(location: location, length: 0))
+        return NSRange(location: start, length: contentsEnd - start)
+    }
+
+    /// Visual column (x-offset from the line-fragment left edge, in points) of a
+    /// caret at `index`. Uses the actual layout so tabs/wrapped glyphs are exact.
+    private func caretXOffset(at index: Int) -> CGFloat {
+        guard let lm = textView.layoutManager, let tc = textView.textContainer else { return 0 }
+        let len = textStorage.length
+        guard len > 0 else { return 0 }
+        let target = min(max(index, 0), len)
+        let ns = textView.string as NSString
+        // Caret at a newline or end-of-document sits after the previous character.
+        if target > 0 && (target == len || ns.character(at: target) == 0x0A) {
+            let prevGlyph = max(lm.glyphIndexForCharacter(at: target - 1), 0)
+            let loc = lm.location(forGlyphAt: prevGlyph)
+            let advance = lm.boundingRect(forGlyphRange: NSRange(location: prevGlyph, length: 1), in: tc).width
+            let lineRect = lm.lineFragmentRect(forGlyphAt: prevGlyph, effectiveRange: nil)
+            return (loc.x + advance) - lineRect.origin.x
+        }
+        let glyph = max(lm.glyphIndexForCharacter(at: target), 0)
+        let loc = lm.location(forGlyphAt: glyph)
+        let lineRect = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+        return loc.x - lineRect.origin.x
+    }
+
+    /// Insertion index on a line whose caret x-offset is closest to `x`.
+    private func insertionIndex(atColumnX x: CGFloat, inLine lineRange: NSRange) -> Int {
+        guard let lm = textView.layoutManager, let tc = textView.textContainer else { return lineRange.location }
+        guard lineRange.length > 0 else { return lineRange.location }
+        let glyphIndex = lm.glyphIndexForCharacter(at: lineRange.location)
+        let lineRect = lm.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        var fraction: CGFloat = 0
+        let pt = NSPoint(x: lineRect.origin.x + x, y: lineRect.origin.y + lineRect.height / 2)
+        let idx = lm.characterIndex(for: pt, in: tc, fractionOfDistanceBetweenInsertionPoints: &fraction)
+        let insertion = fraction < 0.5 ? idx : idx + 1
+        return min(max(insertion, lineRange.location), NSMaxRange(lineRange))
+    }
+
+    /// Visual-column x of the end of a line's content (0 for empty lines).
+    private func lineMaxXOffset(contentRange: NSRange) -> CGFloat {
+        guard contentRange.length > 0 else { return 0 }
+        return caretXOffset(at: NSMaxRange(contentRange))
+    }
+
+    /// Build the per-line selection ranges of a rectangular column block.
+    /// Lines that end before the box's left edge are skipped (no caret).
+    private func columnRanges(fromLineStart startLine: Int, startX: CGFloat,
+                              toLineStart endLine: Int, endX: CGFloat) -> [NSRange] {
+        let lowX = min(startX, endX)
+        let highX = max(startX, endX)
+        let firstLine = min(startLine, endLine)
+        let lastLine = max(startLine, endLine)
+        let ns = textView.string as NSString
+        var ranges: [NSRange] = []
+        var loc = firstLine
+        while loc <= lastLine {
+            let content = lineContentRange(at: loc)
+            let maxX = lineMaxXOffset(contentRange: content)
+            if lowX <= maxX + 0.5 {
+                let s = insertionIndex(atColumnX: lowX, inLine: content)
+                let e = insertionIndex(atColumnX: highX, inLine: content)
+                ranges.append(e > s ? NSRange(location: s, length: e - s) : NSRange(location: s, length: 0))
+            }
+            let next = NSMaxRange(ns.lineRange(for: NSRange(location: loc, length: 0)))
+            if next <= loc { break }  // safety against infinite loop at end-of-doc
+            loc = next
+        }
+        return ranges
+    }
+
+    /// ⌃⇧D — duplicate the selected lines (or current line).
+    @objc func duplicateLine(_ sender: Any?) {
+        guard textView != nil, textStorage.length > 0 else { return }
+        let ns = textView.string as NSString
+        let sel = textView.selectedRange()
+        let lineRange = ns.lineRange(for: sel)
+        let text = ns.substring(with: lineRange)
+        // Insert a duplicate after the block; keep cursor on the new copy.
+        let insertRange = NSRange(location: NSMaxRange(lineRange), length: 0)
+        replaceText(in: insertRange, with: text)
+        textView.setSelectedRange(NSRange(location: NSMaxRange(lineRange), length: lineRange.length))
+    }
+
+    /// ⌃⌘↑ — move the current line(s) up one line.
+    @objc func moveLineUp(_ sender: Any?) {
+        moveSelectedLines(by: -1)
+    }
+
+    /// ⌃⌘↓ — move the current line(s) down one line.
+    @objc func moveLineDown(_ sender: Any?) {
+        moveSelectedLines(by: 1)
+    }
+
+    private func moveSelectedLines(by delta: Int) {
+        guard textView != nil, textStorage.length > 0 else { return }
+        let ns = textView.string as NSString
+        let sel = textView.selectedRange()
+        let lineRange = ns.lineRange(for: sel)
+        let block = ns.substring(with: lineRange)
+
+        if delta < 0 {
+            // Move up: needs the previous line's terminator to swap across.
+            guard lineRange.location > 0 else { NSSound.beep(); return }
+            let prevRange = ns.lineRange(for: NSRange(location: lineRange.location - 1, length: 0))
+            let prev = ns.substring(with: prevRange)
+            let combined = NSRange(location: prevRange.location, length: NSMaxRange(lineRange) - prevRange.location)
+            replaceText(in: combined, with: block + prev)
+            textView.setSelectedRange(NSRange(location: prevRange.location, length: block.count))
+        } else {
+            guard NSMaxRange(lineRange) < ns.length else { NSSound.beep(); return }
+            let nextRange = ns.lineRange(for: NSRange(location: NSMaxRange(lineRange), length: 0))
+            let next = ns.substring(with: nextRange)
+            let combined = NSRange(location: lineRange.location, length: NSMaxRange(nextRange) - lineRange.location)
+            replaceText(in: combined, with: next + block)
+            textView.setSelectedRange(NSRange(location: lineRange.location + next.count, length: block.count))
         }
     }
 
-    private func selectCurrentMatch() {
-        guard !searchMatches.isEmpty,
-              currentSearchIndex < searchMatches.count else { return }
-        let matchRange = searchMatches[currentSearchIndex]
-        guard matchRange.location + matchRange.length <= textStorage.length else { return }
-        let r = matchRange
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let tv = self.textView,
-                  r.location + r.length <= self.textStorage.length else { return }
-            tv.setSelectedRange(r)
-            tv.scrollRangeToVisible(r)
+    /// ⌃J — join the current line with the following line.
+    @objc func joinLines(_ sender: Any?) {
+        guard let textView, textStorage.length > 0 else { return }
+        let ns = textView.string as NSString
+        let sel = textView.selectedRange()
+        let lineRange = ns.lineRange(for: sel)
+        // If the join target is the last line, join with the previous instead.
+        let targetEnd = NSMaxRange(lineRange)
+        if targetEnd >= ns.length {
+            guard lineRange.location > 0 else { NSSound.beep(); return }
+            let prevRange = ns.lineRange(for: NSRange(location: lineRange.location - 1, length: 0))
+            let prevContent = ns.substring(with: NSRange(location: prevRange.location, length: prevRange.length - (prevRange.length > 0 && ns.substring(with: NSRange(location: prevRange.location + prevRange.length - 1, length: 1)) == "\n" ? 1 : 0)))
+            let curContent = ns.substring(with: NSRange(location: lineRange.location, length: lineRange.length))
+            let merged = prevContent + " " + curContent.trimmingCharacters(in: .whitespaces)
+            let combined = NSRange(location: prevRange.location, length: NSMaxRange(lineRange) - prevRange.location)
+            replaceText(in: combined, with: merged)
+            textView.setSelectedRange(NSRange(location: prevRange.location + prevContent.count + 1, length: 0))
+            return
         }
-        incrementalSearchBar.updateMatch(current: currentSearchIndex + 1, total: searchMatches.count)
+        let nextRange = ns.lineRange(for: NSRange(location: targetEnd, length: 0))
+        let curContent = ns.substring(with: NSRange(location: lineRange.location, length: lineRange.length))
+        let curTrimmed = curContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextTrimmed = ns.substring(with: NSRange(location: nextRange.location, length: nextRange.length)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let merged = curTrimmed + " " + nextTrimmed
+        let combined = NSRange(location: lineRange.location, length: NSMaxRange(nextRange) - lineRange.location)
+        replaceText(in: combined, with: merged)
+        textView.setSelectedRange(NSRange(location: lineRange.location + curTrimmed.count + 1, length: 0))
+    }
+
+    // MARK: Line deletion / insertion
+
+    /// ⌘⇧K — delete the current line(s).
+    @objc func deleteLine(_ sender: Any?) {
+        guard let textView, textStorage.length > 0 else { return }
+        let ns = textView.string as NSString
+        let sel = textView.selectedRange()
+        let lineRange = ns.lineRange(for: sel)
+        // Deleting the very last line (no trailing newline) also eats the
+        // previous line's terminator so the cursor lands at the new last line.
+        var range = lineRange
+        if NSMaxRange(lineRange) >= ns.length, lineRange.location > 0 {
+            range = NSRange(location: lineRange.location - 1, length: lineRange.length + 1)
+        }
+        replaceText(in: range, with: "")
+        let newLen = (textView.string as NSString).length
+        textView.setSelectedRange(NSRange(location: min(range.location, newLen), length: 0))
+    }
+
+    /// ⌘↩ — insert a blank line below the current line/selection.
+    @objc func insertLineBelow(_ sender: Any?) {
+        guard let textView else { return }
+        let ns = textView.string as NSString
+        let lineRange = ns.lineRange(for: textView.selectedRange())
+        let end = NSMaxRange(lineRange)
+        replaceText(in: NSRange(location: end, length: 0), with: "\n")
+        textView.setSelectedRange(NSRange(location: end + 1, length: 0))
+    }
+
+    /// ⇧⌘↩ — insert a blank line above the current line/selection.
+    @objc func insertLineAbove(_ sender: Any?) {
+        guard let textView else { return }
+        let ns = textView.string as NSString
+        let lineRange = ns.lineRange(for: textView.selectedRange())
+        replaceText(in: NSRange(location: lineRange.location, length: 0), with: "\n")
+        textView.setSelectedRange(NSRange(location: lineRange.location, length: 0))
+    }
+
+    // MARK: Case transforms
+
+    /// ⌃⇧U — uppercase the selection (or the word under the cursor).
+    @objc func uppercaseSelection(_ sender: Any?) {
+        transformSelection { $0.uppercased() }
+    }
+
+    /// ⌃⇧L — lowercase the selection (or the word under the cursor).
+    @objc func lowercaseSelection(_ sender: Any?) {
+        transformSelection { $0.lowercased() }
+    }
+
+    private func transformSelection(_ transform: (String) -> String) {
+        guard let textView, textStorage.length > 0 else { return }
+        var sel = textView.selectedRange()
+        if sel.length == 0 {
+            sel = textView.selectionRange(forProposedRange: NSRange(location: sel.location, length: 0),
+                                          granularity: .selectByWord)
+        }
+        guard sel.length > 0 else { NSSound.beep(); return }
+        let ns = textView.string as NSString
+        let original = ns.substring(with: sel)
+        let transformed = transform(original)
+        guard transformed != original else { return }
+        replaceText(in: sel, with: transformed)
+        textView.setSelectedRange(NSRange(location: sel.location, length: (transformed as NSString).length))
+    }
+
+    // MARK: Navigation
+
+    /// ⌘L — jump to a line number.
+    @objc func goToLine(_ sender: Any?) {
+        guard let textView else { return }
+        let ns = textView.string as NSString
+        let alert = NSAlert()
+        alert.messageText = "Go to Line"
+        alert.informativeText = "Enter a line number (1–\(ns.length == 0 ? 1 : lineCount(ns)))."
+        alert.addButton(withTitle: "Go")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 220, height: 24))
+        field.placeholderString = "Line number"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn,
+              let num = Int(field.stringValue.trimmingCharacters(in: .whitespaces)), num > 0 else { return }
+        let target = min(num - 1, lineCount(ns) - 1)
+        let idx = lineIndex(ns, lineNumber: target)
+        textView.setSelectedRange(NSRange(location: idx, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: idx, length: 0))
+    }
+
+    private func lineCount(_ ns: NSString) -> Int {
+        var count = 0
+        var loc = 0
+        while loc < ns.length {
+            var end = 0
+            ns.getLineStart(nil, end: &end, contentsEnd: nil, for: NSRange(location: loc, length: 0))
+            count += 1
+            if end <= loc { break }
+            loc = end
+        }
+        return count
+    }
+
+    private func lineIndex(_ ns: NSString, lineNumber: Int) -> Int {
+        var loc = 0
+        var line = 0
+        while loc < ns.length && line < lineNumber {
+            var end = 0
+            ns.getLineStart(nil, end: &end, contentsEnd: nil, for: NSRange(location: loc, length: 0))
+            if end <= loc { break }
+            loc = end
+            line += 1
+        }
+        return loc
+    }
+
+    /// Selects and reveals the given 1-based line without an alert — used by
+    /// project-scope find results to jump straight to a match.
+    func revealLine(_ lineNumber: Int) {
+        guard let textView else { return }
+        let ns = textView.string as NSString
+        guard lineNumber > 0, ns.length > 0 else { return }
+        let target = min(lineNumber - 1, lineCount(ns) - 1)
+        let idx = lineIndex(ns, lineNumber: target)
+        textView.setSelectedRange(NSRange(location: idx, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: idx, length: 0))
+    }
+
+    // MARK: Invisibles
+
+    /// ⌃⌥I — toggle visible whitespace / control characters.
+    @objc func toggleInvisibles(_ sender: Any?) {
+        guard let textView else { return }
+        let lm = textView.layoutManager
+        let next = !(lm?.showsInvisibleCharacters ?? false)
+        lm?.showsInvisibleCharacters = next
+        lm?.showsControlCharacters = next
+        textView.needsDisplay = true
     }
 }
 
@@ -1775,11 +2518,17 @@ extension EditorViewController: NSTextViewDelegate {
 
     /// Strip rich formatting on paste — we manage all attributes ourselves.
     func textView(_ textView: NSTextView, shouldChangeTextIn affectedCharRange: NSRange, replacementString: String?) -> Bool {
-        // Capture where the cursor WILL be after this edit commits.
-        let len = (replacementString as NSString?)?.length ?? 0
-        expectedPostEditCursor = affectedCharRange.location + len
+        // Multi-caret typing: NSTextView inserts at every caret itself. Pinning a
+        // single `expectedPostEditCursor` here would collapse the sibling carets
+        // in `textDidChange`, so we only pin when there is exactly one selection.
+        // Multi-caret paste is likewise left to the native fan-out path.
+        let isMultiCaret = textView.selectedRanges.count > 1
+        if !isMultiCaret {
+            let len = (replacementString as NSString?)?.length ?? 0
+            expectedPostEditCursor = affectedCharRange.location + len
+        }
 
-        guard !isHandlingPaste,
+        guard !isHandlingPaste, !isMultiCaret,
               let replacement = replacementString,
               replacement.count > 1,                    // single chars are typing, not paste
               let currentPasteboardString = NSPasteboard.general.string(forType: .string),

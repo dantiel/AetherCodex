@@ -11,6 +11,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case newFile = "New File"
     case editor = "Editor"
     case appearance = "Appearance"
+    case git = "Git"
 
     var id: String { rawValue }
     var glyph: String {
@@ -18,6 +19,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .newFile: return "doc.badge.plus"
         case .editor: return "text.cursor"
         case .appearance: return "paintpalette"
+        case .git: return "arrow.triangle.branch"
         }
     }
     var subtitle: String {
@@ -25,6 +27,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .newFile: return "What a fresh window conjures into being."
         case .editor: return "Text behavior and current-line emphasis."
         case .appearance: return "Themes, typography and translucent glass."
+        case .git: return "Diff handoff to your external Git editor."
         }
     }
 }
@@ -84,6 +87,7 @@ struct SettingsView: View {
                 case .newFile: NewFileSettingsView()
                 case .editor: EditorSettingsView()
                 case .appearance: ThemePreferencesView()
+                case .git: GitSettingsView()
                 }
             }
             .frame(maxWidth: 720, alignment: .leading)
@@ -228,6 +232,41 @@ struct EditorSettingsView: View {
         .padding(.bottom, 8)
         .onReceive(NotificationCenter.default.publisher(for: ThemeSettings.didChangeNotification)) { _ in
             revision += 1
+        }
+    }
+}
+
+// MARK: - Git section
+
+struct GitSettingsView: View {
+    @ObservedObject private var settings = GeneralSettings.shared
+    @State private var resolved = ""
+
+    var body: some View {
+        Form {
+            Section("External Diff Editor") {
+                HStack(spacing: 12) {
+                    Text("Active editor").foregroundStyle(.secondary)
+                    Spacer()
+                    Text(ExternalEditorResolver.displayName(for: resolved))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                HStack(spacing: 12) {
+                    Text("Command").foregroundStyle(.secondary)
+                    TextField("auto-detect", text: $settings.gitExternalEditor)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Text("Leave empty to auto-detect from `git config core.editor`, then $GIT_EDITOR, $VISUAL, $EDITOR. Examples: `code --wait`, `mate`, `subl -w`, `vim`. Used by the diff view's “open in external editor” button.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .padding(.bottom, 8)
+        .onAppear { resolved = ExternalEditorResolver.detectedCommand(repoRoot: nil) }
+        .onChange(of: settings.gitExternalEditor) { _, _ in
+            resolved = ExternalEditorResolver.detectedCommand(repoRoot: nil)
         }
     }
 }

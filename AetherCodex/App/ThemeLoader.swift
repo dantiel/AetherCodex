@@ -1,4 +1,5 @@
 import Cocoa
+import AetherOracleResources
 
 // MARK: - YAML Theme Loader
 
@@ -28,10 +29,10 @@ enum ThemeLoader {
             .compactMap { loadTheme(from: $0.path) }
     }
 
-    /// Locate Resources/Themes/ — tries Bundle.module first (SPM), then Bundle.main (app bundle).
+    /// Locate Resources/Themes/ — tries AetherOracleResources.bundle first (SPM), then Bundle.main (app bundle).
     private static func themeResourcesDirectory() -> URL? {
-        // 1. SPM Bundle.module (works when run from .build/debug/)
-        if let dir = Bundle.module.url(forResource: "Themes", withExtension: nil) {
+        // 1. SPM AetherOracleResources.bundle (works when run from .build/debug/)
+        if let dir = AetherOracleResources.bundle.url(forResource: "Themes", withExtension: nil) {
             return dir
         }
         // 2. App bundle (when bundled via bundle_app.sh)
@@ -42,7 +43,7 @@ enum ThemeLoader {
             }
         }
         // 3. Relative path from executable (dev workflow)
-        let devPath = URL(fileURLWithPath: "AetherCodex/Resources/Themes")
+        let devPath = URL(fileURLWithPath: "AetherOracle/resources/Themes")
         if FileManager.default.fileExists(atPath: devPath.path) {
             return devPath
         }
@@ -58,11 +59,11 @@ enum ThemeLoader {
 
     static func theme(from dict: [String: Any]) -> SyntaxTheme? {
         guard let name = dict["name"] as? String,
-              let kindStr = dict["kind"] as? String,
-              let kind = ThemeKind(rawValue: kindStr),
+              let appearanceStr = (dict["appearance"] ?? dict["kind"]) as? String,
+              let appearance = ThemeAppearance(rawValue: appearanceStr),
               let scopes = dict["scopes"] as? [String: Any]
         else {
-            print("[ThemeLoader] invalid theme: missing name/kind/scopes")
+            print("[ThemeLoader] invalid theme: missing name/appearance/scopes")
             return nil
         }
 
@@ -126,20 +127,30 @@ enum ThemeLoader {
             background: sideBg ?? editorBackground,
             foreground: editorForeground,
             accent: parseColor(dict["sidebarAccent"]) ?? selectionColor,
-            kind: kind,
+            appearance: appearance,
             glassTint: glassTintStrength,
             glassMaterialName: sideMat
         )
+        // Base text fallback honors the curated block's own character tone:
+        // dark chambers adopt the declared `complementary`, light chambers the
+        // declared `foreground` — falling back to the derived palette only when
+        // the block omits them.
+        let pythiaBaseTextFallback: NSColor? = appearance == .dark
+            ? parseColor(pythiaDict?["complementary"])
+            : parseColor(pythiaDict?["foreground"])
+
         let pythia = PythiaPalette(
             background: parseColor(pythiaDict?["background"]) ?? pythiaBase.background,
             foreground: parseColor(pythiaDict?["foreground"]) ?? pythiaBase.foreground,
+            baseText: parseColor(pythiaDict?["baseText"]) ?? pythiaBaseTextFallback ?? pythiaBase.baseText,
             accent: parseColor(pythiaDict?["accent"]) ?? pythiaBase.accent,
             complementary: parseColor(pythiaDict?["complementary"]) ?? pythiaBase.complementary,
             codeBackground: parseColor(pythiaDict?["codeBackground"]) ?? pythiaBase.codeBackground,
             codeForeground: parseColor(pythiaDict?["codeForeground"]) ?? pythiaBase.codeForeground,
             shine: parseColor(pythiaDict?["shine"]) ?? pythiaBase.shine,
             glassTint: parseAlphaValue(pythiaDict?["glassTint"]) ?? pythiaBase.glassTint,
-            glassMaterialName: (pythiaDict?["glassMaterial"] as? String) ?? pythiaBase.glassMaterialName
+            glassMaterialName: (pythiaDict?["glassMaterial"] as? String) ?? pythiaBase.glassMaterialName,
+            fontFamily: pythiaDict?["fontFamily"] as? String
         )
 
         let tags = (dict["tags"] as? [Any]).flatMap { $0 as? [String] } ?? []
@@ -147,7 +158,7 @@ enum ThemeLoader {
 
         return LoadedTheme(
             name: name,
-            kind: kind,
+            appearance: appearance,
             tags: tags,
             themeClass: themeClass,
             scopeStyles: scopeStyles,
@@ -177,6 +188,7 @@ enum ThemeLoader {
             sidebarGlassMaterialName: sideMat,
             pythia: pythia,
             rulerForeground: parseColor(dict["rulerForeground"]) ?? editorForeground.withAlphaComponent(0.65),
+            rulerFontSize: (dict["rulerFontSize"] as? Double).map { CGFloat($0) },
             sidebarAccent: parseColor(dict["sidebarAccent"]) ?? selectionColor.withAlphaComponent(1),
             sidebarForeground: parseColor(dict["sidebarForeground"]) ?? editorForeground
         )
@@ -344,7 +356,7 @@ enum ThemeLoader {
 /// Concrete `SyntaxTheme` loaded from YAML.
 private struct LoadedTheme: SyntaxTheme {
     let name: String
-    let kind: ThemeKind
+    let appearance: ThemeAppearance
     let tags: [String]
     let themeClass: String?
     let scopeStyles: [TokenScope: TokenStyle]
@@ -380,6 +392,7 @@ private struct LoadedTheme: SyntaxTheme {
     let sidebarGlassMaterialName: String?
     let pythia: PythiaPalette
     var rulerForeground: NSColor = .secondaryLabelColor
+    var rulerFontSize: CGFloat? = nil
     var sidebarAccent: NSColor = .controlAccentColor
     var sidebarForeground: NSColor = .labelColor
 
@@ -427,7 +440,45 @@ private struct LoadedTheme: SyntaxTheme {
             merged = style
         }
 
+        // Emphasis markup deserves a *distinct* accent color, not just a weight/
+        // slant change. Most themes set `markup.bold`/`markup.italic` to the
+        // editor foreground (or leave them colorless), which reads as plain text
+        // with a font change. Derive warm/cool accents so bold and italic voice
+        // is visible as color. Explicit non-foreground colors are respected.
+        if scopeName == "markup.bold" || scopeName == "markup.italic" {
+            let explicit = rawScopeStyles[scopeName]?.foreground
+            let needsAccent = explicit == nil || (explicit.map { Self.isNear($0, editorForeground) } ?? true)
+            if needsAccent {
+                let style = merged ?? TokenStyle(editorForeground)
+                merged = TokenStyle(emphasisAccent(for: scopeName),
+                                    bg: style.background,
+                                    bold: style.isBold ?? (scopeName == "markup.bold"),
+                                    italic: style.isItalic ?? (scopeName == "markup.italic"),
+                                    underline: style.isUnderline,
+                                    strikethrough: style.isStrikethrough,
+                                    fontName: style.fontName,
+                                    fontSize: style.fontSize)
+            }
+        }
+
         return merged ?? TokenStyle(editorForeground)
+    }
+
+    /// Warm amber for bold, cool violet for italic — legible on dark and light.
+    private func emphasisAccent(for scopeName: String) -> NSColor {
+        let fg = editorForeground.usingColorSpace(.sRGB) ?? editorForeground
+        let isDark = fg.brightnessComponent < 0.5
+        let hue: CGFloat = scopeName == "markup.bold" ? 0.11 : 0.68
+        let brightness: CGFloat = isDark ? 0.82 : 0.44
+        return NSColor(calibratedHue: hue, saturation: 0.60, brightness: brightness, alpha: 1)
+    }
+
+    private static func isNear(_ a: NSColor, _ b: NSColor) -> Bool {
+        let ca = a.usingColorSpace(.sRGB) ?? a
+        let cb = b.usingColorSpace(.sRGB) ?? b
+        return abs(ca.redComponent - cb.redComponent) < 0.03
+            && abs(ca.greenComponent - cb.greenComponent) < 0.03
+            && abs(ca.blueComponent - cb.blueComponent) < 0.03
     }
 
     /// Merge two TokenStyles: override non-nil values win; nil falls back to base.
@@ -458,7 +509,7 @@ extension ThemeLoader {
     static func fallbackTheme() -> SyntaxTheme {
         LoadedTheme(
             name: "Fallback",
-            kind: .dark,
+            appearance: .dark,
             tags: [],
             themeClass: nil,
             scopeStyles: [:],
@@ -490,7 +541,7 @@ extension ThemeLoader {
                 background: NSColor(white: 0.08, alpha: 1.0),
                 foreground: NSColor(white: 0.70, alpha: 1.0),
                 accent: NSColor(red: 0.00, green: 0.18, blue: 0.33, alpha: 1.0),
-                kind: .dark,
+                appearance: .dark,
                 glassTint: 0.70,
                 glassMaterialName: nil
             )
@@ -501,7 +552,7 @@ extension ThemeLoader {
     static func builtInThemes() -> [SyntaxTheme] {
         let hermeticYaml = """
         name: Hermetic
-        kind: dark
+        appearance: dark
         scopes:
           keyword: "0xC759C7"
           keyword.type: "0xB08AD9"

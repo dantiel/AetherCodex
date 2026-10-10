@@ -57,13 +57,16 @@ enum FoldDetector {
         var regions: [FoldRegion] = []
         var stack: [(char: Character, charIndex: Int, line: Int)] = []
         var line = 0
-        let chars = Array(text)
+        var utf16Index = 0
 
-        for (i, ch) in chars.enumerated() {
+        // Iterate graphemes but track the running UTF-16 offset so that
+        // openCharIndex/closeCharIndex stay NSRange-aligned (consumed as
+        // NSRange(location:) by FoldState and CodeFoldingRibbon).
+        for ch in text {
             if ch == "\n" { line += 1 }
 
             if bracePairs[ch] != nil {
-                stack.append((ch, i, line))
+                stack.append((ch, utf16Index, line))
             } else if closers.contains(ch), let top = stack.last {
                 let expected = bracePairs[top.char]!
                 if ch == expected {
@@ -72,12 +75,13 @@ enum FoldDetector {
                         regions.append(FoldRegion(
                             startLine: top.line, endLine: line,
                             openToken: String(top.char),
-                            openCharIndex: top.charIndex, closeCharIndex: i))
+                            openCharIndex: top.charIndex, closeCharIndex: utf16Index))
                     }
                 } else {
                     stack.removeAll()
                 }
             }
+            utf16Index += ch.utf16.count
         }
         return regions
     }
