@@ -13,13 +13,17 @@
             <a class="home-link" href="../index.html" title="ÆtherCodex">
                 <span class="aether">Æther</span><span class="codex">Codex</span>
             </a>
-            <a href="../index.html#what">Features</a>
-            <a href="../index.html#companions">Council</a>
-            <a href="../index.html#chapters">Canon</a>
-            <a href="../index.html#tools">Capabilities</a>
+            <a href="../index.html#what" data-i18n="nav.features">Features</a>
+            <a href="../index.html#companions" data-i18n="nav.council">Council</a>
+            <a href="../index.html#chapters" data-i18n="nav.canon">Canon</a>
+            <a href="../index.html#tools" data-i18n="nav.capabilities">Capabilities</a>
             <span class="nav-spacer"></span>
-            <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub">Source</a>
-            <a class="nav-cta" href="../index.html#buy">Buy · $69</a>
+            <span class="lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
+                <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+            </span>
+            <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
+            <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
         </nav>
 
         <header class="oracle-header">
@@ -153,10 +157,11 @@
         </main>
 
         <footer class="oracle-footer">
-            <p><em>Precision in the code plane = precision in the astral plane.</em></p>
+            <p><em data-i18n="footer.tagline">Precision in the code plane = precision in the astral plane.</em></p>
             <div class="runes">✦ ✧ ✦</div>
         </footer>
     </div>
+    <script src="../i18n.js"></script>
     <script src="../eyes.js"></script>
 </body>
 </html>

@@ -50,9 +50,10 @@ fi
 # Copy the SwiftPM resource bundle — Bundle.module requires it
 if [ -d "$RESOURCE_BUNDLE" ]; then
     cp -R "$RESOURCE_BUNDLE" "$APP_DIR/Contents/Resources/"
-    # Also copy to app root — SPM's resource_bundle_accessor looks at Bundle.main.bundleURL
-    # (the .app directory itself), not resourceURL. This prevents Bundle.module fatalError.
-    cp -R "$RESOURCE_BUNDLE" "$APP_DIR/"
+    # AetherOracleResources.bundle resolves the packaged bundle inside
+    # Contents/Resources/ first (see AetherOracleResources.swift). No copy is
+    # made to the .app root — a stray bundle at the root makes codesign refuse
+    # to seal the app ("unsealed contents present in the bundle root").
     # Create subdirectories for resource loaders that expect a directory structure
     # (SPM flattens resource bundles, so ThemeLoader can't find a "Themes/" dir inside)
     mkdir -p "$APP_DIR/Contents/Resources/Themes"

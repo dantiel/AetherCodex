@@ -125,6 +125,36 @@ nav .nav-cta:hover {
   box-shadow: 0 6px 26px rgba(142, 68, 173, 0.4);
 }
 
+/* ---------- language switch ---------- */
+.lang-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--edge);
+}
+.lang-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  padding: 0.28rem 0.6rem;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+.lang-btn:hover { color: var(--white); }
+.lang-btn.active {
+  color: #fff;
+  background: linear-gradient(135deg, #4a90e2, #8e44ad);
+  box-shadow: 0 2px 10px rgba(74, 144, 226, 0.28);
+}
+
 /* ---------- hero ---------- */
 .oracle-header {
   text-align: center;
@@ -459,6 +489,31 @@ h3.subheadline {
 }
 .get-panel .platforms b { color: var(--white); font-weight: 600; }
 .get-panel .platforms .soon { opacity: 0.6; }
+.get-panel .platforms .platform {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem 1.1rem;
+  border-radius: 999px;
+  background: var(--glass-card);
+  border: 1px solid var(--edge);
+  color: var(--muted);
+  text-decoration: none;
+  transition: transform 0.22s ease, border-color 0.22s ease, color 0.22s ease, box-shadow 0.22s ease;
+}
+.get-panel .platforms .platform:hover {
+  transform: translateY(-2px);
+  color: var(--white);
+  border-color: var(--edge-hover);
+  box-shadow: 0 8px 24px rgba(74, 144, 226, 0.2);
+}
+.get-panel .platforms .platform-icon {
+  width: 1em;
+  height: 1em;
+  font-size: 1.15rem;
+  flex-shrink: 0;
+  color: var(--cosmic);
+}
 .get-actions {
   display: flex;
   gap: 0.9rem;
