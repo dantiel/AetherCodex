@@ -25,8 +25,8 @@ Mac's address across ports `4550…4610`.
 ## Targets
 
 - **Pythia** — the platform-agnostic companion (Foundation + SwiftUI). This is the
-  *voice* of the shared brain — **AetherOracle** (Ruby brain + CTreeSitter +
-  Resources) — which installs on every platform. The æther is everywhere; there is
+  *voice* of the shared brain — **AetherOracle** (Ruby brain + CTreeSitter) —
+  which installs on every platform. The æther is everywhere; there is
   no client/server split, only one distributed oracle with many windows. This same
   slice will feed the WinUI3 and GTK shells.
 - **PythiaCompanionApp** — the native SwiftUI application.

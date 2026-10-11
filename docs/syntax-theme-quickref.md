@@ -29,7 +29,7 @@ AetherCodex/App/
   SyntaxEngine.swift      — Orchestration, applyHighlighting
   SyntaxLoader.swift      — Heuristic fallback
 
-AetherOracle/resources/
+AetherCodex/Resources/resources/
   Themes/*.yml            — 52 themes
   Syntax/queries/*.scm    — 14 tree-sitter highlight queries
   Syntax/heuristic.yml    — Regex fallback patterns
@@ -52,13 +52,13 @@ Script/
 
 ```bash
 # Count scopes in a theme
-grep -c "^\s\+\w" AetherOracle/resources/Themes/theme.yml
+grep -c "^\s\+\w" AetherCodex/Resources/resources/Themes/theme.yml
 
 # List all theme names
-grep "^name:" AetherOracle/resources/Themes/*.yml
+grep "^name:" AetherCodex/Resources/resources/Themes/*.yml
 
 # Check for plain anchor (required)
-grep "plain:" AetherOracle/resources/Themes/*.yml
+grep "plain:" AetherCodex/Resources/resources/Themes/*.yml
 
 # Build + deploy
 swift build && ./bundle_app.sh

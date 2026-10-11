@@ -193,7 +193,7 @@ final class TreeSitterEngine: SyntaxEngineProtocol {
             return try? String(contentsOf: url)
         }
         // 4. Dev path relative to project root
-        let devPath = "AetherOracle/resources/Syntax/queries/\(name).scm"
+        let devPath = "AetherCodex/Resources/resources/Syntax/queries/\(name).scm"
         let cwd = FileManager.default.currentDirectoryPath
         print("[TS] loadQuery dev: \(devPath) cwd=\(cwd) exists=\(FileManager.default.fileExists(atPath: devPath))")
         if FileManager.default.fileExists(atPath: devPath) {

@@ -26,7 +26,7 @@ enum FontBundler {
             candidates.append(res.appendingPathComponent("Fonts"))
             candidates.append(res)
         }
-        candidates.append(URL(fileURLWithPath: "AetherOracle/resources/Fonts"))
+        candidates.append(URL(fileURLWithPath: "AetherCodex/Resources/resources/Fonts"))
 
         var fonts: [URL] = []
         var seen = Set<String>()

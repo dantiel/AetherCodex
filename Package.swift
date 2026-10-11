@@ -4,10 +4,11 @@ import PackageDescription
 // AetherCodex — the macOS editor shell.
 //
 // The shared brain lives in `AetherOracle/` (the extracted core): the Ruby
-// oracle (ruby/), the tree-sitter engine (treesitter/), the portable assets
-// (resources/), and the per-OS platform shims (platform/). This package only
-// *wires* the pieces that macOS needs; the iOS companion (Pythia-iOS) and the
-// future WinUI3/GTK shells each wire their own slice of the same core.
+// oracle (ruby/), the tree-sitter engine (treesitter/), and the per-platform
+// CLI specs (platform/). That repo is pure Ruby + C — no Swift, no UI assets.
+// This package (the macOS shell) owns its own visual grammar in
+// `AetherCodex/Resources/`; the iOS companion (Pythia-iOS) and the future
+// WinUI3/GTK shells each own their slice of the same core.
 let package = Package(
     name: "AetherCodex",
     platforms: [.macOS("26.0")],
@@ -61,7 +62,7 @@ let package = Package(
         ),
         .target(
             name: "AetherOracleResources",
-            path: "AetherOracle",
+            path: "AetherCodex/Resources",
             sources: ["AetherOracleResources.swift"],
             resources: [.process("resources")]
         ),

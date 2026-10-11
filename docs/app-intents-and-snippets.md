@@ -14,7 +14,7 @@ routed through it — reaches the user outside the app: Siri, Spotlight, Shortcu
 | Term | Meaning |
 |------|---------|
 | **aether** | The reasoning substrate. The Ruby brain (`AetherOracle/ruby/`) — `limen.rb`, `standalone_daemon.rb`, `aether_link.rb`. The *calculating space*: where the model actually reasons. |
-| **AetherOracle** | The packaged core — brain (`AetherOracle/ruby/`) + engine (`AetherOracle/treesitter`) + resources + per-OS platform shims (permissions, daemon lifecycle). Installed on **every** platform: the æther is everywhere. |
+| **AetherOracle** | The packaged core — brain (`AetherOracle/ruby/`) + engine (`AetherOracle/treesitter`) + per-platform CLI specs (`platform/`). Pure Ruby + C, no Swift, no UI assets. Installed on **every** platform: the æther is everywhere. |
 | **oracle** | A synonym for the aether. "Ask the oracle" = submit a turn to the aether. |
 | **pythia** | The vessel/voice through which the oracle speaks. The user-facing surface (Siri phrase = "Ask Pythia"). The default pantheon voice is `pythia` (`🐍`). |
 | **snippet** | The channel's answer surface. A glanceable, non-modal SwiftUI result returned by an intent — the oracle's reply rendered as a snippet, not a full app launch. |
@@ -51,8 +51,8 @@ through the same channel.
 - **`Pythia`** (pure Foundation + SwiftUI) is the *voice* slice:
   `OracleClient`, `Models`, `CompanionRoster`, and now `OracleConnectionStore`.
   It is **not** the AetherOracle itself — the AetherOracle is the shared brain
-  (`AetherOracle/ruby/` + `AetherOracle/treesitter` + `AetherOracle/resources/` +
-  per-OS platform shims) that these shells talk to over HTTP.
+  (`AetherOracle/ruby/` + `AetherOracle/treesitter` + `platform/`) that these
+  shells talk to over HTTP; each shell owns its own UI assets and platform shims.
   This same companion feeds the future WinUI3/GTK shells.
 - Intents on both platforms speak the **same HTTP contract** (`/aether/invoke`).
 

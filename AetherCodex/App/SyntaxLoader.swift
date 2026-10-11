@@ -29,7 +29,7 @@ enum SyntaxLoader {
             return SimpleYaml.loadFile(url.path)
         }
         // 4. Dev path
-        let devPath = URL(fileURLWithPath: "AetherOracle/resources/\(subdirectory)/\(name).yml")
+        let devPath = URL(fileURLWithPath: "AetherCodex/Resources/resources/\(subdirectory)/\(name).yml")
         if FileManager.default.fileExists(atPath: devPath.path) {
             return SimpleYaml.loadFile(devPath.path)
         }
@@ -54,7 +54,7 @@ enum SyntaxLoader {
             // SPM `.process` flattens directory structure into the bundle root.
             candidates.append(bundleURL.appendingPathComponent(name).path)
         }
-        candidates.append("AetherOracle/resources/\(subdirectory)/\(name)")
+        candidates.append("AetherCodex/Resources/resources/\(subdirectory)/\(name)")
         return candidates.first { FileManager.default.fileExists(atPath: $0) }
     }
 
