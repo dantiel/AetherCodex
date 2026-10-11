@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Fetch a broad set of TextMate grammars into AetherCodex/Resources/resources/Syntax/grammars/
+# Fetch a broad set of TextMate grammars into AetherOracle/resources/Syntax/grammars/
 # and emit the extension→scopeName registry (textmate_languages.yml).
 #
 # Sources (both are the standard TextMate grammar format textpow interprets):
@@ -19,8 +19,8 @@ require 'fileutils'
 $LOAD_PATH.unshift(File.expand_path('../AetherOracle/ruby/.vendor_bundle/ruby/3.1.0/gems/plist-3.7.2/lib', __dir__))
 require 'plist'
 
-DEST = File.expand_path('../AetherCodex/Resources/resources/Syntax/grammars', __dir__)
-REGISTRY = File.expand_path('../AetherCodex/Resources/resources/Syntax/textmate_languages.yml', __dir__)
+DEST = File.expand_path('../AetherOracle/resources/Syntax/grammars', __dir__)
+REGISTRY = File.expand_path('../AetherOracle/resources/Syntax/textmate_languages.yml', __dir__)
 
 GRAMMARS = {
   # ---- official TextMate bundles (classic) ----

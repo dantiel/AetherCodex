@@ -4,9 +4,16 @@
 # ============================================================================
 
 # ---------------------------------------------------------------------------
-# PRIVATE — never track. Lives only on the hard drive / Mnemosyne.
+# Personal config (keep out of repo)
 # ---------------------------------------------------------------------------
+config.local.yml
 .tm-ai/
+
+# ---------------------------------------------------------------------------
+# Release artifacts (built locally, uploaded to GitHub Releases — not committed)
+# ---------------------------------------------------------------------------
+*.dmg
+dmg-staging/
 .aether/
 .aethercodex
 hermetic.manifest.md
@@ -46,7 +53,6 @@ AetherOracle/ruby/.vendor_bundle/
 # (https://github.com/dantiel/AetherOracle), not tracked by this monorepo.
 # ---------------------------------------------------------------------------
 AetherOracle/
-=======
 
 # ---------------------------------------------------------------------------
 # Logs and diagnostics

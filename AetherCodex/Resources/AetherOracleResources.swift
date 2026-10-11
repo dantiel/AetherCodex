@@ -3,8 +3,9 @@ import Foundation
 /// Resource bundle accessor for the macOS editor's visual grammar.
 ///
 /// Themes (YAML), Syntax (tmLanguage + tree-sitter queries), and Fonts are the
-/// AetherCodex shell's own assets — they live here in the macOS package, not in
-/// the shared `AetherOracle/` core (which is pure Ruby + C, no Swift, no UI).
+/// shared AetherOracle core's data — they live in `AetherOracle/resources/`,
+/// consumed by both the Ruby chamber (ÆtherTheme) and every native shell. This
+/// enum only wraps them into a `Bundle.module` for the macOS package.
 public enum AetherOracleResources {
     /// The resource bundle for this resource-only target.
     ///

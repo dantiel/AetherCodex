@@ -52,9 +52,9 @@ enum SimpleYaml {
         // 3. Dev path
         let devPath: String
         if let sub = subdirectory {
-            devPath = "AetherCodex/Resources/resources/\(sub)/\(name).yml"
+            devPath = "AetherOracle/resources/\(sub)/\(name).yml"
         } else {
-            devPath = "AetherCodex/Resources/resources/\(name).yml"
+            devPath = "AetherOracle/resources/\(name).yml"
         }
         if FileManager.default.fileExists(atPath: devPath) {
             return loadFile(devPath)

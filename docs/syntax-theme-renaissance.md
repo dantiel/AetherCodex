@@ -346,9 +346,9 @@ The `if anchor_name not in scopes` guard ensures existing theme definitions take
 
 | File | Role |
 |------|------|
-| `AetherCodex/Resources/resources/Themes/*.yml` | 52 theme files (38 converted + 7 hand-crafted + 7 brilliance/legacy) |
-| `AetherCodex/Resources/resources/Syntax/heuristic.yml` | Regex patterns for heuristic fallback engine |
-| `AetherCodex/Resources/resources/Syntax/queries/*.scm` | Tree-sitter highlight queries (14 languages) |
+| `AetherOracle/resources/Themes/*.yml` | 52 theme files (38 converted + 7 hand-crafted + 7 brilliance/legacy) |
+| `AetherOracle/resources/Syntax/heuristic.yml` | Regex patterns for heuristic fallback engine |
+| `AetherOracle/resources/Syntax/queries/*.scm` | Tree-sitter highlight queries (14 languages) |
 
 ### Scripts
 
@@ -385,11 +385,11 @@ This script:
 **Option A: Convert from tmTheme**
 ```bash
 python3 Script/convert_themes.py path/to/theme.tmTheme
-# Output: AetherCodex/Resources/resources/Themes/theme-name.yml
+# Output: AetherOracle/resources/Themes/theme-name.yml
 ```
 
 **Option B: Hand-craft**
-Create a new `.yml` file in `AetherCodex/Resources/resources/Themes/`:
+Create a new `.yml` file in `AetherOracle/resources/Themes/`:
 ```yaml
 name: My Theme
 kind: dark
@@ -444,7 +444,7 @@ swift build && ./bundle_app.sh
 
 1. Verify the theme `.yml` has `plain` defined
 2. Check `rawScopeStyles` count — should be >15 for converted themes
-3. Run: `grep -c "^\s\+\w" AetherCodex/Resources/resources/Themes/theme-name.yml` to count scope entries
+3. Run: `grep -c "^\s\+\w" AetherOracle/resources/Themes/theme-name.yml` to count scope entries
 
 ### "Converter fails on malformed XML"
 

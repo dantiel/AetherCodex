@@ -43,7 +43,7 @@ enum ThemeLoader {
             }
         }
         // 3. Relative path from executable (dev workflow)
-        let devPath = URL(fileURLWithPath: "AetherCodex/Resources/resources/Themes")
+        let devPath = URL(fileURLWithPath: "AetherOracle/resources/Themes")
         if FileManager.default.fileExists(atPath: devPath.path) {
             return devPath
         }
