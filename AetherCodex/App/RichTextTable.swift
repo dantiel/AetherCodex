@@ -6,14 +6,37 @@ enum RichTextTable {
         let table = NSTextTable()
         table.numberOfColumns = rows.map(\.count).max() ?? 1
         table.collapsesBorders = true
-        let theme = ThemeRegistry.shared.current
         for (row, cells) in rows.enumerated() {
+            let header = row == 0
+            let lastRow = row == rows.count - 1
             for column in 0..<table.numberOfColumns {
                 let block = NSTextTableBlock(table: table, startingRow: row, rowSpan: 1, startingColumn: column, columnSpan: 1)
-                block.setWidth(6, type: .absoluteValueType, for: .padding)
-                block.setWidth(0.5, type: .absoluteValueType, for: .border)
-                block.setBorderColor(theme.rulerSeparator.withAlphaComponent(0.35))
-                block.backgroundColor = theme.sidebarAccent.withAlphaComponent(row == 0 ? 0.14 : 0.035)
+                // Correspondence: the editable surface reads the same style truth
+                // as the oracle surface (MarkdownTableView) — header wash, row wash,
+                // border — so both render as one table.
+                block.setBorderColor(MarkdownTableStyle.border)
+                block.backgroundColor = header ? MarkdownTableStyle.headerBackground : MarkdownTableStyle.rowTint(row)
+                // Innenabstand: derselbe Atem wie die SwiftUI-Fläche, per Kante —
+                // `NSTextBlock` kennt keinen horizontalen/vertikalen Sammelwert.
+                block.setWidth(MarkdownTableStyle.cellPaddingH, type: .absoluteValueType, for: .padding, edge: .minX)
+                block.setWidth(MarkdownTableStyle.cellPaddingH, type: .absoluteValueType, for: .padding, edge: .maxX)
+                block.setWidth(MarkdownTableStyle.cellPaddingV, type: .absoluteValueType, for: .padding, edge: .minY)
+                block.setWidth(MarkdownTableStyle.cellPaddingV, type: .absoluteValueType, for: .padding, edge: .maxY)
+                // Zeilen-Trenner: die Grammatik aus MarkdownTableStyle, per Kante
+                // gesprochen — senkrechte Haarlinien, eine Unterkante der Kopfzeile,
+                // kein waagerechtes Gitter im Körper (dort trennt der Wasch), und
+                // ein Rahmen, der die Tabelle oben und unten schließt. Kollabieren
+                // benachbarter Kanten lässt die dickere gewinnen.
+                let lastColumn = column == table.numberOfColumns - 1
+                let stroke = MarkdownTableStyle.borderWidth
+                let top = header ? stroke : 0
+                let bottom = (header && MarkdownTableStyle.headerRule) || lastRow || MarkdownTableStyle.rowRules ? stroke : 0
+                let leading = column == 0 ? stroke : 0
+                let trailing = lastColumn || MarkdownTableStyle.columnRules ? stroke : 0
+                block.setWidth(top, type: .absoluteValueType, for: .border, edge: .minY)
+                block.setWidth(bottom, type: .absoluteValueType, for: .border, edge: .maxY)
+                block.setWidth(leading, type: .absoluteValueType, for: .border, edge: .minX)
+                block.setWidth(trailing, type: .absoluteValueType, for: .border, edge: .maxX)
                 let paragraph = NSMutableParagraphStyle()
                 paragraph.textBlocks = [block]
                 paragraph.paragraphSpacing = 0

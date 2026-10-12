@@ -27,7 +27,12 @@ enum MarkdownRichCodec {
         let checked: Bool
         init(checked: Bool) {
             self.checked = checked
-            super.init(markerFormat: .box, options: 0)
+            // Call the *designated* initializer directly. `NSTextList`'s
+            // `init(markerFormat:options:)` is a convenience initializer that
+            // redispatches to `init(markerFormat:options:startingItemNumber:)`
+            // on `self` — which a Swift subclass does not implement, aborting
+            // with "Use of unimplemented initializer".
+            super.init(markerFormat: .box, options: [], startingItemNumber: 1)
         }
         required init?(coder: NSCoder) { fatalError("not used") }
         override func marker(forItemNumber itemNum: Int) -> String {
