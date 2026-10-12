@@ -75,6 +75,9 @@ enum MarkdownRichCodec {
                 i += 1
                 continue
             }
+            // Own scan, not MarkdownBlock.parse's: this one retains the raw divider row
+            // (byte-exact round-trip, below) and fuses header into rows. Shared law:
+            // MarkdownBlock.cells / isTableDivider.
             if i + 1 < lines.count, line.contains("|"), MarkdownBlock.isTableDivider(lines[i + 1]) {
                 var rows = [MarkdownBlock.cells(line)]
                 var next = i + 2
