@@ -1661,6 +1661,9 @@ struct PythiaPanel: View {
     @ObservedObject private var aetherContext = AetherContext.shared
     @State private var themeRevision = 0
     @State private var mode: PythiaMode = .pythia
+    /// Measured height of the whole pane — the budget the unfolded Aegis mirror
+    /// may draw from without starving the message list.
+    @State private var paneHeight: CGFloat = 0
 
     /// The active theme's chamber palette — mirrors the code editor's chrome.
     private var palette: PythiaPalette { ThemeRegistry.shared.current.pythia }
@@ -1723,7 +1726,9 @@ struct PythiaPanel: View {
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
               }
 
-              AegisWidgetView()
+              AegisWidgetView(
+                  maxDetailHeight: AegisWidgetView.detailCap(forPaneHeight: paneHeight)
+              )
                   .padding(.horizontal, 10)
                   .padding(.top, 6)
                   .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -1751,6 +1756,7 @@ struct PythiaPanel: View {
         .onReceive(NotificationCenter.default.publisher(for: ThemeSettings.didChangeNotification)) { _ in
             themeRevision += 1
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { paneHeight = $0 }
         .sheet(item: $model.activeAskUser) { prompt in
             AskUserDialog(prompt: prompt) { response in
                 model.respondToAskUser(prompt, response: response)

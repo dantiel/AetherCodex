@@ -266,6 +266,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         viewMenuItem.submenu?.addItem(withTitle: "Toggle File Browser", action: #selector(MainWindowController.toggleFileBrowser(_:)), keyEquivalent: "1")
         viewMenuItem.submenu?.addItem(withTitle: "Toggle Pythia", action: #selector(MainWindowController.togglePythia(_:)), keyEquivalent: "2")
         viewMenuItem.submenu?.addItem(withTitle: "Oracle Only", action: #selector(MainWindowController.toggleOracleOnly(_:)), keyEquivalent: "3")
+        let aegisItem = viewMenuItem.submenu?.addItem(withTitle: "Aegis Mirror", action: #selector(MainWindowController.toggleAegis(_:)), keyEquivalent: "a")
+        aegisItem?.keyEquivalentModifierMask = [.command, .shift]
         viewMenuItem.submenu?.addItem(NSMenuItem.separator())
         let softWrapItem = viewMenuItem.submenu?.addItem(withTitle: "Soft Wrap", action: #selector(MainWindowController.toggleWordWrap(_:)), keyEquivalent: "w")
         softWrapItem?.keyEquivalentModifierMask = [.control, .option]

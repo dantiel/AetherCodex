@@ -133,6 +133,14 @@ final class AegisWidgetModel: ObservableObject {
     /// How many Mnemosyne notes the Coniunctio assembler recalls into this
     /// orientation — the one depth knob the hidden context-builder exposes.
     @Published var recallLimit: Int = 8
+    /// The mirror's fold state. Owned here rather than by a private `@State`:
+    /// the ⌘⇧A menu item, the inline widget and the detached window must all
+    /// speak of one fold — a shortcut can only move what it can see.
+    @Published var expanded: Bool = false
+
+    func toggleExpanded() {
+        expanded.toggle()
+    }
 
     private init() {
         let saved = UserDefaults.standard.integer(forKey: Self.recallLimitKey)
@@ -252,19 +260,50 @@ final class AegisWidgetModel: ObservableObject {
 /// that lifts it into its own floating glass window.
 struct AegisWidgetView: View {
     @ObservedObject var model: AegisWidgetModel
-    @State private var expanded = false
+    /// Ceiling for the unfolded mirror. It lives in a bottom `safeAreaBar`,
+    /// which sizes itself to its content — an unbounded detail would grow until
+    /// it had stolen the whole chamber: Pythia's message list would collapse and
+    /// the input bar would fall below the fold. The mirror scrolls inside this
+    /// cap instead, so unfolding can never cost more than this much height.
+    var maxDetailHeight: CGFloat = 240
 
-    init(model: AegisWidgetModel = .shared) {
+    init(model: AegisWidgetModel = .shared, maxDetailHeight: CGFloat = 240) {
         self.model = model
+        self.maxDetailHeight = maxDetailHeight
+    }
+
+    /// The mirror asks for a third of the chamber…
+    static let detailFraction: CGFloat = 0.34
+    /// …but may never own half of it: a mirror you cannot see past is no mirror.
+    static let detailMaxShare: CGFloat = 0.5
+    /// Below this the mirror is unreadable, so legibility sets the floor.
+    static let detailMinHeight: CGFloat = 120
+    /// And above this it stops being a mirror and becomes a page.
+    static let detailCeiling: CGFloat = 320
+
+    /// Ceiling for the unfolded mirror, given the chamber's height. The page it
+    /// lives in is Pythia's bottom `safeAreaBar`, which sizes itself to content —
+    /// so this number is the only thing standing between "unfold" and "the pane
+    /// is gone". Three rules, applied in that order: a third of the chamber,
+    /// never past half of it, never past an absolute ceiling.
+    static func detailCap(forPaneHeight height: CGFloat) -> CGFloat {
+        // Not yet measured: stay conservative rather than optimistic.
+        guard height > 0 else { return detailMinHeight }
+        let preferred = max(detailMinHeight, height * detailFraction)
+        return min(detailCeiling, preferred, height * detailMaxShare)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
 
-            if expanded {
+            if model.expanded {
                 Divider().opacity(0.35)
-                AegisDetailView(model: model)
+                ScrollView(.vertical) {
+                    AegisDetailView(model: model)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: maxDetailHeight)
             }
         }
         .background(.indigo.opacity(0.10), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -280,11 +319,11 @@ struct AegisWidgetView: View {
         HStack(spacing: 7) {
             Button {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
-                    expanded.toggle()
+                    model.toggleExpanded()
                 }
             } label: {
                 HStack(spacing: 5) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    Image(systemName: model.expanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(.secondary)
                     Image(systemName: "shield.lefthalf.filled")

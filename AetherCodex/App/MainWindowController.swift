@@ -962,6 +962,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         saveSessionState()
     }
 
+    /// Toggle the Aegis mirror (⌘⇧A). Unfolding the mirror implies its pane:
+    /// Aegis has nowhere to breathe while Pythia lies folded away, so a bare
+    /// shortcut opens the chamber first and unfolds the mirror second.
+    @objc func toggleAegis(_ sender: Any?) {
+        guard let chrome = chromeState else { return }
+        let opening = !AegisWidgetModel.shared.expanded
+        if opening && !chrome.pythiaVisible && !chrome.oracleOnly {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                chrome.pythiaVisible = true
+            }
+            saveSessionState()
+        }
+        withAnimation(.easeInOut(duration: 0.28)) {
+            AegisWidgetModel.shared.expanded = opening
+        }
+        // The mirror is a live reading; unfolding it re-reads the daemon.
+        if opening { Task { await AegisWidgetModel.shared.refresh() } }
+    }
+
     /// Toggle Oracle-only mode. Instead of sliding a panel wider, the whole
     /// window turns over like a card — Pythia alone on the reverse face.
     @objc func toggleOracleOnly(_ sender: Any?) {
@@ -1161,6 +1180,9 @@ extension MainWindowController {
         }
         if menuItem.action == #selector(toggleWrapColumn(_:)) {
             menuItem.state = EditorDisplaySettings.shared.showWrapColumn ? .on : .off
+        }
+        if menuItem.action == #selector(toggleAegis(_:)) {
+            menuItem.state = AegisWidgetModel.shared.expanded ? .on : .off
         }
         if menuItem.action == #selector(setWrapColumnWidth(_:)) {
             let value = (menuItem.representedObject as? Int) ?? -1
