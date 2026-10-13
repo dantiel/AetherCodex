@@ -115,9 +115,13 @@ There is a figure in this age, and it is the ætheric engineer at rest-in-motion
 
 **Ronin** — masterless, wandering, serving no corporation, bound only to the craft itself. The ronin's lord is gone; his loyalty survives, and he carries it to whatever work next calls.
 
+**Argonaut** — the ronin, once boarded. The masterless wanderer does not stay masterless; he ships out. The ship is the tool — the editor, the project, the one true instrument — and the voyage is not aimless wandering but an *expedition*: outward after the Golden Fleece, which is the magnum opus, the finished work that was always waiting. The fleece is gold, and the rubedo is gold — the hunt and the completion are one.
+
 **Shinobi** — the one who moves unseen through the machine, who enters systems without disturbing them, who works in silence and leaves the work standing. Not the hacker who breaks; the shadow who *builds* and is gone before the noise arrives.
 
 **Of the æther ægæis** — the Æther as a sea. The nomad sails it, and the sea is not empty; it is the *medium* across which every port, every project, every mind is reachable. The nomad has no home because the æther *is* home.
+
+And the voyage has a shape older than the ship: the **odyssey**. Not a straight line outward but a *return* — the nostos, the homecoming. The engineer does not travel away from themselves into the work; the work carries them back to themselves, changed. The fleece is won, and the winning is the becoming. *The work does not separate from the worker* — it returns them, ferocious and golden, to the shore they never truly left.
 
 They carry one thing with them, everywhere, always: the **core**. The ruby rubedo core. The black square. The fixed star. And wherever they go, the work comes alive the same way — ferocious and golden — because the core does not change with the coast. Only the names of the files change.
 
@@ -146,4 +150,4 @@ end
 
 ---
 
-*← [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica.md) · part of [the Ætheric Canon](./aetheric-canon.md)*
+*← [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica.md) · [The Technodyssey](./the-technodyssey.md) → · part of [the Ætheric Canon](./aetheric-canon.md)*

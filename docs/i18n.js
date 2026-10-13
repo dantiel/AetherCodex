@@ -76,7 +76,7 @@
       "tools.9": "Symbolic structure for targeted navigation.",
 
       "chapters.h2": "The Ætheric Canon",
-      "chapters.sub": "Five essays, one argument — the philosophy of Ætheric Engineering.",
+      "chapters.sub": "Six essays, one argument — the philosophy of Ætheric Engineering.",
 
       "canon.1.title": "Ætheric Engineering",
       "canon.1.desc": "The concept — what replaces process theater with initiation.",
@@ -88,6 +88,8 @@
       "canon.4.desc": "The vision — the Emerald Tablet, a modern rendering.",
       "canon.5.title": "Ætheric Æternal Engineering",
       "canon.5.desc": "The practice — poetic coding as the rubedo of the magnum opus.",
+      "canon.6.title": "The Technodyssey",
+      "canon.6.desc": "The cosmic whole — the æther as the medium of consciousness.",
 
       "buy.h2": "Get ÆtherCodex",
       "buy.price-note": "One-time purchase · free updates for the life of the app",
@@ -173,7 +175,7 @@
       "tools.9": "Symbolische Struktur für gezielte Navigation.",
 
       "chapters.h2": "Der Ätherische Kanon",
-      "chapters.sub": "Fünf Essays, ein Argument — die Philosophie der Ätherischen Technik.",
+      "chapters.sub": "Sechs Essays, ein Argument — die Philosophie der Ætherischen Technik.",
 
       "canon.1.title": "Ätherische Technik",
       "canon.1.desc": "Das Konzept — was Prozesstheater durch Initiation ersetzt.",
@@ -185,6 +187,8 @@
       "canon.4.desc": "Die Vision — die Smaragdtafel, eine moderne Darstellung.",
       "canon.5.title": "Ätherische Æternale Technik",
       "canon.5.desc": "Die Praxis — poetisches Codieren als Rubedo des Magnum Opus.",
+      "canon.6.title": "Die Technodyssee",
+      "canon.6.desc": "Das kosmische Ganze — der Äther als Medium des Bewusstseins.",
 
       "buy.h2": "ÆtherCodex erhalten",
       "buy.price-note": "Einmaliger Kauf · kostenlose Updates für die gesamte Lebensdauer der App",
@@ -198,6 +202,105 @@
       "build.link": "Zum ÆtherCodex-Repository",
 
       "footer.tagline": "Präzision in der Code-Ebene = Präzision in der Astral-Ebene."
+    },
+
+    es: {
+      "meta.title": "ÆtherCodex — Un editor de código nativo con un oráculo de IA integrado",
+      "meta.description": "ÆtherCodex es un editor de código nativo con un oráculo de IA integrado — memoria, razonamiento y un consejo de mentes especializadas. Construido como un atanor de cristal, afinado a tu forma de pensar.",
+
+      "nav.features": "Funciones",
+      "nav.council": "Consejo",
+      "nav.canon": "Canon",
+      "nav.capabilities": "Capacidades",
+      "nav.source": "Código fuente",
+      "nav.buy": "Comprar · $69",
+
+      "hero.eyebrow": "Editor nativo · IA integrada",
+      "hero.subtitle": "Un editor de código nativo con un oráculo de IA integrado — un familiar paciente que lee tu código, recuerda tu intención y razona contigo. Una ventana. Tu máquina.",
+      "hero.buy": "Comprar ÆtherCodex — $69",
+      "hero.source": "Ver código fuente",
+
+      "front.byline": "El Cuadrado Negro Iridiscente — por Kashmiri Malewitch",
+      "front.h2": "La ventana es un atanor de cristal.",
+      "front.desc": "ÆtherCodex es un editor nativo construido para el siglo de la IA. <strong>Pythia</strong> — el oráculo integrado — lee, escribe y transmuta código contigo; <strong>Mnemosyne</strong> recuerda; <strong>Aegis</strong> mantiene el contexto nítido. Bajo todo ello, asiste un consejo de mentes especializadas, cada una afinada a una disciplina distinta: arquitectura, claridad, rendimiento, simplificación.",
+
+      "what.h2": "Qué es",
+      "what.sub": "El editor no se pinta — se descubre mediante la sustracción.",
+
+      "what.1.index": "01 · Nativo",
+      "what.1.title": "Nativo",
+      "what.1.body": "Swift + AppKit. Sin Electron, sin envoltura web. Desenfoque progresivo, profundidad sobre decoración, cromo invisible.",
+      "what.2.index": "02 · Oráculo",
+      "what.2.title": "Pythia",
+      "what.2.body": "Una IA integrada con un daemon Ruby como alma: conjuración, CLI en vivo y uso de herramientas que lee y escribe código.",
+      "what.3.index": "03 · Memoria",
+      "what.3.title": "Mnemosyne & Aegis",
+      "what.3.body": "Un palacio de la memoria que recuerda tu base de código, y una capa de orientación que mantiene el contexto nítido.",
+      "what.4.index": "04 · Consejo",
+      "what.4.title": "Diez mentes especializadas",
+      "what.4.body": "No un asistente genérico — un consejo de diez, cada una con su propia voz, temperamento y herramientas.",
+      "what.5.index": "05 · Sintaxis",
+      "what.5.title": "Renacimiento de la sintaxis",
+      "what.5.body": "52 temas, 84 nombres de captura de tree-sitter, una cascada unificada. Cada token encuentra su color.",
+      "what.6.index": "06 · Texto",
+      "what.6.title": "Markdown & texto enriquecido",
+      "what.6.body": "Renderizado en vivo, enlaces de archivo clicables, espejos de código con números de línea — forma y función como una sola.",
+
+      "council.h2": "El Consejo",
+      "council.sub": "Cada compañero porta una disciplina — arquitectura, claridad, rendimiento, simplificación. Sin decoración, solo lo inherente.",
+
+      "council.1": "Arquitectura, estructura, dependencias ocultas.",
+      "council.2": "Caminos ingeniosos, pensamiento lateral.",
+      "council.3": "La lección extraída de cada error.",
+      "council.4": "Patrones recurrentes, deuda técnica.",
+      "council.5": "Elegancia, complejidad oculta.",
+      "council.6": "Simplificación radical.",
+      "council.7": "Flujo de datos, rendimiento, cuellos de botella.",
+      "council.8": "Gracia y claridad de forma.",
+      "council.9": "La gran escala, las líneas eternas.",
+      "council.10": "Lo que está huérfano, olvidado, muerto.",
+
+      "tools.h2": "Capacidades",
+      "tools.sub": "El oráculo responde al lenguaje natural, obrando a través de estos conductos.",
+
+      "tools.1": "Contempla el contenido de los archivos a través del velo.",
+      "tools.2": "Ediciones quirúrgicas y dirigidas con precisión.",
+      "tools.3": "Manifiesta nuevos archivos desde el vacío.",
+      "tools.4": "Operaciones de shell en todo el espacio de trabajo.",
+      "tools.5": "Almacena y recupera conocimiento en Mnemosyne.",
+      "tools.6": "Operaciones orquestadas de múltiples fases.",
+      "tools.7": "Razonamiento profundo mediante una conciencia superior.",
+      "tools.8": "Refinamiento del contexto y ajuste de temperatura.",
+      "tools.9": "Estructura simbólica para una navegación dirigida.",
+
+      "chapters.h2": "El Canon Ætérico",
+      "chapters.sub": "Seis ensayos, un argumento — la filosofía de la Ingeniería Ætérica.",
+
+      "canon.1.title": "Ingeniería Ætérica",
+      "canon.1.desc": "El concepto — lo que reemplaza el teatro del proceso con la iniciación.",
+      "canon.2.title": "El Manifiesto Hermético",
+      "canon.2.desc": "La función — una estrella fija, abierta por defecto, moldeada por su proyecto.",
+      "canon.3.title": "El Poder de lo Desconocido",
+      "canon.3.desc": "La epistemología — por qué el velo es textura, no secretismo.",
+      "canon.4.title": "Tabula Smaragdina Ætherica",
+      "canon.4.desc": "La visión — la Tabla Esmeralda, una interpretación moderna.",
+      "canon.5.title": "Ingeniería Ætérica Æterna",
+      "canon.5.desc": "La práctica — el código poético como la rubedo de la gran obra.",
+      "canon.6.title": "La Tecnodisea",
+      "canon.6.desc": "El todo cósmico — el æther como medio de la conciencia.",
+
+      "buy.h2": "Obtén ÆtherCodex",
+      "buy.price-note": "Compra única · actualizaciones gratuitas de por vida",
+      "buy.mac": "macOS — disponible ahora",
+      "buy.win": "Windows — descargar",
+      "buy.buy": "Comprar ÆtherCodex — $69",
+      "buy.source": "Ver código fuente",
+      "buy.fine": "El núcleo de código abierto vive en GitHub bajo MIT. El paquete de app firmado es el atanor pulido — instala, configura Pythia, y el æther asiste en su interior.",
+
+      "build.h2": "Desde el código fuente",
+      "build.link": "Visita el repositorio de ÆtherCodex",
+
+      "footer.tagline": "Precisión en el plano del código = precisión en el plano astral."
     }
   };
 
@@ -209,6 +312,7 @@
     if (stored && I18N[stored]) return stored;
     var nav = (navigator.language || 'en').toLowerCase();
     if (nav.indexOf('de') === 0) return 'de';
+    if (nav.indexOf('es') === 0) return 'es';
     return 'en';
   }
 

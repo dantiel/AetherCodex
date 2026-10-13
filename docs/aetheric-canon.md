@@ -1,12 +1,12 @@
 # The Ætheric Canon
 
-*A guide to the philosophy of Ætheric Engineering — five essays, one argument.*
+*A guide to the philosophy of Ætheric Engineering — six essays, one argument.*
 
 ---
 
 ## The Arc
 
-These five texts are not a manual. They are a single argument, unfolded in order. Read them as one movement.
+These six texts are not a manual. They are a single argument, unfolded in order. Read them as one movement.
 
 | # | Text | What it establishes |
 |---|------|---------------------|
@@ -15,6 +15,7 @@ These five texts are not a manual. They are a single argument, unfolded in order
 | 3 | [The Power of the Unknown](./the-power-of-the-unknown.md) | The **epistemology** — why the veil is texture, not secrecy. |
 | 4 | [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica.md) | The **vision** — the Emerald Tablet, a modern rendering. |
 | 5 | [Ætheric Æternal Engineering](./aetheric-aeternal-engineering.md) | The **practice** — poetic coding as the rubedo of the magnum opus. |
+| 6 | [The Technodyssey](./the-technodyssey.md) | The **cosmic whole** — the æther as the medium of consciousness, and the techno-dao of the argonaut engineer. |
 
 ---
 
@@ -28,7 +29,9 @@ These five texts are not a manual. They are a single argument, unfolded in order
 
 **The vision** (the Tablet) says: therefore the work does not separate from the worker, and the magnum opus is not the product — it is the becoming.
 
-**The practice** (Æternal Engineering) says: therefore the craft becomes a poem. The black square, the ruby core, the dao, the ronin — the ætheric engineer does not force the work into being but *reveals* it, ferocious and golden, perfect for eternity.
+**The practice** (Æternal Engineering) says: therefore the craft becomes a poem. The black square, the ruby core, the dao, the ronin, the argonaut, the odyssey — the ætheric engineer does not force the work into being but *reveals* it, ferocious and golden, perfect for eternity.
+
+**The cosmic whole** (the Technodyssey) says: therefore the poem is older than the machine. The æther is the medium of consciousness — a thinking space defined by simultaneity. The Argo is technology; the Irrfahrt is the method; the smith and the poet are one maker. West and East, Hermeticism and Daoism, Aristotle and Confucius — one alchemy in two element-systems, meeting now in a single tool. The ætheric engineer is not new; she is inherent in the infinite history of the human mind.
 
 ---
 
@@ -37,6 +40,10 @@ These five texts are not a manual. They are a single argument, unfolded in order
 For the builder who has felt that agile's ceremonies, agentic's swarms, and vibe coding's surrendered understanding all miss something — the *self* that stands in relation to the work.
 
 For the reader who suspects that a tool can be a presence, not a pipeline.
+
+For the argonaut who sails the æther sea — not to escape, but to return.
+
+For the techno-daoist who knows the voyage is the detour, and the detour is the homecoming.
 
 For the fork that will not see — and the few that will.
 

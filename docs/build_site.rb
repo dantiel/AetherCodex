@@ -17,6 +17,7 @@ CHAPTERS = [
   ['the-power-of-the-unknown', 'The Power of the Unknown'],
   ['tabula-smaragdina-aetherica', 'Tabula Smaragdina Ætherica'],
   ['aetheric-aeternal-engineering', 'Ætheric Æternal Engineering'],
+  ['the-technodyssey', 'The Technodyssey'],
 ]
 
 def template(title, body, opts = {})
@@ -46,6 +47,7 @@ def template(title, body, opts = {})
                 <span class="lang-switch" role="group" aria-label="Language">
                     <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
                     <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+                    <button type="button" class="lang-btn" data-lang="es" aria-pressed="false">ES</button>
                 </span>
                 <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
                 <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
@@ -56,7 +58,7 @@ def template(title, body, opts = {})
                     <h1 class="logo" style="font-size:2.4rem;">
                         <span class="aether">Æther</span><span class="codex">Codex</span>
                     </h1>
-                    <p class="subtitle">The Ætheric Canon — five essays, one argument</p>
+                    <p class="subtitle">The Ætheric Canon — six essays, one argument</p>
                 </div>
             </header>
 

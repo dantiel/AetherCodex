@@ -100,7 +100,9 @@ Thumbs.db
 # written to `.aether/` (already ignored) or `/tmp`, never beside the repo.
 # ---------------------------------------------------------------------------
 hello_aether*
+hello-æther*
 hello_æther*
+hello-aether*
 aether.swift
 aether_greet*
 aether_hello*
