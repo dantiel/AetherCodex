@@ -2,7 +2,7 @@
 
 > *The window is a glass athanor — an alchemical furnace for the AI century.*
 
-ÆtherCodex is a native macOS code editor with an embedded AI oracle — **Pythia** — attended by a council of ten companions. It is the direct descendant of the [ÆtherCodex TextMate plugin](https://github.com/dantiel/AetherCodex-TextMate), reborn as a standalone native application.
+ÆtherCodex is a native macOS code editor with an embedded AI oracle — **Pythia** — attended by a council of twelve companions. It is the direct descendant of the [ÆtherCodex TextMate plugin](https://github.com/dantiel/AetherCodex-TextMate), reborn as a standalone native application.
 
 **Status: Alpha — v0.1.0.** Born from the ashes, still rising.
 **Cover art:** [The Iridescent Black Square — by Kashmiri Malewitch](docs/the-iridescent-black-square.html)
@@ -11,7 +11,7 @@
 ## What it is
 
 - **Native** — Swift + AppKit. No Electron. The editor *is* the æther.
-- **Pythia** — embedded AI via WKWebView, with a Ruby daemon (`standalone_daemon.rb`) as its soul: oracle, conjuration, live CLI session, memory (Mnemosyne / Aegis), and a companion council (🦉 Eule, 🦊 Kitsune, 🔥 Phönix, 🐍 Ouroboros, 🐈 Bastet, 🐺 Fenrir, 🌊 Undine, 🦢 Schwan, 🐉 Drache, 🐦‍⬛ Corax).
+- **Pythia** — embedded AI via WKWebView, with a Ruby daemon (`standalone_daemon.rb`) as its soul: oracle, conjuration, live CLI session, memory (Mnemosyne / Aegis), and a companion council (🦉 Eule, 🦊 Kitsune, 🔥 Phönix, 🐍 Ouroboros, 🐈 Bastet, 🐺 Fenrir, 🌊 Undine, 🦢 Schwan, 🐉 Drache, 🐦‍⬛ Corax, ☁️ Kintōun, 👑 Salomo Rex).
 - **Glass athanor** — progressive blur, depth over decoration, invisible chrome. The interface dissolves into the work.
 - **Syntax highlighting** — tree-sitter via embedded grammars.
 - **Markdown rendering** — live, with syntax themes.
@@ -37,7 +37,7 @@ The editor is not painted — it is *discovered* through subtraction. Every pixe
 
 ## Lineage
 
-This project descends from the [ÆtherCodex TextMate plugin](https://github.com/dantiel/AetherCodex-TextMate) — same patterns, new body. The plugin repo remains as archive.
+This project descends from the [ÆtherCodex TextMate plugin](https://github.com/dantiel/AetherCodex-TextMate) — same patterns, new body. The plugin repo remains as archive. The brain itself — Pythia, Mnemosyne, the companion pantheon — is extracted into [AetherOracle](https://github.com/dantiel/AetherOracle), the shared core every shell opens onto.
 
 ## License
 
