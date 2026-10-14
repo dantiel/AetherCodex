@@ -182,6 +182,9 @@ struct AetherCommands: Commands {
             Button("Test Mnemosyne") { actions.testMnemosyne() }
             Button("Test Aegis") { actions.testAegis() }
             Divider()
+            Button("Open Ægis Shield") { actions.openAegisShield() }
+            Button("Capture Screen (Ægis)") { actions.captureScreenViaAegis() }
+            Divider()
             Button("Daemon Status") { actions.daemonStatus() }
             Divider()
             Button("Show Æther Debug") { actions.toggleAetherDebug() }

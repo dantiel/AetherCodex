@@ -155,6 +155,45 @@ final class AppActions {
                   message: isRunning ? "Ruby daemon is running" : "Ruby daemon is stopped")
     }
 
+    // MARK: - Ægis Shield
+
+    /// Reveal the Ægis — the shield that holds the system privileges so the
+    /// editor never has to re-prompt across rebuilds.
+    func openAegisShield() {
+        AegisClient.shared.openShield()
+    }
+
+    /// Ask the shield to reflect the light of the screen, then save the result
+    /// to ~/Pictures/AetherCodex and reveal it in Finder.
+    func captureScreenViaAegis() {
+        Task {
+            let (data, error) = await AegisClient.shared.captureScreen()
+            await MainActor.run {
+                guard let data, let image = NSImage(data: data) else {
+                    showAlert(title: "Ægis", message: error ?? "The shield returned no image.")
+                    return
+                }
+                let dir = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Pictures/AetherCodex", isDirectory: true)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let stamp = Self.screenStampFormatter.string(from: Date())
+                let url = dir.appendingPathComponent("AetherScreen-\(stamp).png")
+                do {
+                    try data.write(to: url)
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                } catch {
+                    showAlert(title: "Ægis", message: "Captured \(image.size.width.rounded())×\(image.size.height.rounded()) but could not save: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    private static let screenStampFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        return f
+    }()
+
     private func showAlert(title: String, message: String) {
         let alert = NSAlert()
         alert.messageText = title

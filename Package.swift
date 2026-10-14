@@ -14,10 +14,18 @@ let package = Package(
     name: "AetherCodex",
     platforms: [.macOS("26.0")],
     products: [
-        .executable(name: "AetherCodex", targets: ["AetherCodex"])
+        .executable(name: "AetherCodex", targets: ["AetherCodex"]),
+        .executable(name: "AetherAegis", targets: ["AetherAegis"])
     ],
     dependencies: [],
     targets: [
+        // Shared XPC contract between the editor and the shield. Linked by both
+        // processes so the @objc protocol resolves to identical selectors across
+        // the mach-service boundary.
+        .target(
+            name: "AegisProtocol",
+            path: "AegisProtocol"
+        ),
         .target(
             name: "CTreeSitter",
             path: "AetherOracle/treesitter",
@@ -69,10 +77,19 @@ let package = Package(
         ),
         .executableTarget(
             name: "AetherCodex",
-            dependencies: ["CTreeSitter", "CSafeLayout", "AetherOracleResources"],
+            dependencies: ["CTreeSitter", "CSafeLayout", "AetherOracleResources", "AegisProtocol"],
             path: "AetherCodex",
             exclude: ["Vendor", "Info.plist", "AetherCodex.entitlements"],
             sources: ["App", "Bridge"]
+        ),
+        // The privilege-holding shield. Intentionally dependency-light: it links
+        // no tree-sitter, no Ruby — only the XPC protocol — so it builds fast and
+        // is rebuilt rarely, keeping its TCC grants stable across editor updates.
+        .executableTarget(
+            name: "AetherAegis",
+            dependencies: ["AegisProtocol"],
+            path: "AetherAegis",
+            sources: ["App"]
         ),
         .testTarget(
             name: "AetherCodexTests",
