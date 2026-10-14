@@ -36,4 +36,4 @@
 
 ---
 
-*← [The Power of the Unknown](./the-power-of-the-unknown.md) · [Ætheric Æternal Engineering](./aetheric-aeternal-engineering.md) → · part of [the Ætheric Canon](./aetheric-canon.md)*
+*← [The Power of the Unknown](./the-power-of-the-unknown.html) · [Ætheric Æternal Engineering](./aetheric-aeternal-engineering.html) → · part of [the Ætheric Canon](./aetheric-canon.html)*

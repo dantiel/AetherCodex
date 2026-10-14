@@ -174,4 +174,4 @@ The difference between Ætheric Engineering and everything before it is the diff
 
 ---
 
-*Continue: [The Hermetic Manifest](./the-hermetic-manifest.md) → · part of [the Ætheric Canon](./aetheric-canon.md)*
+*Continue: [The Hermetic Manifest](./the-hermetic-manifest.html) → · part of [the Ætheric Canon](./aetheric-canon.html)*

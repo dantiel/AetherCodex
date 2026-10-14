@@ -120,4 +120,4 @@
 
 ---
 
-*← [以太·永恒工程学](./aetheric-aeternal-engineering.html) · 属于[以太经典](./aetheric-canon.html) · [English](./the-technodyssey.html)*
+*← [以太·永恒工程学](./aetheric-aeternal-engineering-zh.html) · 属于[以太经典](./aetheric-canon-zh.html) · [English](./the-technodyssey.html)*

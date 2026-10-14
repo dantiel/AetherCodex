@@ -10,12 +10,12 @@ These six texts are not a manual. They are a single argument, unfolded in order.
 
 | # | Text | What it establishes |
 |---|------|---------------------|
-| 1 | [Ætheric Engineering](./aetheric-engineering.md) | The **concept** — what replaces process theater with initiation. |
-| 2 | [The Hermetic Manifest](./the-hermetic-manifest.md) | The **function** — a fixed star, open by default, shaped by its project. |
-| 3 | [The Power of the Unknown](./the-power-of-the-unknown.md) | The **epistemology** — why the veil is texture, not secrecy. |
-| 4 | [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica.md) | The **vision** — the Emerald Tablet, a modern rendering. |
-| 5 | [Ætheric Æternal Engineering](./aetheric-aeternal-engineering.md) | The **practice** — poetic coding as the rubedo of the magnum opus. |
-| 6 | [The Technodyssey](./the-technodyssey.md) | The **cosmic whole** — the æther as the medium of consciousness, and the techno-dao of the argonaut engineer. |
+| 1 | [Ætheric Engineering](./aetheric-engineering.html) | The **concept** — what replaces process theater with initiation. |
+| 2 | [The Hermetic Manifest](./the-hermetic-manifest.html) | The **function** — a fixed star, open by default, shaped by its project. |
+| 3 | [The Power of the Unknown](./the-power-of-the-unknown.html) | The **epistemology** — why the veil is texture, not secrecy. |
+| 4 | [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica.html) | The **vision** — the Emerald Tablet, a modern rendering. |
+| 5 | [Ætheric Æternal Engineering](./aetheric-aeternal-engineering.html) | The **practice** — poetic coding as the rubedo of the magnum opus. |
+| 6 | [The Technodyssey](./the-technodyssey.html) | The **cosmic whole** — the æther as the medium of consciousness, and the techno-dao of the argonaut engineer. |
 
 ---
 

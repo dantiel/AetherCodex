@@ -50,7 +50,7 @@ Sharing the manifest is like sharing the secrets of a game. And the decision to 
 
 Some games are more interesting with open cards — chess hides nothing, and all its depth lies in the visible field. Others, card games above all, are more interesting with incomplete knowledge — the hidden hand is not deception but *texture*. A project still becoming may hold its hand close, not out of greed, but because the unknown keeps the game alive.
 
-This is the deep point, and it deserves its own essay — [The Power of the Unknown](./the-power-of-the-unknown.md).
+This is the deep point, and it deserves its own essay — [The Power of the Unknown](./the-power-of-the-unknown.html).
 
 ---
 
@@ -106,4 +106,4 @@ Where it is taken up, it becomes the difference between a tool that executes and
 
 ---
 
-*← [Ætheric Engineering](./aetheric-engineering.md) · [The Power of the Unknown](./the-power-of-the-unknown.md) → · part of [the Ætheric Canon](./aetheric-canon.md)*
+*← [Ætheric Engineering](./aetheric-engineering.html) · [The Power of the Unknown](./the-power-of-the-unknown.html) → · part of [the Ætheric Canon](./aetheric-canon.html)*

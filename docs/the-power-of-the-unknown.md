@@ -82,4 +82,4 @@ The unknown is not the enemy of the open. It is the open's other pole, and the t
 
 ---
 
-*← [The Hermetic Manifest](./the-hermetic-manifest.md) · [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica.md) → · part of [the Ætheric Canon](./aetheric-canon.md)*
+*← [The Hermetic Manifest](./the-hermetic-manifest.html) · [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica.html) → · part of [the Ætheric Canon](./aetheric-canon.html)*

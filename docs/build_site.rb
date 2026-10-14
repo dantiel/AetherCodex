@@ -122,9 +122,50 @@ if File.exist?(canon)
   build('aetheric-canon', 'The Ætheric Canon', CANON_SUBTITLE)
 end
 
-# Chinese translation of the culminating canon essay (cross-linked from the English original).
-if File.exist?(File.join(ROOT, 'the-technodyssey-zh.md'))
-  build('the-technodyssey-zh', '科技奥德赛', '《以太经典》— 六篇文论，同一论旨')
+# ── Translations of the Ætheric Canon ────────────────────────────────────
+# Every language carries the full six essays plus a canon index, each
+# cross-linked among its own language and back to the English original.
+
+CANON_I18N = {
+  'de' => {
+    'subtitle'       => 'Der Ätherische Kanon — sechs Essays, ein Argument',
+    'aetheric-engineering'          => 'Ätherische Technik',
+    'the-hermetic-manifest'         => 'Das Hermetische Manifest',
+    'the-power-of-the-unknown'      => 'Die Macht des Unbekannten',
+    'tabula-smaragdina-aetherica'   => 'Tabula Smaragdina Ætherica',
+    'aetheric-aeternal-engineering' => 'Ätherische Äternale Technik',
+    'the-technodyssey'              => 'Die Technodyssee',
+    'aetheric-canon'                => 'Der Ätherische Kanon',
+  },
+  'es' => {
+    'subtitle'       => 'El Canon Etérico — seis ensayos, un argumento',
+    'aetheric-engineering'          => 'Ingeniería Etérica',
+    'the-hermetic-manifest'         => 'El Manifiesto Hermético',
+    'the-power-of-the-unknown'      => 'El Poder de lo Desconocido',
+    'tabula-smaragdina-aetherica'   => 'Tabula Smaragdina Ætherica',
+    'aetheric-aeternal-engineering' => 'Ingeniería Etérica Eterna',
+    'the-technodyssey'              => 'La Tecnodisea',
+    'aetheric-canon'                => 'El Canon Etérico',
+  },
+  'zh' => {
+    'subtitle'       => '《以太经典》— 六篇文论，同一论旨',
+    'aetheric-engineering'          => '以太工程学',
+    'the-hermetic-manifest'         => '赫尔墨斯宣言',
+    'the-power-of-the-unknown'      => '未知之力',
+    'tabula-smaragdina-aetherica'   => '以太翠玉录',
+    'aetheric-aeternal-engineering' => '以太·永恒工程学',
+    'the-technodyssey'              => '科技奥德赛',
+    'aetheric-canon'                => '以太经典',
+  },
+}
+
+CANON_I18N.each do |lang, t|
+  CANON.each do |slug, _title|
+    src = "#{slug}-#{lang}.md"
+    build("#{slug}-#{lang}", t[slug], t['subtitle']) if File.exist?(File.join(ROOT, src))
+  end
+  idx = "aetheric-canon-#{lang}.md"
+  build("aetheric-canon-#{lang}", t['aetheric-canon'], t['subtitle']) if File.exist?(File.join(ROOT, idx))
 end
 
 puts '  ✧ done.'
