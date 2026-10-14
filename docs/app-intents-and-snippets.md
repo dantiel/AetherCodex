@@ -28,20 +28,23 @@ through the same channel.
 
 ## 2. System architecture
 
-```
-┌────────────────────────────┐        ┌─────────────────────────────┐
-│  macOS host — AetherCodex  │        │  iOS client — Pythia iOS    │
-│  (AppKit editor)           │        │  (SwiftUI companion)        │
-│                            │        │                             │
-│  AetherAppIntents.swift    │        │  AppIntents/ (AskPythia...) │
-│  └─ AskAetherIntent        │        │  └─ AskPythiaIntent         │
-│                            │        │     AskAegisIntent          │
-|  RubyBridge (NSTask)       │        │  Pythia (voice)       │
-│  └─ limen.rb (HTTP 0.0.0.0)│◄───────┼─ OracleClient (HTTP)       │
-│     /aether/invoke         │  LAN   │  OracleConnectionStore      │
-│     /aether/aegis          │  HTTP  │                             │
-└────────────────────────────┘        └─────────────────────────────┘
-```
+<div class="arch">
+  <div class="arch-pair">
+    <div class="arch-box">
+      <b>macOS host — AetherCodex</b>
+      <span>AppKit editor</span>
+      <span>AetherAppIntents.swift · AskAetherIntent</span>
+      <span>RubyBridge (NSTask) · limen.rb (HTTP 0.0.0.0)<br>/aether/invoke · /aether/aegis</span>
+    </div>
+    <div class="arch-link"><span>LAN · HTTP</span></div>
+    <div class="arch-box">
+      <b>iOS client — Pythia iOS</b>
+      <span>SwiftUI companion</span>
+      <span>AppIntents/ · AskPythiaIntent · AskAegisIntent</span>
+      <span>Pythia (voice)<br>OracleClient (HTTP)<br>OracleConnectionStore</span>
+    </div>
+  </div>
+</div>
 
 - The **calculating space (Ruby brain) runs where a daemon can live** — on desktop.
   The æther is everywhere, though: `AetherOracle` installs on every platform, and

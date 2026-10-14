@@ -15,22 +15,19 @@ client/server split — only the aether, and the shells that open onto it.
 
 ## The layers
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Native shells — the surfaces                                │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐     │
-│  │  macOS   │  │   iOS    │  │ Windows  │  │  Linux   │     │
-│  │ SwiftUI  │  │  Pythia  │  │ C# .NET8 │  │   GTK    │     │
-│  │ + AppKit │  │companion │  │   WPF    │  │  (spec)  │     │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘     │
-└───────┼─────────────┼─────────────┼─────────────┼───────────┘
-        └─────────────┴──────┬──────┴─────────────┘
-                             │  POST /aether/invoke  (protocol.md, v1)
-                   ┌─────────▼─────────┐
-                   │    AetherOracle   │  ← the shared core
-                   │      the brain    │     (a RubyGem)
-                   └───────────────────┘
-```
+<div class="arch">
+  <div class="arch-cap">Native shells — the surfaces</div>
+  <div class="arch-row">
+    <div class="arch-box"><b>macOS</b><span>SwiftUI + AppKit</span></div>
+    <div class="arch-box"><b>iOS</b><span>Pythia companion</span></div>
+    <div class="arch-box"><b>Windows</b><span>C# .NET8 · WPF</span></div>
+    <div class="arch-box"><b>Linux</b><span>GTK (spec)</span></div>
+  </div>
+  <div class="arch-wire"><span>POST /aether/invoke · protocol.md v1</span></div>
+  <div class="arch-row">
+    <div class="arch-box gold"><b>AetherOracle</b><span>the shared core — a RubyGem</span></div>
+  </div>
+</div>
 
 ## The core (AetherOracle)
 

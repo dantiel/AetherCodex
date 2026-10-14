@@ -65,19 +65,16 @@
 
 <h2 id="architecture-overview">Architecture Overview</h2>
 
-<p><code>
-┌──────────────────────────────────────────────────────────────────────┐
-│                        THE RENAISSANCE PIPELINE                       │
-├───────────┬───────────┬────────────────┬──────────────┬──────────────┤
-│ Converter │  Loader   │   Mapper       │   Cascade    │  Renderer    │
-│  .tmTheme │  .yml     │  CaptureName   │  ResolveStyle│  NSColor     │
-│     │     │     │     │      │         │      │       │      │       │
-│     ▼     │     ▼     │      ▼         │      ▼       │      ▼       │
-│  YAML +   │  rawScope │  TokenScope    │  plain →     │  attributes  │
-│  anchors  │  Styles   │  .rawValue     │  prefix walk │  + font       │
-│           │  + infer  │                │  + merge     │              │
-└───────────┴───────────┴────────────────┴──────────────┴──────────────┘
-</code></p>
+<div class="arch">
+  <div class="arch-cap">The Renaissance Pipeline</div>
+  <div class="arch-row">
+    <div class="arch-box"><b>Converter</b><span>.tmTheme → YAML + anchors</span></div>
+    <div class="arch-box"><b>Loader</b><span>.yml → rawScope Styles + infer</span></div>
+    <div class="arch-box"><b>Mapper</b><span>CaptureName → TokenScope.rawValue</span></div>
+    <div class="arch-box"><b>Cascade</b><span>ResolveStyle → plain → prefix walk + merge</span></div>
+    <div class="arch-box"><b>Renderer</b><span>NSColor → attributes + font</span></div>
+  </div>
+</div>
 
 <p>There are <strong>five stages</strong> that transform a tree-sitter capture into colored text on screen:</p>
 
@@ -130,27 +127,17 @@
 
 <h3 id="step-by-step-walkthrough">Step-by-step walkthrough</h3>
 
-<p><code>
-Tree-Sitter CST
-      │
-      ▼
-ts_query_cursor_next_capture()  ──→  "variable.builtin"  (capture name string)
-      │
-      ▼
-CaptureScopeMapper.scope(for:)  ──→  TokenScope.variableLanguage  (enum case)
-      │
-      ▼
-scope.rawValue  ──→  "variable.language"  (TextMate scope string)
-      │
-      ▼
-theme.resolveStyle(scopeName:)  ──→  TokenStyle(foreground: NSColor, ...)
-      │
-      ▼
-SyntaxEngine.tokenAttributes()  ──→  [.foregroundColor, .font, ...]
-      │
-      ▼
-NSLayoutManager.addTemporaryAttribute()  ──→  Colored glyphs on screen
-</code></p>
+<div class="arch">
+  <div class="arch-cap">Tree-Sitter CST</div>
+  <div class="arch-stack">
+    <div class="arch-box"><b>ts_query_cursor_next_capture()</b><span>→ "variable.builtin" (capture name string)</span></div>
+    <div class="arch-box"><b>CaptureScopeMapper.scope(for:)</b><span>→ TokenScope.variableLanguage (enum case)</span></div>
+    <div class="arch-box"><b>scope.rawValue</b><span>→ "variable.language" (TextMate scope string)</span></div>
+    <div class="arch-box"><b>theme.resolveStyle(scopeName:)</b><span>→ TokenStyle(foreground: NSColor, ...)</span></div>
+    <div class="arch-box"><b>SyntaxEngine.tokenAttributes()</b><span>→ [.foregroundColor, .font, ...]</span></div>
+    <div class="arch-box"><b>NSLayoutManager.addTemporaryAttribute()</b><span>→ Colored glyphs on screen</span></div>
+  </div>
+</div>
 
 <h3 id="the-capturescopemapper-bridge">The CaptureScopeMapper bridge</h3>
 
@@ -251,44 +238,40 @@ NSLayoutManager.addTemporaryAttribute()  ──→  Colored glyphs on screen
 
 <h3 id="theme-format-yaml">Theme format (YAML)</h3>
 
-<p>```yaml
-# AetherCodex Theme — hermetic.yml
-name: Hermetic
-kind: dark
-tags: [minimal, high-contrast]</p>
+<div class="language-yaml highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># AetherCodex Theme — hermetic.yml</span>
+<span class="na">name</span><span class="pi">:</span> <span class="s">Hermetic</span>
+<span class="na">kind</span><span class="pi">:</span> <span class="s">dark</span>
+<span class="na">tags</span><span class="pi">:</span> <span class="pi">[</span><span class="nv">minimal</span><span class="pi">,</span> <span class="nv">high-contrast</span><span class="pi">]</span>
 
-<h1 id="global-editor-chrome">Global editor chrome</h1>
-<p>editor:
-  background: “0x0D0D0D”
-  foreground: “0xE6E6E6”
-  caret: “0xFFFFFF”
-  selection: “0x333366”
-  lineHighlight: “0x1A1A1A”</p>
+<span class="c1"># Global editor chrome</span>
+<span class="na">editor</span><span class="pi">:</span>
+  <span class="na">background</span><span class="pi">:</span> <span class="s2">"</span><span class="s">0x0D0D0D"</span>
+  <span class="na">foreground</span><span class="pi">:</span> <span class="s2">"</span><span class="s">0xE6E6E6"</span>
+  <span class="na">caret</span><span class="pi">:</span> <span class="s2">"</span><span class="s">0xFFFFFF"</span>
+  <span class="na">selection</span><span class="pi">:</span> <span class="s2">"</span><span class="s">0x333366"</span>
+  <span class="na">lineHighlight</span><span class="pi">:</span> <span class="s2">"</span><span class="s">0x1A1A1A"</span>
 
-<h1 id="scope-definitions--plain--keyword--string-etc">Scope definitions — plain + keyword + string etc.</h1>
-<p>scopes:
-  plain: “0xE6E6E6”
-  keyword: “0xFF6B6B”
-  string: “0x98FB98”
-  comment: “0x888888”
-  # … more scopes
-```</p>
-
-<h3 id="cascade-resolution">Cascade Resolution</h3>
+<span class="c1"># Scope definitions — plain + keyword + string etc.</span>
+<span class="na">scopes</span><span class="pi">:</span>
+  <span class="na">plain</span><span class="pi">:</span> <span class="s2">"</span><span class="s">0xE6E6E6"</span>
+  <span class="na">keyword</span><span class="pi">:</span> <span class="s2">"</span><span class="s">0xFF6B6B"</span>
+  <span class="na">string</span><span class="pi">:</span> <span class="s2">"</span><span class="s">0x98FB98"</span>
+  <span class="na">comment</span><span class="pi">:</span> <span class="s2">"</span><span class="s">0x888888"</span>
+  <span class="c1"># ... more scopes</span>
+</code></pre></div></div>
+<p>### Cascade Resolution</p>
 
 <p>The cascade is the backbone of the theme system. <code>resolveStyle(scopeName:)</code> walks the dot-separated prefix hierarchy:</p>
 
-<p>```
-“entity.name.class” resolves as:
-  plain (base) → entity → entity.name → entity.name.class</p>
+<pre><code>"entity.name.class" resolves as:
+  plain (base) → entity → entity.name → entity.name.class
 
-<p>“variable.parameter” resolves as:
-  plain (base) → variable → variable.parameter</p>
+"variable.parameter" resolves as:
+  plain (base) → variable → variable.parameter
 
-<p>“punctuation.delimiter” resolves as:
+"punctuation.delimiter" resolves as:
   plain (base) → punctuation → punctuation.delimiter
-```</p>
-
+</code></pre>
 <p>At each step, the style is <strong>merged</strong> on top of the accumulated base. More specific scopes override less specific ones. If a prefix doesn’t exist in the theme, that step is skipped.</p>
 
 <p><strong>Merge semantics</strong> (<code>merge(base:override:)</code>):
@@ -306,7 +289,7 @@ tags: [minimal, high-contrast]</p>
 <p><strong>Pass 2 — depth-0 grandparents</strong>: Groups all descendants of a root (e.g., everything starting with <code>entity.</code> → infer <code>entity</code>). Same mode + unanimity rules.</p>
 
 <p><strong>Example</strong>:
-```yaml
+~~~yaml
 # Theme defines:
 entity.name.class: “0xBF8C66”       # brown
 entity.name.function: “0xD9B380”    # tan
@@ -318,9 +301,8 @@ entity.name.function: “0xD9B380”    # tan
 
 <p>entity: “0xBF8C66”                  # mode of all entity.* descendants
 # bold:false, italic:false
-```</p>
-
-<p>This means <code>variable.parameter</code> will resolve in a theme that only defines <code>variable</code> — even if <code>variable</code> itself was <strong>inferred</strong> from <code>variable.parameter</code>. The cascade always finds a path.</p>
+~~~
+This means <code>variable.parameter</code> will resolve in a theme that only defines <code>variable</code> — even if <code>variable</code> itself was <strong>inferred</strong> from <code>variable.parameter</code>. The cascade always finds a path.</p>
 
 <h3 id="universal-anchors-converter-generated">Universal Anchors (converter-generated)</h3>
 
@@ -377,61 +359,72 @@ entity.name.function: “0xD9B380”    # tan
 
 <h3 id="complete-tokenscope-enum-75-cases">Complete TokenScope Enum (75 cases)</h3>
 
-<p>```swift
-enum TokenScope: String, CaseIterable {
-    // Core (universal)
-    keyword, keywordType, operator
-    string, stringEscape, number
-    comment, type, typeSupport
-    function, functionSupport
-    variable, variableLanguage, variableInstance, variableClass, variableGlobal
-    constant, constantSymbol, constantSupport
-    property, punctuation
-    tag, attribute, preprocessor, invalid
-    plain, storage, storageType</p>
+<div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">enum</span> <span class="kt">TokenScope</span><span class="p">:</span> <span class="kt">String</span><span class="p">,</span> <span class="kt">CaseIterable</span> <span class="p">{</span>
+    <span class="c1">// Core (universal)</span>
+    <span class="n">keyword</span><span class="p">,</span> <span class="n">keywordType</span><span class="p">,</span> <span class="k">operator</span>
+    <span class="n">string</span><span class="p">,</span> <span class="n">stringEscape</span><span class="p">,</span> <span class="n">number</span>
+    <span class="n">comment</span><span class="p">,</span> <span class="n">type</span><span class="p">,</span> <span class="n">typeSupport</span>
+    <span class="n">function</span><span class="p">,</span> <span class="n">functionSupport</span>
+    <span class="n">variable</span><span class="p">,</span> <span class="n">variableLanguage</span><span class="p">,</span> <span class="n">variableInstance</span><span class="p">,</span> <span class="n">variableClass</span><span class="p">,</span> <span class="n">variableGlobal</span>
+    <span class="n">constant</span><span class="p">,</span> <span class="n">constantSymbol</span><span class="p">,</span> <span class="n">constantSupport</span>
+    <span class="n">property</span><span class="p">,</span> <span class="n">punctuation</span>
+    <span class="n">tag</span><span class="p">,</span> <span class="n">attribute</span><span class="p">,</span> <span class="n">preprocessor</span><span class="p">,</span> <span class="n">invalid</span>
+    <span class="n">plain</span><span class="p">,</span> <span class="n">storage</span><span class="p">,</span> <span class="n">storageType</span>
 
-<pre><code>// Entity names
-entityNameClass, entityNameFunction, entityNameTag
-entityNameTypeNamespace, entityOtherInheritedClass
-entityOtherAttributeName, entityOtherTagbraces, entityOtherArgument
+    <span class="c1">// Entity names</span>
+    <span class="n">entityNameClass</span><span class="p">,</span> <span class="n">entityNameFunction</span><span class="p">,</span> <span class="n">entityNameTag</span>
+    <span class="n">entityNameTypeNamespace</span><span class="p">,</span> <span class="n">entityOtherInheritedClass</span>
+    <span class="n">entityOtherAttributeName</span><span class="p">,</span> <span class="n">entityOtherTagbraces</span><span class="p">,</span> <span class="n">entityOtherArgument</span>
 
-// Variable sub-scopes
-variableParameter, variableFunction, variableOther
+    <span class="c1">// Variable sub-scopes</span>
+    <span class="n">variableParameter</span><span class="p">,</span> <span class="n">variableFunction</span><span class="p">,</span> <span class="n">variableOther</span>
 
-// Constant sub-scopes
-constantLanguage, constantCharacter, constantOther
+    <span class="c1">// Constant sub-scopes</span>
+    <span class="n">constantLanguage</span><span class="p">,</span> <span class="n">constantCharacter</span><span class="p">,</span> <span class="n">constantOther</span>
 
-// Support sub-scopes
-supportClass, supportOtherVariable, supportOtherNamespace
+    <span class="c1">// Support sub-scopes</span>
+    <span class="n">supportClass</span><span class="p">,</span> <span class="n">supportOtherVariable</span><span class="p">,</span> <span class="n">supportOtherNamespace</span>
 
-// CSS-specific
-entityOtherAttributeNameId, entityOtherAttributeNameClass
-entityOtherAttributeNamePseudoclass
-supportFunctionMisc, supportConstantPropertyValue, supportConstantFontName
+    <span class="c1">// CSS-specific</span>
+    <span class="n">entityOtherAttributeNameId</span><span class="p">,</span> <span class="n">entityOtherAttributeNameClass</span>
+    <span class="n">entityOtherAttributeNamePseudoclass</span>
+    <span class="n">supportFunctionMisc</span><span class="p">,</span> <span class="n">supportConstantPropertyValue</span><span class="p">,</span> <span class="n">supportConstantFontName</span>
 
-// Markup (Markdown)
-heading, heading1...6, link, linkURL
-emphasis, strong, strikethrough
-blockquote, thematicBreak, codeBlock
-checkedListItem, markup, inlineCode
-markupRaw, markupOther
-meta, metaClass, metaFunction } ```
-</code></pre>
-
+    <span class="c1">// Markup (Markdown)</span>
+    <span class="n">heading</span><span class="p">,</span> <span class="n">heading1</span><span class="o">...</span><span class="mi">6</span><span class="p">,</span> <span class="n">link</span><span class="p">,</span> <span class="n">linkURL</span>
+    <span class="n">emphasis</span><span class="p">,</span> <span class="n">strong</span><span class="p">,</span> <span class="n">strikethrough</span>
+    <span class="n">blockquote</span><span class="p">,</span> <span class="n">thematicBreak</span><span class="p">,</span> <span class="n">codeBlock</span>
+    <span class="n">checkedListItem</span><span class="p">,</span> <span class="n">markup</span><span class="p">,</span> <span class="n">inlineCode</span>
+    <span class="n">markupRaw</span><span class="p">,</span> <span class="n">markupOther</span>
+    <span class="n">meta</span><span class="p">,</span> <span class="n">metaClass</span><span class="p">,</span> <span class="n">metaFunction</span>
+<span class="p">}</span>
+</code></pre></div></div>
 <hr />
 
 <h2 id="syntax-engine">Syntax Engine</h2>
 
 <h3 id="architecture">Architecture</h3>
 
-<p><code>
-SyntaxOracle
-  ├── TreeSitterEngine (primary — 14 grammars)
-  │     ├── CaptureScopeMapper
-  │     └── Injection traversal (markdown inline)
-  └── SyntaxLoader (fallback — heuristic regex)
-        └── heuristic.yml
-</code></p>
+<div class="arch">
+  <div class="arch-box gold"><b>SyntaxOracle</b></div>
+  <div class="arch-row">
+    <div class="arch-box">
+      <b>TreeSitterEngine</b>
+      <span>primary — 14 grammars</span>
+      <div class="arch-nest">
+        <div class="arch-box"><span>CaptureScopeMapper</span></div>
+        <div class="arch-box"><span>Injection traversal (markdown inline)</span></div>
+      </div>
+    </div>
+    <div class="arch-box">
+      <b>SyntaxLoader</b>
+      <span>fallback — heuristic regex</span>
+      <div class="arch-nest">
+        <div class="arch-box"><span>heuristic.yml</span></div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <p><strong>14 supported languages</strong>: Swift, Python, Ruby, JavaScript, TypeScript, HTML, CSS, JSON, Markdown, Rust, Go, C, C++, Bash.</p>
 
@@ -444,8 +437,7 @@ SyntaxOracle
 
 <h3 id="applyhighlighting-flow">applyHighlighting flow</h3>
 
-<p><code>
-1. Tokenize (tree-sitter or heuristic)
+<pre><code>1. Tokenize (tree-sitter or heuristic)
 2. Sort tokens by location
 3. Apply codeBlock/base tokens first (background layer)
 4. Apply syntax tokens on top (foreground colors)
@@ -453,20 +445,17 @@ SyntaxOracle
    all other scopes blend at 10% with editorBackground
 6. Per-scope font overrides (theme-controlled)
 7. Faux italic via NSAffineTransform skew (when font lacks italic variant)
-</code></p>
+</code></pre>
+<p>### Scope background blending</p>
 
-<h3 id="scope-background-blending">Scope background blending</h3>
-
-<p><code>swift
-// Structural block scopes: full opacity
-if scope == .codeBlock || scope == .blockquote || scope == .checkedListItem {
-    attrs[.backgroundColor] = style.background
-} else {
-    // All other scopes: blend at 10% with editor background
-    attrs[.backgroundColor] = style.background?.blended(withFraction: 0.10, of: editorBg)
-}
-</code></p>
-
+<div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// Structural block scopes: full opacity</span>
+<span class="k">if</span> <span class="n">scope</span> <span class="o">==</span> <span class="o">.</span><span class="n">codeBlock</span> <span class="o">||</span> <span class="n">scope</span> <span class="o">==</span> <span class="o">.</span><span class="n">blockquote</span> <span class="o">||</span> <span class="n">scope</span> <span class="o">==</span> <span class="o">.</span><span class="n">checkedListItem</span> <span class="p">{</span>
+    <span class="n">attrs</span><span class="p">[</span><span class="o">.</span><span class="n">backgroundColor</span><span class="p">]</span> <span class="o">=</span> <span class="n">style</span><span class="o">.</span><span class="n">background</span>
+<span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+    <span class="c1">// All other scopes: blend at 10% with editor background</span>
+    <span class="n">attrs</span><span class="p">[</span><span class="o">.</span><span class="n">backgroundColor</span><span class="p">]</span> <span class="o">=</span> <span class="n">style</span><span class="o">.</span><span class="n">background</span><span class="p">?</span><span class="o">.</span><span class="nf">blended</span><span class="p">(</span><span class="nv">withFraction</span><span class="p">:</span> <span class="mf">0.10</span><span class="p">,</span> <span class="nv">of</span><span class="p">:</span> <span class="n">editorBg</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div></div>
 <p>This prevents keyword/string backgrounds from obscuring text while keeping block-level backgrounds visible.</p>
 
 <hr />
@@ -477,9 +466,13 @@ if scope == .codeBlock || scope == .blockquote || scope == .checkedListItem {
 
 <p>Converts legacy <code>.tmTheme</code> XML (TextMate/Sublime property list format) into AetherCodex <code>.yml</code> theme files.</p>
 
-<p><code>
-.tmTheme (XML plist)  ──→  .yml (AetherCodex format)
-</code></p>
+<div class="arch">
+  <div class="arch-row">
+    <div class="arch-box"><span>.tmTheme (XML plist)</span></div>
+    <div class="arch-link"><span>→</span></div>
+    <div class="arch-box gold"><span>.yml (AetherCodex format)</span></div>
+  </div>
+</div>
 
 <h3 id="conversion-steps">Conversion steps</h3>
 
@@ -496,22 +489,20 @@ if scope == .codeBlock || scope == .blockquote || scope == .checkedListItem {
 
 <h3 id="anchor-generation-detail">Anchor generation detail</h3>
 
-<p>```python
-anchors = {
-    “entity”:       dim_color(global_fg_hex, 0.90),      # slightly dimmed
-    “markup”:       shift_hue(global_fg_hex, 15),         # warmed
-    “punctuation”:  dim_color(global_fg_hex, 0.55),       # significantly dimmed
-    “preprocessor”: shift_hue(global_fg_hex, -20),        # cooled
-    “tag”:          global_fg_hex,                         # exact
-    “attribute”:    dim_color(global_fg_hex, 0.85),       # slightly dimmed
-    “storage”:      global_fg_hex,                         # exact
-}</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">anchors</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="sh">"</span><span class="s">entity</span><span class="sh">"</span><span class="p">:</span>       <span class="nf">dim_color</span><span class="p">(</span><span class="n">global_fg_hex</span><span class="p">,</span> <span class="mf">0.90</span><span class="p">),</span>      <span class="c1"># slightly dimmed
+</span>    <span class="sh">"</span><span class="s">markup</span><span class="sh">"</span><span class="p">:</span>       <span class="nf">shift_hue</span><span class="p">(</span><span class="n">global_fg_hex</span><span class="p">,</span> <span class="mi">15</span><span class="p">),</span>         <span class="c1"># warmed
+</span>    <span class="sh">"</span><span class="s">punctuation</span><span class="sh">"</span><span class="p">:</span>  <span class="nf">dim_color</span><span class="p">(</span><span class="n">global_fg_hex</span><span class="p">,</span> <span class="mf">0.55</span><span class="p">),</span>       <span class="c1"># significantly dimmed
+</span>    <span class="sh">"</span><span class="s">preprocessor</span><span class="sh">"</span><span class="p">:</span> <span class="nf">shift_hue</span><span class="p">(</span><span class="n">global_fg_hex</span><span class="p">,</span> <span class="o">-</span><span class="mi">20</span><span class="p">),</span>        <span class="c1"># cooled
+</span>    <span class="sh">"</span><span class="s">tag</span><span class="sh">"</span><span class="p">:</span>          <span class="n">global_fg_hex</span><span class="p">,</span>                         <span class="c1"># exact
+</span>    <span class="sh">"</span><span class="s">attribute</span><span class="sh">"</span><span class="p">:</span>    <span class="nf">dim_color</span><span class="p">(</span><span class="n">global_fg_hex</span><span class="p">,</span> <span class="mf">0.85</span><span class="p">),</span>       <span class="c1"># slightly dimmed
+</span>    <span class="sh">"</span><span class="s">storage</span><span class="sh">"</span><span class="p">:</span>      <span class="n">global_fg_hex</span><span class="p">,</span>                         <span class="c1"># exact
+</span><span class="p">}</span>
 
-<p>for anchor_name, anchor_color in anchors.items():
-    if anchor_name not in scopes:
-        scopes[anchor_name] = anchor_color
-```</p>
-
+<span class="k">for</span> <span class="n">anchor_name</span><span class="p">,</span> <span class="n">anchor_color</span> <span class="ow">in</span> <span class="n">anchors</span><span class="p">.</span><span class="nf">items</span><span class="p">():</span>
+    <span class="k">if</span> <span class="n">anchor_name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">scopes</span><span class="p">:</span>
+        <span class="n">scopes</span><span class="p">[</span><span class="n">anchor_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">anchor_color</span>
+</code></pre></div></div>
 <p>The <code>if anchor_name not in scopes</code> guard ensures existing theme definitions take precedence — the anchor only fills gaps.</p>
 
 <hr />
@@ -615,17 +606,13 @@ anchors = {
 
 <h3 id="build">Build</h3>
 
-<p><code>bash
-cd paramitrabalho/aethercodex-editor
-swift build                    # ~1s incremental
-</code></p>
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nb">cd </span>paramitrabalho/aethercodex-editor
+swift build                    <span class="c"># ~1s incremental</span>
+</code></pre></div></div>
+<p>### Bundle (for distribution)</p>
 
-<h3 id="bundle-for-distribution">Bundle (for distribution)</h3>
-
-<p><code>bash
-./bundle_app.sh                # ~4.4s
-</code></p>
-
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code>./bundle_app.sh                <span class="c"># ~4.4s</span>
+</code></pre></div></div>
 <p>This script:
 1. Builds with <code>swift build</code>
 2. Copies the binary into <code>AetherCodex.app</code>
@@ -635,41 +622,37 @@ swift build                    # ~1s incremental
 <h3 id="adding-a-new-theme">Adding a new theme</h3>
 
 <p><strong>Option A: Convert from tmTheme</strong>
-<code>bash
+~~~bash
 python3 Script/convert_themes.py path/to/theme.tmTheme
 # Output: AetherOracle/resources/Themes/theme-name.yml
-</code></p>
-
-<p><strong>Option B: Hand-craft</strong>
+~~~
+<strong>Option B: Hand-craft</strong>
 Create a new <code>.yml</code> file in <code>AetherOracle/resources/Themes/</code>:
-<code>yaml
+~~~yaml
 name: My Theme
 kind: dark
 editor:
-  background: "0x1E1E2E"
-  foreground: "0xCDD6F4"
+  background: “0x1E1E2E”
+  foreground: “0xCDD6F4”
 scopes:
-  plain: "0xCDD6F4"
-  keyword: "0xCBA6F7"
-  string: "0xA6E3A1"
-  comment: "0x6C7086"
-  entity: "0x89B4FA"
-  variable: "0xCDD6F4"
-  punctuation: "0x9399B2"
-  # ... more scopes as desired
-</code></p>
-
-<p><strong>Minimum requirements</strong>: Every theme MUST define <code>plain</code> (the cascade base). All other scopes are optional — the cascade resolver and parent inference will fill gaps.</p>
+  plain: “0xCDD6F4”
+  keyword: “0xCBA6F7”
+  string: “0xA6E3A1”
+  comment: “0x6C7086”
+  entity: “0x89B4FA”
+  variable: “0xCDD6F4”
+  punctuation: “0x9399B2”
+  # … more scopes as desired
+~~~
+<strong>Minimum requirements</strong>: Every theme MUST define <code>plain</code> (the cascade base). All other scopes are optional — the cascade resolver and parent inference will fill gaps.</p>
 
 <h3 id="regenerating-all-converted-themes">Regenerating all converted themes</h3>
 
-<p><code>bash
-for f in SourceThemes/*.tmTheme; do
-    python3 Script/convert_themes.py "$f"
-done
-swift build &amp;&amp; ./bundle_app.sh
-</code></p>
-
+<div class="language-bash highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">for </span>f <span class="k">in </span>SourceThemes/<span class="k">*</span>.tmTheme<span class="p">;</span> <span class="k">do
+    </span>python3 Script/convert_themes.py <span class="s2">"</span><span class="nv">$f</span><span class="s2">"</span>
+<span class="k">done
+</span>swift build <span class="o">&amp;&amp;</span> ./bundle_app.sh
+</code></pre></div></div>
 <hr />
 
 <h2 id="troubleshooting">Troubleshooting</h2>
@@ -705,24 +688,21 @@ swift build &amp;&amp; ./bundle_app.sh
 <p>Some tmTheme files have structural issues (e.g., Brilliance variants). The converter raises <code>ET.ParseError</code>.</p>
 
 <p><strong>Workaround</strong>: Manually add universal anchors to the existing <code>.yml</code>:
-<code>yaml
+~~~yaml
 scopes:
-  entity: "0xD6D6D6"
-  storage: "0xEEEEEE"
-  # ... existing scopes ...
-</code></p>
-
-<h3 id="build-fails-bundlemodule-not-found">“Build fails: Bundle.module not found”</h3>
+  entity: “0xD6D6D6”
+  storage: “0xEEEEEE”
+  # … existing scopes …
+~~~
+### “Build fails: Bundle.module not found”</p>
 
 <p>SPM’s <code>Bundle.module</code> is only available during SPM builds, not in the app bundle context. All resource loaders use:</p>
 
-<p><code>swift
-// Preferred: app bundle (deployed)
-Bundle.main.resourceURL?.appendingPathComponent("Resources/...")
-// Fallback: SPM bundle (development)
-Bundle.module.resourceURL?.appendingPathComponent("Resources/...")
-</code></p>
-
+<div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// Preferred: app bundle (deployed)</span>
+<span class="kt">Bundle</span><span class="o">.</span><span class="n">main</span><span class="o">.</span><span class="n">resourceURL</span><span class="p">?</span><span class="o">.</span><span class="nf">appendingPathComponent</span><span class="p">(</span><span class="s">"Resources/..."</span><span class="p">)</span>
+<span class="c1">// Fallback: SPM bundle (development)</span>
+<span class="kt">Bundle</span><span class="o">.</span><span class="n">module</span><span class="o">.</span><span class="n">resourceURL</span><span class="p">?</span><span class="o">.</span><span class="nf">appendingPathComponent</span><span class="p">(</span><span class="s">"Resources/..."</span><span class="p">)</span>
+</code></pre></div></div>
 <p>If building for deployment, ensure <code>bundle_app.sh</code> is used.</p>
 
 <hr />

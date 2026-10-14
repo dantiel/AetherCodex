@@ -85,13 +85,13 @@ Location: `AetherCodex/App/FileInstrumentViews.swift`.
 
 ## Flow diagram
 
-```
-Ruby instrumenta call
-   └─ safe_encode(exec_result)          → full result  → model (tool message)
-   └─ ui_preview(safe_result, name:)    → live echo    → sink → RubyBridge
-                                                                   → PythiaPanel
-                                                                       → FileInstrumentViews
-```
+<div class="arch">
+  <div class="arch-cap">Ruby instrumenta call</div>
+  <div class="arch-stack">
+    <div class="arch-box"><span>safe_encode(exec_result)</span><b>full result</b><span>→ model (tool message)</span></div>
+    <div class="arch-box"><span>ui_preview(safe_result, name:)</span><b>live echo</b><span>→ sink → RubyBridge → PythiaPanel → FileInstrumentViews</span></div>
+  </div>
+</div>
 
 ## Maintenance notes
 

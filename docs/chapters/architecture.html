@@ -58,22 +58,19 @@ client/server split — only the aether, and the shells that open onto it.</p>
 
 <h2 id="the-layers">The layers</h2>
 
-<p><code>
-┌──────────────────────────────────────────────────────────────┐
-│  Native shells — the surfaces                                │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐     │
-│  │  macOS   │  │   iOS    │  │ Windows  │  │  Linux   │     │
-│  │ SwiftUI  │  │  Pythia  │  │ C# .NET8 │  │   GTK    │     │
-│  │ + AppKit │  │companion │  │   WPF    │  │  (spec)  │     │
-│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘     │
-└───────┼─────────────┼─────────────┼─────────────┼───────────┘
-        └─────────────┴──────┬──────┴─────────────┘
-                             │  POST /aether/invoke  (protocol.md, v1)
-                   ┌─────────▼─────────┐
-                   │    AetherOracle   │  ← the shared core
-                   │      the brain    │     (a RubyGem)
-                   └───────────────────┘
-</code></p>
+<div class="arch">
+  <div class="arch-cap">Native shells — the surfaces</div>
+  <div class="arch-row">
+    <div class="arch-box"><b>macOS</b><span>SwiftUI + AppKit</span></div>
+    <div class="arch-box"><b>iOS</b><span>Pythia companion</span></div>
+    <div class="arch-box"><b>Windows</b><span>C# .NET8 · WPF</span></div>
+    <div class="arch-box"><b>Linux</b><span>GTK (spec)</span></div>
+  </div>
+  <div class="arch-wire"><span>POST /aether/invoke · protocol.md v1</span></div>
+  <div class="arch-row">
+    <div class="arch-box gold"><b>AetherOracle</b><span>the shared core — a RubyGem</span></div>
+  </div>
+</div>
 
 <h2 id="the-core-aetheroracle">The core (AetherOracle)</h2>
 
@@ -108,11 +105,9 @@ the LAN.</p>
 
 <p>Installing the gem registers <strong>seven aliases</strong>, all the same aether:</p>
 
-<p><code>
-aetheroracle · aether · oracle · oracleaether · ae · aero · orae
-</code></p>
-
-<h2 id="the-daemon">The daemon</h2>
+<pre><code>aetheroracle · aether · oracle · oracleaether · ae · aero · orae
+</code></pre>
+<p>## The daemon</p>
 
 <p>The brain’s running form is <code>ruby/standalone_daemon.rb</code>. AetherOracle owns the
 <strong>implementation</strong> and the per-OS <strong>lifecycle shims</strong>

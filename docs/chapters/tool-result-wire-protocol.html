@@ -62,22 +62,20 @@ so that both routes stay truthful and neither leaks noise into the other.</p>
 
 <p>Location: <code>Ruby/oracle/artificer.rb</code> (class method, inside the <code>class &lt;&lt; self</code> block).</p>
 
-<p>```ruby
-def ui_preview(result, limit = 4000, name: nil)
-  # read_file behält seine Struktur, damit der Swift-Datei-Spiegel Pfad/Range/Inhalt
-  # rendern kann; andere content-tragende Ergebnisse bleiben ein kompaktes Echo.
-  return result if name&amp;.to_s == ‘read_file’ &amp;&amp; result.is_a?(Hash)</p>
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">ui_preview</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">limit</span> <span class="o">=</span> <span class="mi">4000</span><span class="p">,</span> <span class="ss">name: </span><span class="kp">nil</span><span class="p">)</span>
+  <span class="c1"># read_file behält seine Struktur, damit der Swift-Datei-Spiegel Pfad/Range/Inhalt</span>
+  <span class="c1"># rendern kann; andere content-tragende Ergebnisse bleiben ein kompaktes Echo.</span>
+  <span class="k">return</span> <span class="n">result</span> <span class="k">if</span> <span class="nb">name</span><span class="o">&amp;</span><span class="p">.</span><span class="nf">to_s</span> <span class="o">==</span> <span class="s1">'read_file'</span> <span class="o">&amp;&amp;</span> <span class="n">result</span><span class="p">.</span><span class="nf">is_a?</span><span class="p">(</span><span class="no">Hash</span><span class="p">)</span>
 
-<p>text = if result.is_a?(Hash)
-           (result[:content] || result[‘content’] || result.to_json).to_s
-         else
-           result.to_s
-         end
-  text.truncate(limit)
-end
-```</p>
-
-<h3 id="contract">Contract</h3>
+  <span class="n">text</span> <span class="o">=</span> <span class="k">if</span> <span class="n">result</span><span class="p">.</span><span class="nf">is_a?</span><span class="p">(</span><span class="no">Hash</span><span class="p">)</span>
+           <span class="p">(</span><span class="n">result</span><span class="p">[</span><span class="ss">:content</span><span class="p">]</span> <span class="o">||</span> <span class="n">result</span><span class="p">[</span><span class="s1">'content'</span><span class="p">]</span> <span class="o">||</span> <span class="n">result</span><span class="p">.</span><span class="nf">to_json</span><span class="p">).</span><span class="nf">to_s</span>
+         <span class="k">else</span>
+           <span class="n">result</span><span class="p">.</span><span class="nf">to_s</span>
+         <span class="k">end</span>
+  <span class="n">text</span><span class="p">.</span><span class="nf">truncate</span><span class="p">(</span><span class="n">limit</span><span class="p">)</span>
+<span class="k">end</span>
+</code></pre></div></div>
+<p>### Contract</p>
 
 <table>
   <thead>
@@ -117,13 +115,11 @@ cannot lose information that matters to the LLM.</li>
 
 <p>Both <code>execute_standard</code> and <code>execute_fallback</code> emit the echo with the tool name:</p>
 
-<p><code>ruby
-sink&amp;.send_status 'tool_completed', {
-  name:, execution_time: exec_time,
-  result: ui_preview(safe_result, name: name)
-}
-</code></p>
-
+<div class="language-ruby highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">sink</span><span class="o">&amp;</span><span class="p">.</span><span class="nf">send_status</span> <span class="s1">'tool_completed'</span><span class="p">,</span> <span class="p">{</span>
+  <span class="nb">name</span><span class="p">:,</span> <span class="ss">execution_time: </span><span class="n">exec_time</span><span class="p">,</span>
+  <span class="ss">result: </span><span class="n">ui_preview</span><span class="p">(</span><span class="n">safe_result</span><span class="p">,</span> <span class="ss">name: </span><span class="nb">name</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div></div>
 <p>The <code>sink</code> is the status stream (<code>stream</code> or <code>HorologiumAeternum</code>), which re-frames
 the payload for <code>RubyBridge</code> and ultimately <code>PythiaPanel</code>.</p>
 
@@ -153,13 +149,13 @@ over addition</em> discipline.</li>
 
 <h2 id="flow-diagram">Flow diagram</h2>
 
-<p><code>
-Ruby instrumenta call
-   └─ safe_encode(exec_result)          → full result  → model (tool message)
-   └─ ui_preview(safe_result, name:)    → live echo    → sink → RubyBridge
-                                                                   → PythiaPanel
-                                                                       → FileInstrumentViews
-</code></p>
+<div class="arch">
+  <div class="arch-cap">Ruby instrumenta call</div>
+  <div class="arch-stack">
+    <div class="arch-box"><span>safe_encode(exec_result)</span><b>full result</b><span>→ model (tool message)</span></div>
+    <div class="arch-box"><span>ui_preview(safe_result, name:)</span><b>live echo</b><span>→ sink → RubyBridge → PythiaPanel → FileInstrumentViews</span></div>
+  </div>
+</div>
 
 <h2 id="maintenance-notes">Maintenance notes</h2>
 

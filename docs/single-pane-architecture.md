@@ -19,37 +19,34 @@ The single-pane architecture transforms ÆtherCodex from a traditional three-pan
 
 ## Architecture Diagram
 
-```
-┌──────────────────────────────────────────────────────────┐
-│                    NSWindow.contentView                   │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │              glassBg (full-window)                  │  │
-│  │  ┌──────────────────────────────────────────────┐  │  │
-│  │  │              glassTintView                    │  │  │
-│  │  │  ┌────────────────────────────────────────┐  │  │  │
-│  │  │  │            contentView                  │  │  │  │
-│  │  │  │                                        │  │  │  │
-│  │  │  │  ┌──────┐  ┌──────────────────┐  ┌────┐│  │  │  │
-│  │  │  │  │sidebar│  │                  │  │pyth││  │  │  │
-│  │  │  │  │float  │  │  NSSplitView     │  │float││  │  │  │
-│  │  │  │  │panel  │  │  (editorItem)    │  │panel││  │  │  │
-│  │  │  │  │       │  │                  │  │     ││  │  │  │
-│  │  │  │  │[glass]│  │  EditorView      │  │[gls]││  │  │  │
-│  │  │  │  │[blur ]│  │  (NSScrollView)  │  │[blur]││  │  │  │
-│  │  │  │  │[drag ]│  │                  │  │[drag]││  │  │  │
-│  │  │  │  │       │  │  ┌────────────┐  │  │     ││  │  │  │
-│  │  │  │  │       │  │  │edge blur L │  │  │     ││  │  │  │
-│  │  │  │  │       │  │  │edge blur R │  │  │     ││  │  │  │
-│  │  │  │  │       │  │  └────────────┘  │  │     ││  │  │  │
-│  │  │  │  └──────┘  └──────────────────┘  └────┘│  │  │  │
-│  │  │  │                                        │  │  │  │
-│  │  │  │  topTabBarHost (collapsed sidebar)     │  │  │  │
-│  │  │  │  statusBar (24pt, .titlebar)           │  │  │  │
-│  │  │  └────────────────────────────────────────┘  │  │  │
-│  │  └──────────────────────────────────────────────┘  │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
-```
+<div class="arch">
+  <div class="arch-cap">NSWindow.contentView</div>
+  <div class="arch-nest">
+    <div class="arch-box"><b>glassBg</b><span>full-window</span></div>
+    <div class="arch-nest">
+      <div class="arch-box"><b>glassTintView</b></div>
+      <div class="arch-nest">
+        <div class="arch-box"><b>contentView</b></div>
+        <div class="arch-row">
+          <div class="arch-box"><b>sidebar float panel</b><span>[glass] [blur] [drag]</span></div>
+          <div class="arch-box">
+            <b>NSSplitView (editorItem)</b>
+            <span>EditorView (NSScrollView)</span>
+            <div class="arch-row">
+              <div class="arch-box"><span>edge blur L</span></div>
+              <div class="arch-box"><span>edge blur R</span></div>
+            </div>
+          </div>
+          <div class="arch-box"><b>pythia float panel</b><span>[gls] [blur] [drag]</span></div>
+        </div>
+        <div class="arch-row">
+          <div class="arch-box"><span>topTabBarHost (collapsed sidebar)</span></div>
+          <div class="arch-box"><span>statusBar (24pt, .titlebar)</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 ## Component Reference
 

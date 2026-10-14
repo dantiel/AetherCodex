@@ -20,19 +20,16 @@
 
 ## Architecture Overview
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        THE RENAISSANCE PIPELINE                       │
-├───────────┬───────────┬────────────────┬──────────────┬──────────────┤
-│ Converter │  Loader   │   Mapper       │   Cascade    │  Renderer    │
-│  .tmTheme │  .yml     │  CaptureName   │  ResolveStyle│  NSColor     │
-│     │     │     │     │      │         │      │       │      │       │
-│     ▼     │     ▼     │      ▼         │      ▼       │      ▼       │
-│  YAML +   │  rawScope │  TokenScope    │  plain →     │  attributes  │
-│  anchors  │  Styles   │  .rawValue     │  prefix walk │  + font       │
-│           │  + infer  │                │  + merge     │              │
-└───────────┴───────────┴────────────────┴──────────────┴──────────────┘
-```
+<div class="arch">
+  <div class="arch-cap">The Renaissance Pipeline</div>
+  <div class="arch-row">
+    <div class="arch-box"><b>Converter</b><span>.tmTheme → YAML + anchors</span></div>
+    <div class="arch-box"><b>Loader</b><span>.yml → rawScope Styles + infer</span></div>
+    <div class="arch-box"><b>Mapper</b><span>CaptureName → TokenScope.rawValue</span></div>
+    <div class="arch-box"><b>Cascade</b><span>ResolveStyle → plain → prefix walk + merge</span></div>
+    <div class="arch-box"><b>Renderer</b><span>NSColor → attributes + font</span></div>
+  </div>
+</div>
 
 There are **five stages** that transform a tree-sitter capture into colored text on screen:
 
@@ -50,27 +47,17 @@ There are **five stages** that transform a tree-sitter capture into colored text
 
 ### Step-by-step walkthrough
 
-```
-Tree-Sitter CST
-      │
-      ▼
-ts_query_cursor_next_capture()  ──→  "variable.builtin"  (capture name string)
-      │
-      ▼
-CaptureScopeMapper.scope(for:)  ──→  TokenScope.variableLanguage  (enum case)
-      │
-      ▼
-scope.rawValue  ──→  "variable.language"  (TextMate scope string)
-      │
-      ▼
-theme.resolveStyle(scopeName:)  ──→  TokenStyle(foreground: NSColor, ...)
-      │
-      ▼
-SyntaxEngine.tokenAttributes()  ──→  [.foregroundColor, .font, ...]
-      │
-      ▼
-NSLayoutManager.addTemporaryAttribute()  ──→  Colored glyphs on screen
-```
+<div class="arch">
+  <div class="arch-cap">Tree-Sitter CST</div>
+  <div class="arch-stack">
+    <div class="arch-box"><b>ts_query_cursor_next_capture()</b><span>→ "variable.builtin" (capture name string)</span></div>
+    <div class="arch-box"><b>CaptureScopeMapper.scope(for:)</b><span>→ TokenScope.variableLanguage (enum case)</span></div>
+    <div class="arch-box"><b>scope.rawValue</b><span>→ "variable.language" (TextMate scope string)</span></div>
+    <div class="arch-box"><b>theme.resolveStyle(scopeName:)</b><span>→ TokenStyle(foreground: NSColor, ...)</span></div>
+    <div class="arch-box"><b>SyntaxEngine.tokenAttributes()</b><span>→ [.foregroundColor, .font, ...]</span></div>
+    <div class="arch-box"><b>NSLayoutManager.addTemporaryAttribute()</b><span>→ Colored glyphs on screen</span></div>
+  </div>
+</div>
 
 ### The CaptureScopeMapper bridge
 
@@ -239,14 +226,26 @@ enum TokenScope: String, CaseIterable {
 
 ### Architecture
 
-```
-SyntaxOracle
-  ├── TreeSitterEngine (primary — 14 grammars)
-  │     ├── CaptureScopeMapper
-  │     └── Injection traversal (markdown inline)
-  └── SyntaxLoader (fallback — heuristic regex)
-        └── heuristic.yml
-```
+<div class="arch">
+  <div class="arch-box gold"><b>SyntaxOracle</b></div>
+  <div class="arch-row">
+    <div class="arch-box">
+      <b>TreeSitterEngine</b>
+      <span>primary — 14 grammars</span>
+      <div class="arch-nest">
+        <div class="arch-box"><span>CaptureScopeMapper</span></div>
+        <div class="arch-box"><span>Injection traversal (markdown inline)</span></div>
+      </div>
+    </div>
+    <div class="arch-box">
+      <b>SyntaxLoader</b>
+      <span>fallback — heuristic regex</span>
+      <div class="arch-nest">
+        <div class="arch-box"><span>heuristic.yml</span></div>
+      </div>
+    </div>
+  </div>
+</div>
 
 **14 supported languages**: Swift, Python, Ruby, JavaScript, TypeScript, HTML, CSS, JSON, Markdown, Rust, Go, C, C++, Bash.
 
@@ -290,9 +289,13 @@ This prevents keyword/string backgrounds from obscuring text while keeping block
 
 Converts legacy `.tmTheme` XML (TextMate/Sublime property list format) into AetherCodex `.yml` theme files.
 
-```
-.tmTheme (XML plist)  ──→  .yml (AetherCodex format)
-```
+<div class="arch">
+  <div class="arch-row">
+    <div class="arch-box"><span>.tmTheme (XML plist)</span></div>
+    <div class="arch-link"><span>→</span></div>
+    <div class="arch-box gold"><span>.yml (AetherCodex format)</span></div>
+  </div>
+</div>
 
 ### Conversion steps
 

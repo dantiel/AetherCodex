@@ -95,37 +95,34 @@
 
 <h2 id="architecture-diagram">Architecture Diagram</h2>
 
-<p><code>
-┌──────────────────────────────────────────────────────────┐
-│                    NSWindow.contentView                   │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │              glassBg (full-window)                  │  │
-│  │  ┌──────────────────────────────────────────────┐  │  │
-│  │  │              glassTintView                    │  │  │
-│  │  │  ┌────────────────────────────────────────┐  │  │  │
-│  │  │  │            contentView                  │  │  │  │
-│  │  │  │                                        │  │  │  │
-│  │  │  │  ┌──────┐  ┌──────────────────┐  ┌────┐│  │  │  │
-│  │  │  │  │sidebar│  │                  │  │pyth││  │  │  │
-│  │  │  │  │float  │  │  NSSplitView     │  │float││  │  │  │
-│  │  │  │  │panel  │  │  (editorItem)    │  │panel││  │  │  │
-│  │  │  │  │       │  │                  │  │     ││  │  │  │
-│  │  │  │  │[glass]│  │  EditorView      │  │[gls]││  │  │  │
-│  │  │  │  │[blur ]│  │  (NSScrollView)  │  │[blur]││  │  │  │
-│  │  │  │  │[drag ]│  │                  │  │[drag]││  │  │  │
-│  │  │  │  │       │  │  ┌────────────┐  │  │     ││  │  │  │
-│  │  │  │  │       │  │  │edge blur L │  │  │     ││  │  │  │
-│  │  │  │  │       │  │  │edge blur R │  │  │     ││  │  │  │
-│  │  │  │  │       │  │  └────────────┘  │  │     ││  │  │  │
-│  │  │  │  └──────┘  └──────────────────┘  └────┘│  │  │  │
-│  │  │  │                                        │  │  │  │
-│  │  │  │  topTabBarHost (collapsed sidebar)     │  │  │  │
-│  │  │  │  statusBar (24pt, .titlebar)           │  │  │  │
-│  │  │  └────────────────────────────────────────┘  │  │  │
-│  │  └──────────────────────────────────────────────┘  │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
-</code></p>
+<div class="arch">
+  <div class="arch-cap">NSWindow.contentView</div>
+  <div class="arch-nest">
+    <div class="arch-box"><b>glassBg</b><span>full-window</span></div>
+    <div class="arch-nest">
+      <div class="arch-box"><b>glassTintView</b></div>
+      <div class="arch-nest">
+        <div class="arch-box"><b>contentView</b></div>
+        <div class="arch-row">
+          <div class="arch-box"><b>sidebar float panel</b><span>[glass] [blur] [drag]</span></div>
+          <div class="arch-box">
+            <b>NSSplitView (editorItem)</b>
+            <span>EditorView (NSScrollView)</span>
+            <div class="arch-row">
+              <div class="arch-box"><span>edge blur L</span></div>
+              <div class="arch-box"><span>edge blur R</span></div>
+            </div>
+          </div>
+          <div class="arch-box"><b>pythia float panel</b><span>[gls] [blur] [drag]</span></div>
+        </div>
+        <div class="arch-row">
+          <div class="arch-box"><span>topTabBarHost (collapsed sidebar)</span></div>
+          <div class="arch-box"><span>statusBar (24pt, .titlebar)</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <h2 id="component-reference">Component Reference</h2>
 
@@ -133,19 +130,17 @@
 
 <p>Reusable <code>NSVisualEffectView</code> with a <code>CAGradientLayer</code> mask producing a directional glass-to-content fade. The gradient goes from fully opaque (glass visible) to fully transparent, creating a seamless transition from overlay into content.</p>
 
-<p>```swift
-// Direction enum
-enum EdgeBlurDirection {
-    case leading   // opaque at right, transparent at left
-    case trailing  // opaque at left, transparent at right
-    case top       // opaque at bottom, transparent at top
-    case bottom    // opaque at top, transparent at bottom
-}</p>
+<div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">// Direction enum</span>
+<span class="kd">enum</span> <span class="kt">EdgeBlurDirection</span> <span class="p">{</span>
+    <span class="k">case</span> <span class="n">leading</span>   <span class="c1">// opaque at right, transparent at left</span>
+    <span class="k">case</span> <span class="n">trailing</span>  <span class="c1">// opaque at left, transparent at right</span>
+    <span class="k">case</span> <span class="n">top</span>       <span class="c1">// opaque at bottom, transparent at top</span>
+    <span class="k">case</span> <span class="n">bottom</span>    <span class="c1">// opaque at top, transparent at bottom</span>
+<span class="p">}</span>
 
-<p>// Usage
-let leftBlur = EdgeBlurOverlay(direction: .leading, blurWidth: 24)
-```</p>
-
+<span class="c1">// Usage</span>
+<span class="k">let</span> <span class="nv">leftBlur</span> <span class="o">=</span> <span class="kt">EdgeBlurOverlay</span><span class="p">(</span><span class="nv">direction</span><span class="p">:</span> <span class="o">.</span><span class="n">leading</span><span class="p">,</span> <span class="nv">blurWidth</span><span class="p">:</span> <span class="mi">24</span><span class="p">)</span>
+</code></pre></div></div>
 <p><strong>Key design choices:</strong>
 - Material: <code>.underWindowBackground</code> with <code>.behindWindow</code> blending — matches the liquid glass aesthetic
 - Mask: two-stop <code>CAGradientLayer</code> (black→clear), <code>startPoint</code>/<code>endPoint</code> set per direction
@@ -182,16 +177,15 @@ let leftBlur = EdgeBlurOverlay(direction: .leading, blurWidth: 24)
 4. <code>applyResizeDelta(_:)</code> — clamps to <code>[160, 500]</code>, updates width constraint, fires <code>onWidthChanged</code></p>
 
 <p><strong>Animation guard pattern:</strong>
-<code>swift
+~~~swift
 guard !isAnimatingSidebar else { return }  // prevent rapid-toggle race
 isAnimatingSidebar = true
-// ... animation ...
+// … animation …
 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
     self?.isAnimatingSidebar = false
 }
-</code></p>
-
-<h3 id="resizehandleview-mainwindowcontrollerswift"><code>ResizeHandleView</code> (<code>MainWindowController.swift</code>)</h3>
+~~~
+### <code>ResizeHandleView</code> (<code>MainWindowController.swift</code>)</p>
 
 <p>Private final class. 5pt-wide vertical strip with three-event drag tracking:</p>
 
@@ -206,22 +200,19 @@ DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
 <h3 id="editorviewcontroller-overlay-support-aethercodexappeditorviewcontrollerswift"><code>EditorViewController</code> Overlay Support (<code>AetherCodex/App/EditorViewController.swift</code>)</h3>
 
 <p><strong>Properties:</strong>
-<code>swift
+~~~swift
 var sidebarOverlayWidth: CGFloat = 0   // didSet → updateOverlayInsets()
 var pythiaOverlayWidth: CGFloat = 0    // didSet → updateOverlayInsets()
 private var leftEdgeBlur: EdgeBlurOverlay?   // lazy, created on first show
 private var rightEdgeBlur: EdgeBlurOverlay?  // lazy, created on first show
-</code></p>
+~~~
+<strong><code>updateOverlayInsets()</code></strong> — uses <code>NSScrollView.contentInsets</code> (asymmetric) rather than <code>NSTextContainer.textContainerInset.width</code> (symmetric):</p>
 
-<p><strong><code>updateOverlayInsets()</code></strong> — uses <code>NSScrollView.contentInsets</code> (asymmetric) rather than <code>NSTextContainer.textContainerInset.width</code> (symmetric):</p>
-
-<p><code>swift
-var insets = scrollView.contentInsets
-insets.left  = gutterWidth + sidebarOverlayWidth
-insets.right = pythiaOverlayWidth
-scrollView.contentInsets = insets
-</code></p>
-
+<div class="language-swift highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">var</span> <span class="nv">insets</span> <span class="o">=</span> <span class="n">scrollView</span><span class="o">.</span><span class="n">contentInsets</span>
+<span class="n">insets</span><span class="o">.</span><span class="k">left</span>  <span class="o">=</span> <span class="n">gutterWidth</span> <span class="o">+</span> <span class="n">sidebarOverlayWidth</span>
+<span class="n">insets</span><span class="o">.</span><span class="k">right</span> <span class="o">=</span> <span class="n">pythiaOverlayWidth</span>
+<span class="n">scrollView</span><span class="o">.</span><span class="n">contentInsets</span> <span class="o">=</span> <span class="n">insets</span>
+</code></pre></div></div>
 <p>Edge blur overlays are positioned as fixed subviews of the scroll view (not subviews of the text view, so they don’t scroll):</p>
 
 <ul>
@@ -237,13 +228,11 @@ scrollView.contentInsets = insets
 
 <p>No changes were needed to the <code>SessionState</code> data model. The existing <code>sidebarWidth</code> and <code>pythiaWidth</code> keys in <code>UserDefaults</code> now represent floating panel widths rather than split divider positions:</p>
 
-<p><code>
-session.sidebarWidth  →  FloatingOverlayPanel width (sidebar)
+<pre><code>session.sidebarWidth  →  FloatingOverlayPanel width (sidebar)
 session.pythiaWidth   →  FloatingOverlayPanel width (pythia)
 session.fileBrowserOverlay → boolean toggle state
 session.windows       →  JSON-encoded [WindowState] for multi-window
-</code></p>
-
+</code></pre>
 <p><strong>Width flow:</strong>
 1. <code>saveSessionState()</code> reads <code>sidebarFloatingPanel.width</code> / <code>pythiaFloatingPanel.width</code>
 2. <code>restoreSidebarWidth()</code> / <code>restorePythiaWidth()</code> apply to panels on launch
@@ -257,12 +246,10 @@ session.windows       →  JSON-encoded [WindowState] for multi-window
 
 <p>The overlay system coordinates layout across three layers:</p>
 
-<p><code>
-Layer 3 (topmost):    FloatingOverlayPanel.glassView   [.withinWindow blending]
+<pre><code>Layer 3 (topmost):    FloatingOverlayPanel.glassView   [.withinWindow blending]
 Layer 2 (editor):     NSSplitView (editorItem only)     [NSScrollView + edge blurs]
 Layer 1 (background): glassBg + glassTintView           [.regular glass]
-</code></p>
-
+</code></pre>
 <p><strong>Key constraint:</strong> Overlay panels are siblings of <code>splitVC.splitView</code> inside <code>contentView</code>, not descendants. This ensures:
 - <code>.withinWindow</code> blending sees the editor content + background glass beneath
 - Panels can span full window height without coordinating with split-view insets

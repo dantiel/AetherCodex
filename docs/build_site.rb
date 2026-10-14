@@ -102,6 +102,9 @@ def build(slug, title, subtitle)
 
   md = File.read(src)
   body = md.sub(/^#\s+.*$/, '')
+  # kramdown's default parser reads ~~~ fences, not ```; normalise the GFM fences
+  # so code blocks render as <pre><code> instead of flattened paragraphs.
+  body = body.gsub(/^```([A-Za-z0-9_+\-.]*)\s*$/, '~~~\1')
   body = Kramdown::Document.new(body, auto_ids: true).to_html
 
   out = File.join(OUT, "#{slug}.html")
