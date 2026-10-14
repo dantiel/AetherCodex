@@ -2,6 +2,7 @@ import AppKit
 import CoreGraphics
 import ApplicationServices
 import ScreenCaptureKit
+import UserNotifications
 
 /// The raw privilege primitives — the *only* place in the whole codebase that
 /// touches TCC-gated APIs. Everything flows through the shield.
@@ -75,5 +76,30 @@ enum Privileges {
         } catch {
             return nil
         }
+    }
+
+    // MARK: Notifications
+
+    /// Request the right to raise system notifications. Authorization is keyed
+    /// to the shield's bundle identity, so it persists across editor rebuilds.
+    static func requestNotifications(completion: @escaping (Bool) -> Void) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            DispatchQueue.main.async { completion(granted) }
+        }
+    }
+
+    /// Raise a system notification. Silent no-op when not yet authorized.
+    static func postNotification(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
     }
 }

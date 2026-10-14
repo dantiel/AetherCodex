@@ -27,6 +27,7 @@ final class AegisModel: ObservableObject {
         next[.accessibility] = Privileges.accessibilityGranted()
         next[.appleEvents] = Persisted.granted(.appleEvents)
         next[.fullDiskAccess] = Persisted.granted(.fullDiskAccess)
+        next[.notifications] = Persisted.granted(.notifications)
         grants = next
     }
 
@@ -44,6 +45,12 @@ final class AegisModel: ObservableObject {
             Persisted.set(.appleEvents, granted: ok)
         case .fullDiskAccess:
             openFullDiskAccessSettings()
+        case .notifications:
+            Privileges.requestNotifications { granted in
+                Persisted.set(.notifications, granted: granted)
+                self.refresh()
+            }
+            return
         }
         refresh()
     }

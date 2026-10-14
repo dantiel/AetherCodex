@@ -11,19 +11,24 @@ final class AegisClient {
 
     private var connection: NSXPCConnection?
 
-    /// Locate the shield app and, if absent, summon it.
-    private func summonShieldIfNeeded() {
+    /// Locate the shield app and, if absent, summon it. `activate` false brings
+    /// it up headless — the shield raises its light without stealing the stage.
+    private func summonShieldIfNeeded(activate: Bool = true) {
         if NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == AegisMach.bundleID }) {
             return
         }
-        openShield()
+        launchShield(activate: activate)
     }
 
     /// Open (or activate) the Ægis shield window.
     func openShield() {
+        launchShield(activate: true)
+    }
+
+    private func launchShield(activate: Bool) {
         guard let url = Self.findShield() else { return }
         let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
+        config.activates = activate
         NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in }
     }
 
@@ -70,6 +75,20 @@ final class AegisClient {
 
         return await withCheckedContinuation { cont in
             remote.currentGrants { map in cont.resume(returning: map) }
+        }
+    }
+
+    /// Raise a system notification via the shield — the only process that holds
+    /// the notification grant. Returns true once the announcement is handed off.
+    func announce(title: String, body: String) async -> Bool {
+        summonShieldIfNeeded(activate: false)
+        let remote = makeConnection().remoteObjectProxyWithErrorHandler { _ in } as? AegisPrivilegeProtocol
+        guard let remote else { return false }
+
+        return await withCheckedContinuation { cont in
+            remote.announce(title: title, body: body) { sent in
+                cont.resume(returning: sent)
+            }
         }
     }
 }

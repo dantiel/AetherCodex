@@ -31,5 +31,10 @@ struct AegisFacetModel: Identifiable {
             light: "the light of the archive",
             blurb: "The oracle may read and write every file of the work."
         ),
+        AegisFacetModel(
+            id: .notifications, glyph: "🔔", name: "Notifications",
+            light: "the light of the announcement",
+            blurb: "The oracle may ring the bell when it pauses to consult you."
+        ),
     ]
 }

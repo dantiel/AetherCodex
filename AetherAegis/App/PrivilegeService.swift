@@ -35,6 +35,7 @@ final class PrivilegeService: NSObject, NSXPCListenerDelegate, AegisPrivilegePro
             case .accessibility:   map[facet.rawValue] = Privileges.accessibilityGranted()
             case .appleEvents:     map[facet.rawValue] = Persisted.granted(facet)
             case .fullDiskAccess:  map[facet.rawValue] = Persisted.granted(facet)
+            case .notifications:   map[facet.rawValue] = Persisted.granted(facet)
             }
         }
         reply(map)
@@ -54,6 +55,11 @@ final class PrivilegeService: NSObject, NSXPCListenerDelegate, AegisPrivilegePro
         case .fullDiskAccess:
             // No programmatic prompt exists; report the persisted memory.
             reply(Persisted.granted(.fullDiskAccess))
+        case .notifications:
+            Privileges.requestNotifications { granted in
+                Persisted.set(.notifications, granted: granted)
+                reply(granted)
+            }
         }
     }
 
@@ -67,5 +73,10 @@ final class PrivilegeService: NSObject, NSXPCListenerDelegate, AegisPrivilegePro
                 reply(nil, "The screen could not be captured.")
             }
         }
+    }
+
+    func announce(title: String, body: String, reply: @escaping (Bool) -> Void) {
+        Privileges.postNotification(title: title, body: body)
+        reply(true)
     }
 }

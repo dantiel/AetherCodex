@@ -20,6 +20,11 @@ import Foundation
 
     /// Capture the primary screen as PNG data. `error` is nil on success.
     func captureScreen(reply: @escaping (Data?, String?) -> Void)
+
+    /// Ring the bell and raise a system notification — the light of the
+    /// announcement. Used when the oracle pauses to consult the user, so the
+    /// question is felt even when the editor window is not frontmost.
+    func announce(title: String, body: String, reply: @escaping (Bool) -> Void)
 }
 
 /// The mach service both sides rendezvous on. The name is the shared star the
@@ -36,4 +41,5 @@ public enum AegisFacet: String, CaseIterable, Sendable {
     case accessibility
     case appleEvents
     case fullDiskAccess
+    case notifications
 }

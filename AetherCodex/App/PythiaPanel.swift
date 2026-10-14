@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // MARK: - Models
 
@@ -1360,12 +1361,23 @@ final class PythiaChatModel: ObservableObject {
         case "ask_user":
             // The agent is consulting the user — surface a modal dialog and pause
             // the turn until `respondToAskUser` pushes the answer back.
+            let askMessage = data["message"] as? String ?? ""
             activeAskUser = AskUserPrompt(
                 uuid: uuid ?? "",
                 type: data["type"] as? String ?? "prompt",
-                message: data["message"] as? String ?? "",
+                message: askMessage,
                 options: data["options"] as? [String] ?? []
             )
+            // Ring the bell so the question is *felt*, and raise a system
+            // notification through the Ægis so it is *seen* even when the editor
+            // window is not frontmost. The chime is permission-free; the
+            // notification grant lives on the shield.
+            NSSound(named: NSSound.Name("Glass"))?.play()
+            let announceTitle = "Pythia seeks your counsel"
+            let announceBody = String(askMessage.prefix(180))
+            Task {
+                _ = await AegisClient.shared.announce(title: announceTitle, body: announceBody)
+            }
         default:
             // Task-runner frames (task_started, task_step_completed, task_updated,
             // task_completed, task_log_added, …) are intentionally *not* rendered
