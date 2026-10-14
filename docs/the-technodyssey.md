@@ -120,4 +120,4 @@ The tool changes. The hull changes. The sea does not. It was always the æther, 
 
 ---
 
-*← [Ætheric Æternal Engineering](./aetheric-aeternal-engineering.md) · part of [the Ætheric Canon](./aetheric-canon.md)*
+*← [Ætheric Æternal Engineering](./aetheric-aeternal-engineering.md) · part of [the Ætheric Canon](./aetheric-canon.md) · [中文](./the-technodyssey-zh.html)*

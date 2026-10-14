@@ -64,6 +64,7 @@ def template(title, body, subtitle)
                     <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
                     <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
                     <button type="button" class="lang-btn" data-lang="es" aria-pressed="false">ES</button>
+                    <button type="button" class="lang-btn" data-lang="zh" aria-pressed="false">中文</button>
                 </span>
                 <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
                 <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
@@ -119,6 +120,11 @@ CONCEPTS.each { |slug, title, subtitle| build(slug, title, subtitle) }
 canon = File.join(ROOT, 'aetheric-canon.md')
 if File.exist?(canon)
   build('aetheric-canon', 'The Ætheric Canon', CANON_SUBTITLE)
+end
+
+# Chinese translation of the culminating canon essay (cross-linked from the English original).
+if File.exist?(File.join(ROOT, 'the-technodyssey-zh.md'))
+  build('the-technodyssey-zh', '科技奥德赛', '《以太经典》— 六篇文论，同一论旨')
 end
 
 puts '  ✧ done.'
