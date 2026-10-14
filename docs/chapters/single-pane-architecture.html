@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Single-Pane Architecture — ÆtherCodex</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <div id="eyes-container"></div>
+    <div class="cosmic-void">
+        <nav>
+            <a class="home-link" href="../index.html" title="ÆtherCodex">
+                <span class="aether">Æther</span><span class="codex">Codex</span>
+            </a>
+            <a href="../index.html#what" data-i18n="nav.features">Features</a>
+            <a href="../index.html#companions" data-i18n="nav.council">Council</a>
+            <a href="../index.html#architecture" data-i18n="nav.architecture">Architecture</a>
+            <a href="../index.html#chapters" data-i18n="nav.canon">Canon</a>
+            <a href="../index.html#concepts" data-i18n="nav.concepts">Concepts</a>
+            <a href="../index.html#timeline" data-i18n="nav.timeline">Timeline</a>
+            <span class="nav-spacer"></span>
+            <span class="lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
+                <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+                <button type="button" class="lang-btn" data-lang="es" aria-pressed="false">ES</button>
+            </span>
+            <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
+            <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
+        </nav>
+
+        <header class="oracle-header">
+            <div class="logo-container">
+                <h1 class="logo" style="font-size:2.4rem;">
+                    <span class="aether">Æther</span><span class="codex">Codex</span>
+                </h1>
+                <p class="subtitle">The window is a glass athanor — the editor breathes alone.</p>
+            </div>
+        </header>
+
+        <main class="content">
+            <article class="prose">
+                
+<blockquote>
+  <p><em>The window is a glass athanor. The editor breathes alone. Sidebar and Pythia attend as floating presences — patient familiars that appear when summoned, dissolve when dismissed. Only the content remains.</em></p>
+</blockquote>
+
+<h2 id="overview">Overview</h2>
+
+<p>The single-pane architecture transforms ÆtherCodex from a traditional three-pane <code>NSSplitViewController</code> into a single editor surface with floating glass overlay panels. The sidebar (file browser) and Pythia (AI assistant) exist as lightweight <code>FloatingOverlayPanel</code> instances — <code>NSVisualEffectView</code> siblings of the split view, not split-view items. This achieves the hermetic design principle: <em>subtraction over addition, depth over decoration</em>.</p>
+
+<h3 id="before--after">Before → After</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Aspect</th>
+      <th>Before (Nigredo)</th>
+      <th>After (Rubedo)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Split panes</td>
+      <td>3 (sidebar, editor, pythia)</td>
+      <td>1 (editor only)</td>
+    </tr>
+    <tr>
+      <td>Sidebar</td>
+      <td>NSSplitViewItem at leading edge</td>
+      <td>FloatingOverlayPanel, slides from left</td>
+    </tr>
+    <tr>
+      <td>Pythia</td>
+      <td>NSSplitViewItem at trailing edge</td>
+      <td>FloatingOverlayPanel, slides from right</td>
+    </tr>
+    <tr>
+      <td>Top-edge blur</td>
+      <td>NSSplitViewItemAccessoryViewController .soft</td>
+      <td>Preserved (unchanged)</td>
+    </tr>
+    <tr>
+      <td>Glass boundary</td>
+      <td>Divider-based</td>
+      <td>EdgeBlurOverlay — CAGradientLayer mask</td>
+    </tr>
+    <tr>
+      <td>Resize</td>
+      <td>Split divider drag</td>
+      <td>ResizeHandleView drag strip (5pt)</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="architecture-diagram">Architecture Diagram</h2>
+
+<p><code>
+┌──────────────────────────────────────────────────────────┐
+│                    NSWindow.contentView                   │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │              glassBg (full-window)                  │  │
+│  │  ┌──────────────────────────────────────────────┐  │  │
+│  │  │              glassTintView                    │  │  │
+│  │  │  ┌────────────────────────────────────────┐  │  │  │
+│  │  │  │            contentView                  │  │  │  │
+│  │  │  │                                        │  │  │  │
+│  │  │  │  ┌──────┐  ┌──────────────────┐  ┌────┐│  │  │  │
+│  │  │  │  │sidebar│  │                  │  │pyth││  │  │  │
+│  │  │  │  │float  │  │  NSSplitView     │  │float││  │  │  │
+│  │  │  │  │panel  │  │  (editorItem)    │  │panel││  │  │  │
+│  │  │  │  │       │  │                  │  │     ││  │  │  │
+│  │  │  │  │[glass]│  │  EditorView      │  │[gls]││  │  │  │
+│  │  │  │  │[blur ]│  │  (NSScrollView)  │  │[blur]││  │  │  │
+│  │  │  │  │[drag ]│  │                  │  │[drag]││  │  │  │
+│  │  │  │  │       │  │  ┌────────────┐  │  │     ││  │  │  │
+│  │  │  │  │       │  │  │edge blur L │  │  │     ││  │  │  │
+│  │  │  │  │       │  │  │edge blur R │  │  │     ││  │  │  │
+│  │  │  │  │       │  │  └────────────┘  │  │     ││  │  │  │
+│  │  │  │  └──────┘  └──────────────────┘  └────┘│  │  │  │
+│  │  │  │                                        │  │  │  │
+│  │  │  │  topTabBarHost (collapsed sidebar)     │  │  │  │
+│  │  │  │  statusBar (24pt, .titlebar)           │  │  │  │
+│  │  │  └────────────────────────────────────────┘  │  │  │
+│  │  └──────────────────────────────────────────────┘  │  │
+│  └────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+</code></p>
+
+<h2 id="component-reference">Component Reference</h2>
+
+<h3 id="edgebluroverlay-aethercodexappedgebluroverlayswift"><code>EdgeBlurOverlay</code> (<code>AetherCodex/App/EdgeBlurOverlay.swift</code>)</h3>
+
+<p>Reusable <code>NSVisualEffectView</code> with a <code>CAGradientLayer</code> mask producing a directional glass-to-content fade. The gradient goes from fully opaque (glass visible) to fully transparent, creating a seamless transition from overlay into content.</p>
+
+<p>```swift
+// Direction enum
+enum EdgeBlurDirection {
+    case leading   // opaque at right, transparent at left
+    case trailing  // opaque at left, transparent at right
+    case top       // opaque at bottom, transparent at top
+    case bottom    // opaque at top, transparent at bottom
+}</p>
+
+<p>// Usage
+let leftBlur = EdgeBlurOverlay(direction: .leading, blurWidth: 24)
+```</p>
+
+<p><strong>Key design choices:</strong>
+- Material: <code>.underWindowBackground</code> with <code>.behindWindow</code> blending — matches the liquid glass aesthetic
+- Mask: two-stop <code>CAGradientLayer</code> (black→clear), <code>startPoint</code>/<code>endPoint</code> set per direction
+- <code>isFlipped = true</code> for correct AppKit coordinate mapping
+- <code>gradientLayer.frame</code> synced in <code>layout()</code> override</p>
+
+<h3 id="floatingoverlaypanel-mainwindowcontrollerswift"><code>FloatingOverlayPanel</code> (<code>MainWindowController.swift</code>)</h3>
+
+<p>Private final class in <code>MainWindowController.swift</code>. Composes three subviews:</p>
+
+<ol>
+  <li>
+    <p><strong><code>glassView</code></strong> — <code>NSVisualEffectView</code> with <code>.fullScreenUI</code> material and <code>.withinWindow</code> blending. Hosts the content, edge blur, and resize handle as subviews.</p>
+  </li>
+  <li>
+    <p><strong><code>edgeBlur</code></strong> — <code>EdgeBlurOverlay</code> at the inner boundary (<code>blurWidth: 24</code>). For the sidebar panel, blur is at the right edge; for Pythia, it’s at the left edge.</p>
+  </li>
+  <li>
+    <p><strong><code>resizeHandle</code></strong> — <code>ResizeHandleView</code> (5pt strip) atop the edge blur. Shows <code>resizeLeftRight</code> cursor, tracks mouse drag delta.</p>
+  </li>
+</ol>
+
+<p><strong>Layout by edge:</strong></p>
+
+<ul>
+  <li><strong><code>.leading</code> (sidebar)</strong>: Panel anchored to host leading edge. Content → edgeBlur → resizeHandle (left-to-right).</li>
+  <li><strong><code>.trailing</code> (pythia)</strong>: Panel anchored to host trailing edge. ResizeHandle → edgeBlur → content (left-to-right).</li>
+</ul>
+
+<p><strong>Lifecycle:</strong>
+1. <code>prepare(in:atEdge:)</code> — adds to host view hierarchy, sets up constraints, starts hidden (<code>alpha=0, isHidden=true</code>)
+2. <code>show(width:)</code> — fades in (0.2s, easeInEaseOut), fires <code>onWidthChanged</code>
+3. <code>dismiss()</code> — fires <code>onWidthChanged(0)</code>, fades out (0.18s), sets <code>isHidden=true</code>
+4. <code>applyResizeDelta(_:)</code> — clamps to <code>[160, 500]</code>, updates width constraint, fires <code>onWidthChanged</code></p>
+
+<p><strong>Animation guard pattern:</strong>
+<code>swift
+guard !isAnimatingSidebar else { return }  // prevent rapid-toggle race
+isAnimatingSidebar = true
+// ... animation ...
+DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+    self?.isAnimatingSidebar = false
+}
+</code></p>
+
+<h3 id="resizehandleview-mainwindowcontrollerswift"><code>ResizeHandleView</code> (<code>MainWindowController.swift</code>)</h3>
+
+<p>Private final class. 5pt-wide vertical strip with three-event drag tracking:</p>
+
+<ul>
+  <li><code>mouseDown</code> — records initial <code>locationInWindow.x</code></li>
+  <li><code>mouseDragged</code> — computes delta from last position, fires <code>onDrag(delta)</code></li>
+  <li><code>resetCursorRects</code> — sets <code>.resizeLeftRight</code> cursor</li>
+</ul>
+
+<p>No mouse-up handler needed — <code>onDrag</code> delivers incremental deltas; the owning panel accumulates them.</p>
+
+<h3 id="editorviewcontroller-overlay-support-aethercodexappeditorviewcontrollerswift"><code>EditorViewController</code> Overlay Support (<code>AetherCodex/App/EditorViewController.swift</code>)</h3>
+
+<p><strong>Properties:</strong>
+<code>swift
+var sidebarOverlayWidth: CGFloat = 0   // didSet → updateOverlayInsets()
+var pythiaOverlayWidth: CGFloat = 0    // didSet → updateOverlayInsets()
+private var leftEdgeBlur: EdgeBlurOverlay?   // lazy, created on first show
+private var rightEdgeBlur: EdgeBlurOverlay?  // lazy, created on first show
+</code></p>
+
+<p><strong><code>updateOverlayInsets()</code></strong> — uses <code>NSScrollView.contentInsets</code> (asymmetric) rather than <code>NSTextContainer.textContainerInset.width</code> (symmetric):</p>
+
+<p><code>swift
+var insets = scrollView.contentInsets
+insets.left  = gutterWidth + sidebarOverlayWidth
+insets.right = pythiaOverlayWidth
+scrollView.contentInsets = insets
+</code></p>
+
+<p>Edge blur overlays are positioned as fixed subviews of the scroll view (not subviews of the text view, so they don’t scroll):</p>
+
+<ul>
+  <li><strong>Left blur</strong>: <code>x = sidebarOverlayWidth - 24</code>, fills full height</li>
+  <li><strong>Right blur</strong>: <code>x = bounds.width - pythiaOverlayWidth</code>, fills full height</li>
+</ul>
+
+<p>Blur overlays are hidden (<code>isHidden=true</code>) when their corresponding panel width is 0, and lazily created on first need.</p>
+
+<p><strong><code>viewDidLayout()</code></strong> merges gutter width + overlay widths into <code>contentInsets</code>, preserving scroll offset when only the gutter width changes.</p>
+
+<h3 id="session-persistence-aethercodexappsessionstateswift">Session Persistence (<code>AetherCodex/App/SessionState.swift</code>)</h3>
+
+<p>No changes were needed to the <code>SessionState</code> data model. The existing <code>sidebarWidth</code> and <code>pythiaWidth</code> keys in <code>UserDefaults</code> now represent floating panel widths rather than split divider positions:</p>
+
+<p><code>
+session.sidebarWidth  →  FloatingOverlayPanel width (sidebar)
+session.pythiaWidth   →  FloatingOverlayPanel width (pythia)
+session.fileBrowserOverlay → boolean toggle state
+session.windows       →  JSON-encoded [WindowState] for multi-window
+</code></p>
+
+<p><strong>Width flow:</strong>
+1. <code>saveSessionState()</code> reads <code>sidebarFloatingPanel.width</code> / <code>pythiaFloatingPanel.width</code>
+2. <code>restoreSidebarWidth()</code> / <code>restorePythiaWidth()</code> apply to panels on launch
+3. <code>onWidthChanged</code> callbacks (set up in <code>setupFloatingOverlayPanels</code>) auto-persist on every resize drag</p>
+
+<h3 id="pythiaviewcontroller-aethercodexapppythiaviewcontrollerswift"><code>PythiaViewController</code> (<code>AetherCodex/App/PythiaViewController.swift</code>)</h3>
+
+<p>Unchanged from the pre-overlay architecture. Loads a <code>WKWebView</code> with transparent background (<code>drawsBackground = false</code>) displaying static placeholder HTML. The view is used as the <code>contentView</code> of the Pythia <code>FloatingOverlayPanel</code>.</p>
+
+<h2 id="layout-coordination">Layout Coordination</h2>
+
+<p>The overlay system coordinates layout across three layers:</p>
+
+<p><code>
+Layer 3 (topmost):    FloatingOverlayPanel.glassView   [.withinWindow blending]
+Layer 2 (editor):     NSSplitView (editorItem only)     [NSScrollView + edge blurs]
+Layer 1 (background): glassBg + glassTintView           [.regular glass]
+</code></p>
+
+<p><strong>Key constraint:</strong> Overlay panels are siblings of <code>splitVC.splitView</code> inside <code>contentView</code>, not descendants. This ensures:
+- <code>.withinWindow</code> blending sees the editor content + background glass beneath
+- Panels can span full window height without coordinating with split-view insets
+- No interference with the <code>NSSplitViewItemAccessoryViewController</code> top-edge blur compositor discovery</p>
+
+<p><strong>Top-edge blur preservation:</strong> The <code>editorItem</code> retains its <code>NSSplitViewItemAccessoryViewController</code> with <code>.preferredScrollEdgeEffectStyle = .soft</code> (macOS 26.1+). This is the only way to get system compositor-managed scroll-edge blur — overlays sit above this effect, not within it.</p>
+
+<h2 id="shortcuts">Shortcuts</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Key</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>⌘1</td>
+      <td>Toggle sidebar overlay</td>
+    </tr>
+    <tr>
+      <td>⌘2</td>
+      <td>Toggle Pythia overlay</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="security--performance-validatio">Security &amp; Performance (Validatio)</h2>
+
+<h3 id="security--zero-attack-surface">Security — Zero Attack Surface</h3>
+<ul>
+  <li><strong>No command injection</strong>: Zero <code>NSTask</code>/<code>Process</code>, zero <code>system()</code>, zero <code>eval()</code> anywhere in the codebase</li>
+  <li><strong>No JavaScript injection</strong>: <code>PythiaViewController</code> loads static HTML only — no user-supplied content</li>
+  <li><strong>No path traversal</strong>: <code>GoToFilePanel</code> skips symlinks with <code>skipDescendants</code> to prevent traversal outside project root</li>
+  <li><strong>No data exposure</strong>: No network calls, no telemetry, no file exfiltration paths</li>
+  <li><strong>Binary-safe</strong>: Binary file detection prevents crash on non-text content</li>
+</ul>
+
+<h3 id="performance--production-ready">Performance — Production-Ready</h3>
+<ul>
+  <li><strong>Memory</strong>: 7 <code>NSVisualEffectViews</code> at peak compositing load (glassBg, glassTintView, 4 edge blurs, statusBar + 2 floating panels). Acceptable for 2018+ Macs.</li>
+  <li><strong>Animation</strong>: 0.15–0.2s with standard AppKit timing curves; <code>isAnimating</code> guards prevent animation stacking</li>
+  <li><strong>Inactive panels</strong>: Hidden via <code>isHidden=true</code> + <code>alphaValue=0</code> when not visible — no compositing cost</li>
+  <li><strong>Debounce</strong>: Scroll-based re-highlighting debounced at 150ms; gutter width change debounced at 500ms</li>
+  <li><strong>Minor note</strong>: <code>saveSessionState()</code> fires per-frame during window resize without debounce (low severity — <code>UserDefaults</code> is memory-mapped)</li>
+</ul>
+
+<h2 id="troubleshooting">Troubleshooting</h2>
+
+<h3 id="overlay-panel-doesnt-appear">Overlay panel doesn’t appear</h3>
+<ol>
+  <li>Check <code>panel.parentView != nil</code> — panels must be <code>prepare(in:atEdge:)</code> called before <code>show()</code></li>
+  <li>Check <code>isAnimatingSidebar</code>/<code>isAnimatingPythia</code> guards — rapid toggles within 250ms are blocked</li>
+  <li>Verify <code>contentView</code> exists in the window hierarchy</li>
+</ol>
+
+<h3 id="editor-text-obscured-behind-overlay">Editor text obscured behind overlay</h3>
+<ol>
+  <li>Verify <code>editorViewController.sidebarOverlayWidth</code> / <code>pythiaOverlayWidth</code> are being set by <code>onWidthChanged</code> callbacks</li>
+  <li>Check <code>NSScrollView.contentInsets</code> is applied in <code>updateOverlayInsets()</code></li>
+  <li>Ensure <code>viewDidLayout()</code> is being called — it merges gutter + overlay widths</li>
+</ol>
+
+<h3 id="edge-blur-not-visible">Edge blur not visible</h3>
+<ol>
+  <li>Blur overlays are only created when <code>sidebarOverlayWidth &gt; 0</code> or <code>pythiaOverlayWidth &gt; 0</code></li>
+  <li>Blur overlays sit inside the scroll view — verify scroll view bounds are correct</li>
+  <li>Check <code>EdgeBlurOverlay.direction</code> matches the panel edge</li>
+</ol>
+
+<h3 id="window-resize-causes-visual-glitches">Window resize causes visual glitches</h3>
+<ol>
+  <li><code>viewDidLayout()</code> on EditorViewController refreshes overlay insets and blur positions</li>
+  <li>The <code>FloatingOverlayPanel</code> height is pinned to host bounds — height always matches</li>
+  <li>Very narrow windows (&lt;340px) may show overlapping panels — this is intentional graceful degradation</li>
+</ol>
+
+<h2 id="related-files">Related Files</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>File</th>
+      <th>Role</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>AetherCodex/App/MainWindowController.swift</code></td>
+      <td><code>FloatingOverlayPanel</code>, <code>ResizeHandleView</code>, <code>setupFloatingOverlayPanels</code>, toggle methods</td>
+    </tr>
+    <tr>
+      <td><code>AetherCodex/App/EditorViewController.swift</code></td>
+      <td><code>sidebarOverlayWidth</code>, <code>pythiaOverlayWidth</code>, <code>updateOverlayInsets()</code>, <code>viewDidLayout()</code></td>
+    </tr>
+    <tr>
+      <td><code>AetherCodex/App/SessionState.swift</code></td>
+      <td><code>sidebarWidth</code>, <code>pythiaWidth</code> persistence via UserDefaults</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="hermetic-principles">Hermetic Principles</h2>
+
+<ul>
+  <li><strong>Subtraction over addition</strong>: Three panes became one; chrome dissolved into content</li>
+  <li><strong>Depth over decoration</strong>: Glass, shadow, and gradient masks create spatial depth without visual weight</li>
+  <li><strong>Typography as structure</strong>: Editor text is the only hierarchy — panels appear only when summoned</li>
+  <li><strong>System harmony</strong>: <code>NSSplitViewItemAccessoryViewController</code> + <code>.withinWindow</code> blending = native-feeling glass</li>
+  <li><strong>Invisible chrome</strong>: The sidebar and Pythia exist only in the æther until called — ⌘1, ⌘2</li>
+</ul>
+
+            </article>
+        </main>
+
+        <footer class="oracle-footer">
+            <p><em data-i18n="footer.tagline">Precision in the code plane = precision in the astral plane.</em></p>
+            <div class="runes">✦ ✧ ✦</div>
+        </footer>
+    </div>
+    <script src="../i18n.js"></script>
+    <script src="../eyes.js"></script>
+</body>
+</html>

@@ -231,12 +231,9 @@ Layer 1 (background): glassBg + glassTintView           [.regular glass]
 
 | File | Role |
 |------|------|
-| `AetherCodex/App/EdgeBlurOverlay.swift` | Reusable directional gradient-masked blur overlay |
 | `AetherCodex/App/MainWindowController.swift` | `FloatingOverlayPanel`, `ResizeHandleView`, `setupFloatingOverlayPanels`, toggle methods |
 | `AetherCodex/App/EditorViewController.swift` | `sidebarOverlayWidth`, `pythiaOverlayWidth`, `updateOverlayInsets()`, `viewDidLayout()` |
-| `AetherCodex/App/PythiaViewController.swift` | WKWebView content for Pythia floating panel |
 | `AetherCodex/App/SessionState.swift` | `sidebarWidth`, `pythiaWidth` persistence via UserDefaults |
-| `AetherCodex/App/GlassPane.swift` | `NSGlassEffectView` wrapper (macOS 26+) — used for background glass |
 
 ## Hermetic Principles
 

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Markdown & Rich Text — ÆtherCodex</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <div id="eyes-container"></div>
+    <div class="cosmic-void">
+        <nav>
+            <a class="home-link" href="../index.html" title="ÆtherCodex">
+                <span class="aether">Æther</span><span class="codex">Codex</span>
+            </a>
+            <a href="../index.html#what" data-i18n="nav.features">Features</a>
+            <a href="../index.html#companions" data-i18n="nav.council">Council</a>
+            <a href="../index.html#architecture" data-i18n="nav.architecture">Architecture</a>
+            <a href="../index.html#chapters" data-i18n="nav.canon">Canon</a>
+            <a href="../index.html#concepts" data-i18n="nav.concepts">Concepts</a>
+            <a href="../index.html#timeline" data-i18n="nav.timeline">Timeline</a>
+            <span class="nav-spacer"></span>
+            <span class="lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
+                <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+                <button type="button" class="lang-btn" data-lang="es" aria-pressed="false">ES</button>
+            </span>
+            <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
+            <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
+        </nav>
+
+        <header class="oracle-header">
+            <div class="logo-container">
+                <h1 class="logo" style="font-size:2.4rem;">
+                    <span class="aether">Æther</span><span class="codex">Codex</span>
+                </h1>
+                <p class="subtitle">Native rendering — no WebView, no JavaScript execution.</p>
+            </div>
+        </header>
+
+        <main class="content">
+            <article class="prose">
+                
+<p>Pythia uses a local block parser in MarkdownBody.swift and native SwiftUI
+views. Foundation AttributedString handles inline Markdown. There is no WebView
+or JavaScript execution in this path. Tables use a horizontally bounded Grid;
+code highlighting uses an independent TreeSitterEngine, never the editor’s
+shared language state. Streaming stays plain to avoid parsing every token.</p>
+
+<p>The rich-text editor uses NSTextView with separate attributed storage inside
+the existing SwiftUI scroll surface. MarkdownRichCodec is an editable subset,
+not a complete CommonMark or GFM implementation. RTF uses AppKit import/export.
+Tables use NSTextTable, including Markdown table import/export. Local inserted
+images are attachments in RTF and file-URL references in Markdown; Markdown
+images are not embedded portable assets. Remote images are not auto-fetched.
+Nested lists, complex HTML, reference images and other unsupported constructs
+still require source editing.</p>
+
+<h2 id="round-trip-guarantee">Round-trip guarantee</h2>
+
+<p>Unmodified Markdown round-trips byte-exact. Every structural block carries its
+pristine source as document metadata (<code>originalLine</code> / <code>renderedLine</code> for
+paragraphs and list items, <code>originalBlock</code> / <code>renderedBlock</code> for fenced code),
+so <code>source()</code> replays the original bytes verbatim unless the visible text was
+edited. On edit, the codec falls back to reconstruction: the block’s semantic
+content (fonts, colours and paragraph styles stripped) is compared against the
+stored snapshot; only a mismatch triggers syntax re-synthesis from the live
+attributes. This is exercised by <code>Tests/MarkdownRenderingTests.swift</code>
+(<code>testHeadingAndCodeBlockRoundTripByteExact</code>,
+<code>testFullVocabularyRoundTripByteExact</code>).</p>
+
+<p>Edited content reconstructs the supported vocabulary — headings, emphasis,
+inline code, links, strikethrough, lists, quotes, tables and fences — from the
+current attributes. Edited tables may normalize whitespace.</p>
+
+<h2 id="format-aware-toolbar">Format-aware toolbar</h2>
+
+<p>The floating controls bar offers only the capabilities the open document
+actually serializes.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Capability</th>
+      <th>Markdown</th>
+      <th>RTF</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Bold / italic / strikethrough</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Font family / size</td>
+      <td>—</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Underline / text colour</td>
+      <td>—</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Bullet / ordered / task list</td>
+      <td>✓</td>
+      <td>✓ (native <code>NSTextList</code>)</td>
+    </tr>
+    <tr>
+      <td>Task toggle (<code>- [ ]</code> ⇄ <code>- [x]</code>)</td>
+      <td>✓</td>
+      <td>—</td>
+    </tr>
+    <tr>
+      <td>Block quote / code block</td>
+      <td>✓</td>
+      <td>✓ (native <code>NSTextBlock</code>)</td>
+    </tr>
+    <tr>
+      <td>Heading 1–3</td>
+      <td>✓ (<code>#</code>)</td>
+      <td>✓ (native <code>headerLevel</code>)</td>
+    </tr>
+    <tr>
+      <td>Table / local image</td>
+      <td>✓</td>
+      <td>✓</td>
+    </tr>
+    <tr>
+      <td>Source view</td>
+      <td>✓</td>
+      <td>—</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Markdown hides font, underline and colour controls because those attributes
+have no Markdown syntax and would be silently dropped on save; RTF exposes the
+full TextEdit palette instead of a source toggle.</p>
+
+<p>Markup styling reuses the existing generated markup.heading.<em>, markup.link,
+markup.code.</em> and related TextMate scope cascade, plus the sidebar accent.
+There is no competing rich-text-only palette. Prose font settings affect
+headings and body typography. Authored RTF colors remain document-owned.</p>
+
+<p>The ruler’s background and separator are fixed; only ticks carry the fade
+mask. Rich-text scroll-edge styling is scoped to the ScrollView rather than
+its background. Pythia’s header/footer are native safeAreaBar regions.
+Actual compositor blur still requires visual testing in the running app.</p>
+
+<p>Historical comparison: HEAD:Pythia/chamber.html contains an earlier minimal
+JavaScript renderer (headings, inline emphasis/code/links, lists, fences and
+rules). It did not implement tables. The original CoffeeScript application
+was not found in this checkout; complete feature parity is not asserted.
+The user’s existing deletion of chamber.html was left untouched.</p>
+
+            </article>
+        </main>
+
+        <footer class="oracle-footer">
+            <p><em data-i18n="footer.tagline">Precision in the code plane = precision in the astral plane.</em></p>
+            <div class="runes">✦ ✧ ✦</div>
+        </footer>
+    </div>
+    <script src="../i18n.js"></script>
+    <script src="../eyes.js"></script>
+</body>
+</html>

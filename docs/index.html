@@ -18,8 +18,10 @@
             </a>
             <a href="#what" data-i18n="nav.features">Features</a>
             <a href="#companions" data-i18n="nav.council">Council</a>
+            <a href="#architecture" data-i18n="nav.architecture">Architecture</a>
             <a href="#chapters" data-i18n="nav.canon">Canon</a>
-            <a href="#tools" data-i18n="nav.capabilities">Capabilities</a>
+            <a href="#concepts" data-i18n="nav.concepts">Concepts</a>
+            <a href="#timeline" data-i18n="nav.timeline">Timeline</a>
             <span class="nav-spacer"></span>
             <span class="lang-switch" role="group" aria-label="Language">
                 <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
@@ -51,10 +53,6 @@
 
             <!-- ================= FRONT MATTER ================= -->
             <section id="front" class="description" data-reveal>
-                <div class="black-square-front">
-                    <img src="images/the-iridescent-black-square.png" alt="The Iridescent Black Square — by Kashmiri Malewitch" data-i18n-attr="alt:front.byline">
-                    <p class="byline" data-i18n="front.byline">The Iridescent Black Square — by Kashmiri Malewitch</p>
-                </div>
                 <h2 data-i18n="front.h2">The window is a glass athanor.</h2>
                 <p class="enhanced-description" data-i18n-html="front.desc">
                     ÆtherCodex is a native editor built for the AI century. <strong>Pythia</strong> — the embedded oracle —
@@ -118,6 +116,31 @@
                     <div class="council-item"><span class="glyph">🐉</span><div><h3>Shenlong</h3><p data-i18n="council.9">The grand scale, the eternal lines.</p></div></div>
                     <div class="council-item"><span class="glyph">🐦‍⬛</span><div><h3>Codex Corax</h3><p data-i18n="council.10">What is orphaned, forgotten, dead.</p></div></div>
                 </div>
+                <p class="council-more"><span data-i18n-html="council.more">Beyond the ten sit the traveller <strong>Jindujun</strong> and the project manager <strong>👑 Salomon Rex</strong>.</span> <a class="cosmic-link" href="chapters/companions.html" data-i18n="council.more-link">Meet the full council →</a></p>
+            </section>
+
+            <!-- ================= ARCHITECTURE ================= -->
+            <section id="architecture" data-reveal>
+                <h2 class="section-header cosmic-blue" data-i18n="arch.h2">One Oracle, Many Shells</h2>
+                <h3 class="subheadline" data-i18n="arch.sub">The brain is not baked into the editor — it lives in a portable RubyGem.</h3>
+                <div class="arch-panel">
+                    <div class="arch-shells">
+                        <div class="arch-shell"><h4 data-i18n="arch.shell.mac">macOS</h4><p data-i18n="arch.shell.mac.desc">SwiftUI + AppKit — this editor</p></div>
+                        <div class="arch-shell"><h4 data-i18n="arch.shell.ios">iOS</h4><p data-i18n="arch.shell.ios.desc">Pythia companion — no daemon, reaches a peer</p></div>
+                        <div class="arch-shell"><h4 data-i18n="arch.shell.win">Windows</h4><p data-i18n="arch.shell.win.desc">C# / .NET 8 / WPF — Ruby daemon as soul</p></div>
+                        <div class="arch-shell"><h4 data-i18n="arch.shell.linux">Linux</h4><p data-i18n="arch.shell.linux.desc">GTK shell — forthcoming</p></div>
+                    </div>
+                    <div class="arch-core">
+                        <span class="arch-gem">◆</span>
+                        <h4>AetherOracle</h4>
+                        <p data-i18n="arch.core.desc">The shared core — a RubyGem. Install it on any OS and that OS becomes an Aether OS.</p>
+                        <div class="arch-actions">
+                            <a class="btn btn-ghost" href="https://github.com/dantiel/AetherOracle" target="_blank" rel="noopener" data-i18n="arch.core.source">AetherOracle source</a>
+                            <a class="btn btn-ghost" href="https://dantiel.github.io/AetherOracle/" target="_blank" rel="noopener" data-i18n="arch.core.site">AetherOracle site</a>
+                        </div>
+                    </div>
+                </div>
+                <p class="arch-detail-link"><a class="cosmic-link" href="chapters/architecture.html" data-i18n="arch.more">The architecture in detail →</a></p>
             </section>
 
             <!-- ================= CAPABILITIES ================= -->
@@ -148,6 +171,37 @@
                     <a class="chapter-link" href="chapters/tabula-smaragdina-aetherica.html"><span class="num">IV</span><span data-i18n="canon.4.title">Tabula Smaragdina Ætherica</span> <span class="desc" data-i18n="canon.4.desc">The vision — the Emerald Tablet, a modern rendering.</span></a>
                     <a class="chapter-link" href="chapters/aetheric-aeternal-engineering.html"><span class="num">V</span><span data-i18n="canon.5.title">Ætheric Æternal Engineering</span> <span class="desc" data-i18n="canon.5.desc">The practice — poetic coding as the rubedo of the magnum opus.</span></a>
                     <a class="chapter-link" href="chapters/the-technodyssey.html"><span class="num">VI</span><span data-i18n="canon.6.title">The Technodyssey</span> <span class="desc" data-i18n="canon.6.desc">The cosmic whole — the æther as the medium of consciousness.</span></a>
+                </div>
+            </section>
+
+            <!-- ================= CONCEPTS ================= -->
+            <section id="concepts" data-reveal>
+                <h2 class="section-header mystic-purple" data-i18n="concepts.h2">Concepts</h2>
+                <h3 class="subheadline" data-i18n="concepts.sub">The software's unique ideas, one page each.</h3>
+                <div class="concept-grid">
+                    <a class="concept-card" href="chapters/architecture.html"><h4 data-i18n="concept.1.title">The Architecture</h4><p data-i18n="concept.1.desc">One oracle, many shells.</p></a>
+                    <a class="concept-card" href="chapters/mnemosyne.html"><h4 data-i18n="concept.2.title">Mnemosyne &amp; Aegis</h4><p data-i18n="concept.2.desc">The memory cascade.</p></a>
+                    <a class="concept-card" href="chapters/companions.html"><h4 data-i18n="concept.3.title">The Council</h4><p data-i18n="concept.3.desc">Twelve voices, one aether.</p></a>
+                    <a class="concept-card" href="chapters/timeline.html"><h4 data-i18n="concept.4.title">Development History</h4><p data-i18n="concept.4.desc">The lineage, traced to 2025.</p></a>
+                    <a class="concept-card" href="chapters/single-pane-architecture.html"><h4 data-i18n="concept.5.title">Single-Pane Architecture</h4><p data-i18n="concept.5.desc">The window is a glass athanor.</p></a>
+                    <a class="concept-card" href="chapters/markdown-rendering.html"><h4 data-i18n="concept.6.title">Markdown &amp; Rich Text</h4><p data-i18n="concept.6.desc">Native rendering, no WebView.</p></a>
+                    <a class="concept-card" href="chapters/syntax-theme-renaissance.html"><h4 data-i18n="concept.7.title">Syntax &amp; Theme</h4><p data-i18n="concept.7.desc">52 themes, one cascade.</p></a>
+                    <a class="concept-card" href="chapters/tool-result-wire-protocol.html"><h4 data-i18n="concept.8.title">Tool-Result Wire Protocol</h4><p data-i18n="concept.8.desc">Meaning and presence, two routes.</p></a>
+                    <a class="concept-card" href="chapters/app-intents-and-snippets.html"><h4 data-i18n="concept.9.title">App Intents &amp; Snippets</h4><p data-i18n="concept.9.desc">The oracle channel.</p></a>
+                    <a class="concept-card" href="chapters/vision.html"><h4 data-i18n="concept.10.title">Vision</h4><p data-i18n="concept.10.desc">Morph, never spawn.</p></a>
+                </div>
+            </section>
+
+            <!-- ================= TIMELINE ================= -->
+            <section id="timeline" data-reveal>
+                <h2 class="section-header hermetic-gold-h" data-i18n="timeline.h2">Development History</h2>
+                <h3 class="subheadline" data-i18n="timeline.sub">A quiet lineage, traced by founding month and year.</h3>
+                <div class="timeline">
+                    <div class="tl-item"><div class="tl-date">July 2025</div><div class="tl-body"><h4 data-i18n="timeline.1.title">AetherCodex · TextMate</h4><p data-i18n="timeline.1.desc">The origin — an editor companion as a TextMate plugin, CLI from the start.</p></div></div>
+                    <div class="tl-item"><div class="tl-date">September 2026</div><div class="tl-body"><h4 data-i18n="timeline.2.title">AetherCodex · native macOS</h4><p data-i18n="timeline.2.desc">The editor graduates to a native shell. Pythia is named.</p></div></div>
+                    <div class="tl-item"><div class="tl-date">September 2026</div><div class="tl-body"><h4 data-i18n="timeline.3.title">AetherOracle</h4><p data-i18n="timeline.3.desc">The shared core is extracted — a portable RubyGem, seven CLI names.</p></div></div>
+                    <div class="tl-item"><div class="tl-date">October 2026</div><div class="tl-body"><h4 data-i18n="timeline.4.title">AetherCodex · Windows</h4><p data-i18n="timeline.4.desc">The Windows shell arrives, Ruby daemon as its soul.</p></div></div>
+                    <div class="tl-item"><div class="tl-date">Forthcoming</div><div class="tl-body"><h4 data-i18n="timeline.5.title">iOS · Linux</h4><p data-i18n="timeline.5.desc">The companion and the GTK shell complete the four faces.</p></div></div>
                 </div>
             </section>
 
@@ -186,7 +240,11 @@
                 <pre class="install">git clone https://github.com/dantiel/AetherCodex.git
  cd AetherCodex
  open Package.swift          # or: xcodebuild -scheme AetherCodex build
- # bundle: ./bundle_app.sh   # configure Pythia: cp .aethercodex.example .aethercodex</pre>
+ # bundle: ./bundle_app.sh   # configure Pythia: cp .aethercodex.example .aethercodex
+
+ # the shared core (RubyGem) — the brain the editor opens onto:
+ git clone https://github.com/dantiel/AetherOracle.git
+ cd AetherOracle &amp;&amp; gem build aetheroracle.gemspec &amp;&amp; gem install ./aetheroracle-1.0.0.gem</pre>
                 <p class="github-link">
                     <a href="https://github.com/dantiel/AetherCodex" target="_blank" class="cosmic-link" data-i18n="build.link">Visit the ÆtherCodex repository</a>
                 </p>

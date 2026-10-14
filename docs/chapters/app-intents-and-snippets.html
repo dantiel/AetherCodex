@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App Intents & Snippets — ÆtherCodex</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <div id="eyes-container"></div>
+    <div class="cosmic-void">
+        <nav>
+            <a class="home-link" href="../index.html" title="ÆtherCodex">
+                <span class="aether">Æther</span><span class="codex">Codex</span>
+            </a>
+            <a href="../index.html#what" data-i18n="nav.features">Features</a>
+            <a href="../index.html#companions" data-i18n="nav.council">Council</a>
+            <a href="../index.html#architecture" data-i18n="nav.architecture">Architecture</a>
+            <a href="../index.html#chapters" data-i18n="nav.canon">Canon</a>
+            <a href="../index.html#concepts" data-i18n="nav.concepts">Concepts</a>
+            <a href="../index.html#timeline" data-i18n="nav.timeline">Timeline</a>
+            <span class="nav-spacer"></span>
+            <span class="lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
+                <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+                <button type="button" class="lang-btn" data-lang="es" aria-pressed="false">ES</button>
+            </span>
+            <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
+            <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
+        </nav>
+
+        <header class="oracle-header">
+            <div class="logo-container">
+                <h1 class="logo" style="font-size:2.4rem;">
+                    <span class="aether">Æther</span><span class="codex">Codex</span>
+                </h1>
+                <p class="subtitle">The oracle channel — Siri, Spotlight, Shortcuts.</p>
+            </div>
+        </header>
+
+        <main class="content">
+            <article class="prose">
+                
+<blockquote>
+  <p><em>“aether = oracle = the calculating space; siri = pythia.”</em></p>
+</blockquote>
+
+<p>This is the scope-wide specification for how the AetherCodex system speaks to the
+operating system through <strong>App Intents</strong> and <strong>Snippets</strong>. It is the communication
+channel by which any oracle voice — the calculating space itself, or the pantheon
+routed through it — reaches the user outside the app: Siri, Spotlight, Shortcuts.</p>
+
+<hr />
+
+<h2 id="ontology">1. Ontology</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Term</th>
+      <th>Meaning</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>aether</strong></td>
+      <td>The reasoning substrate. The Ruby brain (<code>AetherOracle/ruby/</code>) — <code>limen.rb</code>, <code>standalone_daemon.rb</code>, <code>aether_link.rb</code>. The <em>calculating space</em>: where the model actually reasons.</td>
+    </tr>
+    <tr>
+      <td><strong>AetherOracle</strong></td>
+      <td>The packaged core — brain (<code>AetherOracle/ruby/</code>) + engine (<code>AetherOracle/treesitter</code>) + per-platform CLI specs (<code>platform/</code>). Pure Ruby + C, no Swift, no UI assets. Installed on <strong>every</strong> platform: the æther is everywhere.</td>
+    </tr>
+    <tr>
+      <td><strong>oracle</strong></td>
+      <td>A synonym for the aether. “Ask the oracle” = submit a turn to the aether.</td>
+    </tr>
+    <tr>
+      <td><strong>pythia</strong></td>
+      <td>The vessel/voice through which the oracle speaks. The user-facing surface (Siri phrase = “Ask Pythia”). The default pantheon voice is <code>pythia</code> (<code>🐍</code>).</td>
+    </tr>
+    <tr>
+      <td><strong>snippet</strong></td>
+      <td>The channel’s answer surface. A glanceable, non-modal SwiftUI result returned by an intent — the oracle’s reply rendered as a snippet, not a full app launch.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Invariant: <strong>every oracle is the aether; every snippet is its voice.</strong> A turn always
+resolves to <code>POST /aether/invoke</code> on some host. “Siri” is a name, “Pythia” is a name,
+“the calculating space” is the substance — all three are the same oracle reached
+through the same channel.</p>
+
+<hr />
+
+<h2 id="system-architecture">2. System architecture</h2>
+
+<p><code>
+┌────────────────────────────┐        ┌─────────────────────────────┐
+│  macOS host — AetherCodex  │        │  iOS client — Pythia iOS    │
+│  (AppKit editor)           │        │  (SwiftUI companion)        │
+│                            │        │                             │
+│  AetherAppIntents.swift    │        │  AppIntents/ (AskPythia...) │
+│  └─ AskAetherIntent        │        │  └─ AskPythiaIntent         │
+│                            │        │     AskAegisIntent          │
+|  RubyBridge (NSTask)       │        │  Pythia (voice)       │
+│  └─ limen.rb (HTTP 0.0.0.0)│◄───────┼─ OracleClient (HTTP)       │
+│     /aether/invoke         │  LAN   │  OracleConnectionStore      │
+│     /aether/aegis          │  HTTP  │                             │
+└────────────────────────────┘        └─────────────────────────────┘
+</code></p>
+
+<ul>
+  <li>The <strong>calculating space (Ruby brain) runs where a daemon can live</strong> — on desktop.
+The æther is everywhere, though: <code>AetherOracle</code> installs on every platform, and
+on iOS the companion reaches the local oracle over the LAN.</li>
+  <li>The <strong>iOS companion reaches the oracle over the LAN</strong> — the Mac’s <code>limen.rb</code>
+daemon (binds <code>0.0.0.0</code>).</li>
+  <li><strong><code>Pythia</code></strong> (pure Foundation + SwiftUI) is the <em>voice</em> slice:
+<code>OracleClient</code>, <code>Models</code>, <code>CompanionRoster</code>, and now <code>OracleConnectionStore</code>.
+It is <strong>not</strong> the AetherOracle itself — the AetherOracle is the shared brain
+(<code>AetherOracle/ruby/</code> + <code>AetherOracle/treesitter</code> + <code>platform/</code>) that these
+shells talk to over HTTP; each shell owns its own UI assets and platform shims.
+This same companion feeds the future WinUI3/GTK shells.</li>
+  <li>Intents on both platforms speak the <strong>same HTTP contract</strong> (<code>/aether/invoke</code>).</li>
+</ul>
+
+<hr />
+
+<h2 id="the-snippet-channel-protocol">3. The snippet channel protocol</h2>
+
+<p>An oracle turn maps to a snippet in three steps:</p>
+
+<ol>
+  <li><strong>Resolve the client.</strong> iOS reads the last-reached peer from <code>OracleConnectionStore</code>
+(persisted <code>host:port</code>). macOS discovers the local daemon via <code>/aether/heartbeat</code>
+(default <code>4567</code>, else scan <code>4550…4610</code>).</li>
+  <li><strong>Invoke.</strong> <code>POST /aether/invoke</code> with <code>{ prompt, type: "chat", from_context,
+active_companions? }</code>. The answer is the plain-text <code>answer</code> field.</li>
+  <li><strong>Emit the snippet.</strong> <code>perform()</code> returns <code>some ShowsSnippetView</code> via
+<code>.result { OracleAnswerSnippet(...) }</code> — no app launch, no modal.</li>
+</ol>
+
+<p>Result views (shared visual grammar):
+- <strong><code>OracleAnswerSnippet</code></strong> — glyph + answer, glanceable, line-limited.
+- <strong><code>OracleErrorSnippet</code></strong> — “oracle unreachable” + reason (connection not saved /
+  daemon not running / non-200).</p>
+
+<p>The SDK provides no public <code>Snippet</code> view type — <code>Snippet</code> is <code>typealias Snippet =
+Swift.Never</code>, and the only concrete container types are <code>internal</code>
+(<code>_SnippetViewContainer</code> / <code>_SnippetIntentContainer</code>, verified against macOS/iOS 26.2
+swiftinterfaces). We use the stable iOS 16+/macOS 13+ <code>IntentResult.result(view:)</code>
+mechanism, which conforms to <code>ShowsSnippetView</code>. This is the Apple-supported channel —
+<strong>not</strong> a fallback — and there is no public <code>Snippet</code> view to upgrade to at <em>any</em>
+deployment target. <code>SnippetIntent</code> (iOS 26+/macOS 26+) exists as a protocol but wraps
+the same internal containers; no migration is required.</p>
+
+<hr />
+
+<h2 id="app-intents-catalog-scope-wide">4. App Intents catalog (scope-wide)</h2>
+
+<p>Intent identifiers are the correspondence keys — identical across platforms so a
+shortcut authored on iOS names the same intent as on macOS.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Intent</th>
+      <th>Platform</th>
+      <th>Parameters</th>
+      <th>Result</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>AskPythiaIntent</code></td>
+      <td>iOS</td>
+      <td><code>prompt: String</code>, <code>companion: CompanionVoice?</code></td>
+      <td><code>OracleAnswerSnippet</code></td>
+    </tr>
+    <tr>
+      <td><code>AskAetherIntent</code></td>
+      <td>macOS</td>
+      <td><code>prompt: String</code></td>
+      <td><code>AetherAnswerSnippet</code></td>
+    </tr>
+    <tr>
+      <td><code>AskAegisIntent</code></td>
+      <td>iOS</td>
+      <td>—</td>
+      <td><code>AegisStateSnippet</code></td>
+    </tr>
+    <tr>
+      <td><em>(planned)</em> <code>SpeakIntent</code></td>
+      <td>iOS</td>
+      <td><code>text: String</code>, <code>voice: String?</code></td>
+      <td><code>POST /aether/speak</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<h3 id="companion-routing-companionvoice">Companion routing (<code>CompanionVoice</code>)</h3>
+
+<p>A compile-time <code>AppEnum</code> mirroring the pantheon (<code>pythiaCompanions</code>), because
+<code>AppEnum</code> requires static cases. Cases: <code>pythia, owl, kitsune, phoenix, ouroboros,
+bastet, fenrir, undine, schwan, drache, corax, jindujun, solomon</code>. The <code>rawValue</code>
+is the companion <code>id</code>, so routing is <code>active_companions: [rawValue]</code> on the wire —
+identical to the Mac’s <code>PythiaChatModel.activeCompanions</code> path.</p>
+
+<hr />
+
+<h2 id="wire-protocol-mapping">5. Wire protocol mapping</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Intent</th>
+      <th>Payload → Response</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>/aether/heartbeat</code></td>
+      <td>GET</td>
+      <td>(discovery)</td>
+      <td>→ <code>{ name, port, path, version, capabilities, busy }</code></td>
+    </tr>
+    <tr>
+      <td><code>/aether/invoke</code></td>
+      <td>POST</td>
+      <td>AskPythia / AskAether</td>
+      <td><code>{ prompt, type:"chat", from_context, active_companions? }</code> → <code>{ answer, html?, source_context? }</code></td>
+    </tr>
+    <tr>
+      <td><code>/aether/aegis</code></td>
+      <td>GET</td>
+      <td>AskAegis</td>
+      <td>→ <code>{ thinking, temperature, summary, tags, working_dir? }</code></td>
+    </tr>
+    <tr>
+      <td><code>/aether/speak</code></td>
+      <td>POST</td>
+      <td>Speak (planned)</td>
+      <td><code>{ text, voice? }</code> → <code>{ ok }</code></td>
+    </tr>
+    <tr>
+      <td><code>/aether/voices</code></td>
+      <td>GET</td>
+      <td>(vox roster)</td>
+      <td>→ <code>{ voices: [{ name, locale, language }] }</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Default daemon port: <code>4567</code> (<code>AETHER_PORT</code> override, <code>config.rb DEFAULT_CONFIG[:port]</code>).
+Discovery scan range: <code>4550…4610</code> (mirrors <code>AetherLink.SCAN_RANGE</code>).</p>
+
+<hr />
+
+<h2 id="availability--compatibility">6. Availability &amp; compatibility</h2>
+
+<ul>
+  <li><strong>iOS:</strong> <code>.iOS(.v17)</code> — uses <code>ShowsSnippetView</code> (iOS 16+/macOS 13+) +
+<code>openAppWhenRun = false</code>. (<code>openAppWhenRun</code> is deprecated in iOS 26 in favour of
+<code>supportedModes</code>; that deprecation is a warning only. The deployment target does
+<strong>not</strong> need to rise — <code>.result {}</code> is available from iOS 16, and no public
+<code>Snippet</code> view exists at any target.)</li>
+  <li><strong>macOS host:</strong> <code>.macOS("26.0")</code> — uses <code>supportedModes = .foreground(.dynamic)</code>.</li>
+  <li><strong>Pythia:</strong> pure Foundation + SwiftUI; no AppIntents dependency (intents live in
+the app targets so metadata extraction is correct). Snippet views + connection store
+live in <code>Pythia</code>/app targets as appropriate.</li>
+</ul>
+
+<hr />
+
+<h2 id="invariants">7. Invariants</h2>
+
+<ol>
+  <li>Every oracle turn resolves to <code>/aether/invoke</code> — never a hardcoded model call.</li>
+  <li>The roster is mirrored, not duplicated: <code>CompanionVoice</code> (intents) ↔
+<code>pythiaCompanions</code> (runtime) ↔ daemon <code>ready</code> frame ↔ <code>chamber.html</code>.</li>
+  <li>The channel is non-modal: snippets never force an app launch.</li>
+  <li><code>OracleConnectionStore</code> is the single persistence point for the last-reached peer.</li>
+</ol>
+
+            </article>
+        </main>
+
+        <footer class="oracle-footer">
+            <p><em data-i18n="footer.tagline">Precision in the code plane = precision in the astral plane.</em></p>
+            <div class="runes">✦ ✧ ✦</div>
+        </footer>
+    </div>
+    <script src="../i18n.js"></script>
+    <script src="../eyes.js"></script>
+</body>
+</html>

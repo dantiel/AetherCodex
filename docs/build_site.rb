@@ -1,7 +1,8 @@
 #!/usr/bin/env ruby
 # ÆtherCodex docs site builder — markdown chapters → styled HTML.
-# Mirrors the OrniFlight docs build (MD → HTML + shared template), but the
-# front matter is the Iridescent Black Square — the cover of the aetheric canon.
+# Two shelves share one glass template:
+#   · the Ætheric Canon (six essays, one argument)
+#   · the Concepts (the software's unique ideas, one page each)
 #
 # Usage: ruby docs/build_site.rb
 
@@ -11,7 +12,9 @@ ROOT = File.expand_path(__dir__)
 OUT  = File.join(ROOT, 'chapters')
 Dir.mkdir(OUT) unless Dir.exist?(OUT)
 
-CHAPTERS = [
+CANON_SUBTITLE = 'The Ætheric Canon — six essays, one argument'
+
+CANON = [
   ['aetheric-engineering', 'Ætheric Engineering'],
   ['the-hermetic-manifest', 'The Hermetic Manifest'],
   ['the-power-of-the-unknown', 'The Power of the Unknown'],
@@ -20,9 +23,20 @@ CHAPTERS = [
   ['the-technodyssey', 'The Technodyssey'],
 ]
 
-def template(title, body, opts = {})
-  back = opts[:back] || 'index.html'
-  front = opts[:front] || 'index.html'
+CONCEPTS = [
+  ['architecture',             'The Architecture',            'One oracle, many shells — the shared core and its native surfaces.'],
+  ['mnemosyne',                'Mnemosyne & Aegis',           'The memory cascade — one crystal, many facets.'],
+  ['companions',               'The Council',                 'Twelve voices, one aether — the specialists and the project manager.'],
+  ['timeline',                 'Development History',         'A quiet lineage, traced by founding month and year.'],
+  ['single-pane-architecture', 'Single-Pane Architecture',    'The window is a glass athanor — the editor breathes alone.'],
+  ['markdown-rendering',       'Markdown & Rich Text',        'Native rendering — no WebView, no JavaScript execution.'],
+  ['syntax-theme-renaissance', 'Syntax & Theme Renaissance',  '52 themes, 84 capture names, one unified cascade.'],
+  ['tool-result-wire-protocol','Tool-Result Wire Protocol',   'One path carries meaning, the other carries presence.'],
+  ['app-intents-and-snippets', 'App Intents & Snippets',      'The oracle channel — Siri, Spotlight, Shortcuts.'],
+  ['vision',                   'Vision',                      'One surface, many forms — morph, never spawn.'],
+]
+
+def template(title, body, subtitle)
   <<~HTML
     <!DOCTYPE html>
     <html lang="en">
@@ -41,8 +55,10 @@ def template(title, body, opts = {})
                 </a>
                 <a href="../index.html#what" data-i18n="nav.features">Features</a>
                 <a href="../index.html#companions" data-i18n="nav.council">Council</a>
+                <a href="../index.html#architecture" data-i18n="nav.architecture">Architecture</a>
                 <a href="../index.html#chapters" data-i18n="nav.canon">Canon</a>
-                <a href="../index.html#tools" data-i18n="nav.capabilities">Capabilities</a>
+                <a href="../index.html#concepts" data-i18n="nav.concepts">Concepts</a>
+                <a href="../index.html#timeline" data-i18n="nav.timeline">Timeline</a>
                 <span class="nav-spacer"></span>
                 <span class="lang-switch" role="group" aria-label="Language">
                     <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
@@ -58,16 +74,11 @@ def template(title, body, opts = {})
                     <h1 class="logo" style="font-size:2.4rem;">
                         <span class="aether">Æther</span><span class="codex">Codex</span>
                     </h1>
-                    <p class="subtitle">The Ætheric Canon — six essays, one argument</p>
+                    <p class="subtitle">#{subtitle}</p>
                 </div>
             </header>
 
             <main class="content">
-                <section class="black-square-front">
-                    <img src="../images/the-iridescent-black-square.png" alt="The Iridescent Black Square — by Kashmiri Malewitch">
-                    <p class="byline">The Iridescent Black Square — by Kashmiri Malewitch</p>
-                </section>
-
                 <article class="prose">
                     #{body}
                 </article>
@@ -85,27 +96,26 @@ def template(title, body, opts = {})
   HTML
 end
 
-CHAPTERS.each do |slug, title|
+def build(slug, title, subtitle)
   src = File.join(ROOT, "#{slug}.md")
   raise "missing #{src}" unless File.exist?(src)
 
   md = File.read(src)
-  # The first H1 becomes the article title (front matter), the rest is body.
   body = md.sub(/^#\s+.*$/, '')
   body = Kramdown::Document.new(body, auto_ids: true).to_html
 
   out = File.join(OUT, "#{slug}.html")
-  File.write(out, template(title, body))
+  File.write(out, template(title, body, subtitle))
   puts "  ✦ wrote chapters/#{slug}.html"
 end
+
+CANON.each { |slug, title| build(slug, title, CANON_SUBTITLE) }
+CONCEPTS.each { |slug, title, subtitle| build(slug, title, subtitle) }
 
 # The canon index (links to all chapters).
 canon = File.join(ROOT, 'aetheric-canon.md')
 if File.exist?(canon)
-  body = File.read(canon).sub(/^#\s+.*$/, '')
-  body = Kramdown::Document.new(body, auto_ids: true).to_html
-  File.write(File.join(OUT, 'aetheric-canon.html'), template('The Ætheric Canon', body))
-  puts '  ✦ wrote chapters/aetheric-canon.html'
+  build('aetheric-canon', 'The Ætheric Canon', CANON_SUBTITLE)
 end
 
 puts '  ✧ done.'

@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vision — ÆtherCodex</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <div id="eyes-container"></div>
+    <div class="cosmic-void">
+        <nav>
+            <a class="home-link" href="../index.html" title="ÆtherCodex">
+                <span class="aether">Æther</span><span class="codex">Codex</span>
+            </a>
+            <a href="../index.html#what" data-i18n="nav.features">Features</a>
+            <a href="../index.html#companions" data-i18n="nav.council">Council</a>
+            <a href="../index.html#architecture" data-i18n="nav.architecture">Architecture</a>
+            <a href="../index.html#chapters" data-i18n="nav.canon">Canon</a>
+            <a href="../index.html#concepts" data-i18n="nav.concepts">Concepts</a>
+            <a href="../index.html#timeline" data-i18n="nav.timeline">Timeline</a>
+            <span class="nav-spacer"></span>
+            <span class="lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
+                <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+                <button type="button" class="lang-btn" data-lang="es" aria-pressed="false">ES</button>
+            </span>
+            <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
+            <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
+        </nav>
+
+        <header class="oracle-header">
+            <div class="logo-container">
+                <h1 class="logo" style="font-size:2.4rem;">
+                    <span class="aether">Æther</span><span class="codex">Codex</span>
+                </h1>
+                <p class="subtitle">One surface, many forms — morph, never spawn.</p>
+            </div>
+        </header>
+
+        <main class="content">
+            <article class="prose">
+                
+<h2 id="core-idea">Core Idea</h2>
+
+<p>A next-gen hyper-responsive yet super-minimalist native Mac editor. Every window can look and function as a widget. Instead of opening different window types, each window transforms or expands in numerous ways while rigorously hiding all clutter.</p>
+
+<p><strong>Subtraction over addition</strong> — not as style, but as discipline.</p>
+
+<h2 id="window-states-morphing-not-spawning">Window States (Morphing, not spawning)</h2>
+
+<h3 id="compact-widget-mode">1. Compact Widget Mode</h3>
+
+<p>Collapses to a floating 2–3 line bar showing only the current line / cursor context. Purely glass. Sits unobtrusively on the desktop. Click or gesture expands back to full editor.</p>
+
+<h3 id="full-editor">2. Full Editor</h3>
+
+<p>Default state. Text on glass. Titlebar dissolves when not in use. Sidebar toggles behind traffic lights. Everything that isn’t code retreats.</p>
+
+<h3 id="distraction-free--quick-peek">3. Distraction-Free / Quick Peek</h3>
+
+<p>Collapse sidebar + titlebar + all chrome. Pure text on glass. Toggle with a gesture or hotkey. The editor becomes a luminous surface — nothing between thought and screen.</p>
+
+<h3 id="inline-terminal--repl">4. Inline Terminal / REPL</h3>
+
+<p>The bottom of the editor unfolds into a transparent glass shell. No new window. Terminal is part of the same surface — type code above, see output below. Expand/collapse with a drag.</p>
+
+<h3 id="pythia-slide-over-">5. Pythia Slide-Over ✅</h3>
+
+<p>AI chat panel slides in from the right edge as an overlay rather than a permanent split pane. Invoke with ⌘2, dismiss the same way. Glass overlay breathes the desktop through. <strong>Implemented</strong> — single-pane architecture with FloatingOverlayPanel + EdgeBlurOverlay.</p>
+
+<h3 id="single-pane-editor-">6. Single-Pane Editor ✅</h3>
+
+<p>Sidebar and Pythia removed from NSSplitView. Editor occupies the full canvas. Both panels float as glass overlays with CAGradientLayer-masked EdgeBlurOverlay transitions. <strong>Implemented</strong> — see <code>docs/single-pane-architecture.md</code>.</p>
+
+<h2 id="principles">Principles</h2>
+
+<ul>
+  <li><strong>One surface, many forms</strong>: Morph, never spawn</li>
+  <li><strong>Invisible chrome</strong>: Toolbars, titlebars, and borders dissolve; only content persists</li>
+  <li><strong>Glass as depth</strong>: The desktop breathes through the window</li>
+  <li><strong>Gesture-driven</strong>: Transformations feel physical — drag, pinch, flick</li>
+  <li><strong>Typography as architecture</strong>: Weight, size, and spacing are the only hierarchy</li>
+</ul>
+
+            </article>
+        </main>
+
+        <footer class="oracle-footer">
+            <p><em data-i18n="footer.tagline">Precision in the code plane = precision in the astral plane.</em></p>
+            <div class="runes">✦ ✧ ✦</div>
+        </footer>
+    </div>
+    <script src="../i18n.js"></script>
+    <script src="../eyes.js"></script>
+</body>
+</html>

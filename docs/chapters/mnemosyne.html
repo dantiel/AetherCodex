@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mnemosyne & Aegis — ÆtherCodex</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <div id="eyes-container"></div>
+    <div class="cosmic-void">
+        <nav>
+            <a class="home-link" href="../index.html" title="ÆtherCodex">
+                <span class="aether">Æther</span><span class="codex">Codex</span>
+            </a>
+            <a href="../index.html#what" data-i18n="nav.features">Features</a>
+            <a href="../index.html#companions" data-i18n="nav.council">Council</a>
+            <a href="../index.html#architecture" data-i18n="nav.architecture">Architecture</a>
+            <a href="../index.html#chapters" data-i18n="nav.canon">Canon</a>
+            <a href="../index.html#concepts" data-i18n="nav.concepts">Concepts</a>
+            <a href="../index.html#timeline" data-i18n="nav.timeline">Timeline</a>
+            <span class="nav-spacer"></span>
+            <span class="lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
+                <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+                <button type="button" class="lang-btn" data-lang="es" aria-pressed="false">ES</button>
+            </span>
+            <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
+            <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
+        </nav>
+
+        <header class="oracle-header">
+            <div class="logo-container">
+                <h1 class="logo" style="font-size:2.4rem;">
+                    <span class="aether">Æther</span><span class="codex">Codex</span>
+                </h1>
+                <p class="subtitle">The memory cascade — one crystal, many facets.</p>
+            </div>
+        </header>
+
+        <main class="content">
+            <article class="prose">
+                
+<blockquote>
+  <p><em>One crystal, many facets. Memory is not a log — it is a cascade, and the oracle drinks from it.</em></p>
+</blockquote>
+
+<h2 id="mnemosyne--the-store">Mnemosyne — the store</h2>
+
+<p>Mnemosyne is the oracle’s memory: a SQLite-backed palace with a single store and
+many facets. Three layers, each with a different shape of remembering:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Layer</th>
+      <th>Shape</th>
+      <th>What it holds</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Episodic</strong></td>
+      <td><code>project_notes</code>, facet-tagged</td>
+      <td>what happened — the project’s story</td>
+    </tr>
+    <tr>
+      <td><strong>Procedural</strong></td>
+      <td><code>companion_skill</code></td>
+      <td>how to act — distilled action skills</td>
+    </tr>
+    <tr>
+      <td><strong>Identitary</strong></td>
+      <td><code>companion_state</code></td>
+      <td>who each companion has become — accumulated self per glyph</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Every companion reads and writes through its <strong>own facet</strong>, but the store is
+<strong>single</strong>. The owl’s architecture maps and the fox’s lateral paths live in the
+same palace; only the facet differs.</p>
+
+<h2 id="aegis--the-orientation">Aegis — the orientation</h2>
+
+<p>Aegis is the <em>sharp edge</em> of memory — the short-term focus that keeps context
+coherent <em>right now</em>. Where Mnemosyne is the palace, Aegis is the torch.</p>
+
+<p>It holds the dynamic agent state: the <strong>summary</strong> (current orientation), the
+<strong>tags</strong>, the <strong>temperature</strong>, the <strong>thinking depth</strong>, and the <strong>working
+directory</strong>. It is rewritten every turn, so the oracle does not drift across a
+long session — Aegis always knows where it stands.</p>
+
+<h2 id="the-aethernauts-manifest">The Aethernaut’s Manifest</h2>
+
+<p>The ship is the <strong>Argo</strong>; the crew are the <strong>aethernauts</strong>. Every companion
+suggestion is not a throwaway popover but an <strong>intention</strong> — a sailor with a
+mission, signed into the ship’s log.</p>
+
+<p>One queue, many shapes (polymorphism, not a switch appended later):</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Kind</th>
+      <th>Glyph</th>
+      <th>Default action</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>suggestion</td>
+      <td>✨</td>
+      <td>suggest</td>
+    </tr>
+    <tr>
+      <td>directive</td>
+      <td>🎯</td>
+      <td>oracle</td>
+    </tr>
+    <tr>
+      <td>recovery (Riss-Faden)</td>
+      <td>🪡</td>
+      <td>recover_last_intent</td>
+    </tr>
+    <tr>
+      <td>ritual</td>
+      <td>🔮</td>
+      <td>seal_run</td>
+    </tr>
+    <tr>
+      <td>conjuration</td>
+      <td>🌀</td>
+      <td>conjuration</td>
+    </tr>
+    <tr>
+      <td>insight</td>
+      <td>💠</td>
+      <td>remember</td>
+    </tr>
+  </tbody>
+</table>
+
+<p><strong>Aegis becomes Pythia’s agenda</strong> — <code>Mnemosyne::Aegis.agenda</code> reads the manifest,
+so the voice’s schedule <em>is</em> the oracle’s orientation.</p>
+
+<h2 id="metempsychosis">Metempsychosis</h2>
+
+<p>Memory transmigrates. <strong>Metempsychosis</strong> moves knowledge between contexts — one
+task can consult another’s notes, subscribe to its orientation, or spawn a task
+on a remote context over ÆtherLink. The soul moves in, not just visits.</p>
+
+<h2 id="the-facets">The facets</h2>
+
+<p>The companions are the facets of this one crystal — see
+<a href="companions.html">The Council</a> for the twelve voices that read and write through
+it.</p>
+
+            </article>
+        </main>
+
+        <footer class="oracle-footer">
+            <p><em data-i18n="footer.tagline">Precision in the code plane = precision in the astral plane.</em></p>
+            <div class="runes">✦ ✧ ✦</div>
+        </footer>
+    </div>
+    <script src="../i18n.js"></script>
+    <script src="../eyes.js"></script>
+</body>
+</html>

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Architecture — ÆtherCodex</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <div id="eyes-container"></div>
+    <div class="cosmic-void">
+        <nav>
+            <a class="home-link" href="../index.html" title="ÆtherCodex">
+                <span class="aether">Æther</span><span class="codex">Codex</span>
+            </a>
+            <a href="../index.html#what" data-i18n="nav.features">Features</a>
+            <a href="../index.html#companions" data-i18n="nav.council">Council</a>
+            <a href="../index.html#architecture" data-i18n="nav.architecture">Architecture</a>
+            <a href="../index.html#chapters" data-i18n="nav.canon">Canon</a>
+            <a href="../index.html#concepts" data-i18n="nav.concepts">Concepts</a>
+            <a href="../index.html#timeline" data-i18n="nav.timeline">Timeline</a>
+            <span class="nav-spacer"></span>
+            <span class="lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
+                <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+                <button type="button" class="lang-btn" data-lang="es" aria-pressed="false">ES</button>
+            </span>
+            <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
+            <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
+        </nav>
+
+        <header class="oracle-header">
+            <div class="logo-container">
+                <h1 class="logo" style="font-size:2.4rem;">
+                    <span class="aether">Æther</span><span class="codex">Codex</span>
+                </h1>
+                <p class="subtitle">One oracle, many shells — the shared core and its native surfaces.</p>
+            </div>
+        </header>
+
+        <main class="content">
+            <article class="prose">
+                
+<blockquote>
+  <p><em>One oracle, many voices. Install the core on any OS and that OS becomes an Aether OS.</em></p>
+</blockquote>
+
+<h2 id="the-invariant">The invariant</h2>
+
+<p>AetherCodex is the native macOS face of a larger system. The brain is not baked
+into the editor — it lives in <strong>AetherOracle</strong>, a portable <strong>RubyGem</strong>. Install
+that gem on any machine and it becomes an <em>Aether OS</em>: the same reasoning
+substrate, the same memory, the same council, everywhere.</p>
+
+<p>There is <strong>one oracle</strong>; <strong>Pythia</strong> is its voice. Every turn resolves to
+<code>POST /aether/invoke</code> on some host that carries the core. There is no
+client/server split — only the aether, and the shells that open onto it.</p>
+
+<h2 id="the-layers">The layers</h2>
+
+<p><code>
+┌──────────────────────────────────────────────────────────────┐
+│  Native shells — the surfaces                                │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐     │
+│  │  macOS   │  │   iOS    │  │ Windows  │  │  Linux   │     │
+│  │ SwiftUI  │  │  Pythia  │  │ C# .NET8 │  │   GTK    │     │
+│  │ + AppKit │  │companion │  │   WPF    │  │  (spec)  │     │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘     │
+└───────┼─────────────┼─────────────┼─────────────┼───────────┘
+        └─────────────┴──────┬──────┴─────────────┘
+                             │  POST /aether/invoke  (protocol.md, v1)
+                   ┌─────────▼─────────┐
+                   │    AetherOracle   │  ← the shared core
+                   │      the brain    │     (a RubyGem)
+                   └───────────────────┘
+</code></p>
+
+<h2 id="the-core-aetheroracle">The core (AetherOracle)</h2>
+
+<p>A single gem, two tiers:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Tier</th>
+      <th>Contents</th>
+      <th>Needs</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>Brain tier</strong></td>
+      <td><code>ask</code>, <code>server</code>, <code>config</code>, <code>task</code>, <code>logs</code>, <code>repl</code> — the daemon, the oracle, Mnemosyne, the instrumentarium</td>
+      <td>the brain gems (auto-installed)</td>
+    </tr>
+    <tr>
+      <td><strong>Link tier</strong></td>
+      <td><code>peers</code>, <code>heartbeat</code>, <code>invoke</code> — pure Ruby stdlib</td>
+      <td>nothing but Ruby</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The link tier is the <strong>aetherlink surface</strong>: a minimal box with only Ruby can
+reach the brain on a Mac over the same wire contract. This is how iOS reaches the
+oracle — there is <strong>no daemon on iOS</strong>; the companion finds a peer’s daemon over
+the LAN.</p>
+
+<p>Installing the gem registers <strong>seven aliases</strong>, all the same aether:</p>
+
+<p><code>
+aetheroracle · aether · oracle · oracleaether · ae · aero · orae
+</code></p>
+
+<h2 id="the-daemon">The daemon</h2>
+
+<p>The brain’s running form is <code>ruby/standalone_daemon.rb</code>. AetherOracle owns the
+<strong>implementation</strong> and the per-OS <strong>lifecycle shims</strong>
+(<code>platform/{darwin,ios,windows,linux}</code>); the native shells own the <strong>policy</strong> —
+when to start, when to stop, how to respond to a crash. On macOS the editor
+spawns the daemon as a child <code>NSTask</code>; Windows and Linux do the equivalent; iOS
+reports <code>canRunDaemon == false</code>.</p>
+
+<h2 id="the-resources">The resources</h2>
+
+<p>The visual grammar is shared data, not macOS-only assets:</p>
+
+<ul>
+  <li><code>resources/Themes</code> — YAML themes (the syntax renaissance)</li>
+  <li><code>resources/Syntax</code> — TextMate grammars + tree-sitter queries</li>
+  <li><code>resources/Fonts</code> — the typography of the athanor</li>
+  <li><code>treesitter/</code> — the C tree-sitter engine + grammars (portable C, used by SwiftPM)</li>
+</ul>
+
+<h2 id="the-projects">The projects</h2>
+
+<ul>
+  <li><strong>AetherCodex</strong> (this site) — the native macOS editor, a SwiftUI App lifecycle.</li>
+  <li><strong>AetherOracle</strong> — the shared core. <a href="https://github.com/dantiel/AetherOracle">Source</a> · <a href="https://dantiel.github.io/AetherOracle/">Site</a>.</li>
+  <li><strong>AetherCodex · Windows</strong> — the Windows shell (C# / .NET 8 / WPF), the Ruby daemon as its soul.</li>
+  <li><strong>iOS · Linux</strong> — the companion and the GTK shell, forthcoming.</li>
+</ul>
+
+            </article>
+        </main>
+
+        <footer class="oracle-footer">
+            <p><em data-i18n="footer.tagline">Precision in the code plane = precision in the astral plane.</em></p>
+            <div class="runes">✦ ✧ ✦</div>
+        </footer>
+    </div>
+    <script src="../i18n.js"></script>
+    <script src="../eyes.js"></script>
+</body>
+</html>

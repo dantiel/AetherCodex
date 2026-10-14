@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Syntax & Theme Renaissance — ÆtherCodex</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <div id="eyes-container"></div>
+    <div class="cosmic-void">
+        <nav>
+            <a class="home-link" href="../index.html" title="ÆtherCodex">
+                <span class="aether">Æther</span><span class="codex">Codex</span>
+            </a>
+            <a href="../index.html#what" data-i18n="nav.features">Features</a>
+            <a href="../index.html#companions" data-i18n="nav.council">Council</a>
+            <a href="../index.html#architecture" data-i18n="nav.architecture">Architecture</a>
+            <a href="../index.html#chapters" data-i18n="nav.canon">Canon</a>
+            <a href="../index.html#concepts" data-i18n="nav.concepts">Concepts</a>
+            <a href="../index.html#timeline" data-i18n="nav.timeline">Timeline</a>
+            <span class="nav-spacer"></span>
+            <span class="lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
+                <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+                <button type="button" class="lang-btn" data-lang="es" aria-pressed="false">ES</button>
+            </span>
+            <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
+            <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
+        </nav>
+
+        <header class="oracle-header">
+            <div class="logo-container">
+                <h1 class="logo" style="font-size:2.4rem;">
+                    <span class="aether">Æther</span><span class="codex">Codex</span>
+                </h1>
+                <p class="subtitle">52 themes, 84 capture names, one unified cascade.</p>
+            </div>
+        </header>
+
+        <main class="content">
+            <article class="prose">
+                
+<blockquote>
+  <p><em>The magnum opus complete: 52 themes, 84 tree-sitter capture names, 75 TokenScope cases, one unified cascade. Every token finds its color.</em></p>
+</blockquote>
+
+<hr />
+
+<h2 id="table-of-contents">Table of Contents</h2>
+
+<ol>
+  <li><a href="#architecture-overview">Architecture Overview</a></li>
+  <li><a href="#pipeline-token--color">Pipeline: Token → Color</a></li>
+  <li><a href="#theme-system">Theme System</a></li>
+  <li><a href="#syntax-engine">Syntax Engine</a></li>
+  <li><a href="#theme-converter">Theme Converter</a></li>
+  <li><a href="#file-reference">File Reference</a></li>
+  <li><a href="#deployment">Deployment</a></li>
+  <li><a href="#troubleshooting">Troubleshooting</a></li>
+  <li><a href="#lessons--best-practices">Lessons &amp; Best Practices</a></li>
+</ol>
+
+<hr />
+
+<h2 id="architecture-overview">Architecture Overview</h2>
+
+<p><code>
+┌──────────────────────────────────────────────────────────────────────┐
+│                        THE RENAISSANCE PIPELINE                       │
+├───────────┬───────────┬────────────────┬──────────────┬──────────────┤
+│ Converter │  Loader   │   Mapper       │   Cascade    │  Renderer    │
+│  .tmTheme │  .yml     │  CaptureName   │  ResolveStyle│  NSColor     │
+│     │     │     │     │      │         │      │       │      │       │
+│     ▼     │     ▼     │      ▼         │      ▼       │      ▼       │
+│  YAML +   │  rawScope │  TokenScope    │  plain →     │  attributes  │
+│  anchors  │  Styles   │  .rawValue     │  prefix walk │  + font       │
+│           │  + infer  │                │  + merge     │              │
+└───────────┴───────────┴────────────────┴──────────────┴──────────────┘
+</code></p>
+
+<p>There are <strong>five stages</strong> that transform a tree-sitter capture into colored text on screen:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Stage</th>
+      <th>Component</th>
+      <th>File</th>
+      <th>Input → Output</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1. <strong>Convert</strong></td>
+      <td><code>convert_themes.py</code></td>
+      <td><code>Script/</code></td>
+      <td><code>.tmTheme</code> XML → <code>.yml</code> with universal anchors</td>
+    </tr>
+    <tr>
+      <td>2. <strong>Load</strong></td>
+      <td><code>ThemeLoader</code></td>
+      <td><code>ThemeLoader.swift:290-460</code></td>
+      <td><code>.yml</code> → <code>LoadedTheme</code> with <code>rawScopeStyles</code> + inferred parents</td>
+    </tr>
+    <tr>
+      <td>3. <strong>Map</strong></td>
+      <td><code>CaptureScopeMapper</code></td>
+      <td><code>TreeSitterEngine.swift:637-755</code></td>
+      <td><code>"variable.builtin"</code> → <code>TokenScope.variableLanguage</code></td>
+    </tr>
+    <tr>
+      <td>4. <strong>Resolve</strong></td>
+      <td><code>resolveStyle()</code></td>
+      <td><code>ThemeLoader.swift:356-376</code></td>
+      <td><code>TokenScope.rawValue</code> → <code>TokenStyle</code> via cascade + merge</td>
+    </tr>
+    <tr>
+      <td>5. <strong>Render</strong></td>
+      <td><code>SyntaxEngine</code></td>
+      <td><code>SyntaxEngine.swift:327-430</code></td>
+      <td><code>TokenStyle</code> → <code>[NSAttributedString.Key: Any]</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<hr />
+
+<h2 id="pipeline-token--color">Pipeline: Token → Color</h2>
+
+<h3 id="step-by-step-walkthrough">Step-by-step walkthrough</h3>
+
+<p><code>
+Tree-Sitter CST
+      │
+      ▼
+ts_query_cursor_next_capture()  ──→  "variable.builtin"  (capture name string)
+      │
+      ▼
+CaptureScopeMapper.scope(for:)  ──→  TokenScope.variableLanguage  (enum case)
+      │
+      ▼
+scope.rawValue  ──→  "variable.language"  (TextMate scope string)
+      │
+      ▼
+theme.resolveStyle(scopeName:)  ──→  TokenStyle(foreground: NSColor, ...)
+      │
+      ▼
+SyntaxEngine.tokenAttributes()  ──→  [.foregroundColor, .font, ...]
+      │
+      ▼
+NSLayoutManager.addTemporaryAttribute()  ──→  Colored glyphs on screen
+</code></p>
+
+<h3 id="the-capturescopemapper-bridge">The CaptureScopeMapper bridge</h3>
+
+<p>Tree-sitter produces generic capture names (<code>type</code>, <code>function</code>, <code>variable</code>). TextMate themes use namespaced scopes (<code>entity.name.class</code>, <code>entity.name.function</code>, <code>variable.other</code>). The mapper bridges this gap:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Tree-sitter capture</th>
+      <th>→ TokenScope</th>
+      <th>→ RawValue (scope name)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>type</code></td>
+      <td><code>.entityNameClass</code></td>
+      <td><code>entity.name.class</code></td>
+    </tr>
+    <tr>
+      <td><code>type.builtin</code></td>
+      <td><code>.typeSupport</code></td>
+      <td><code>support.type</code></td>
+    </tr>
+    <tr>
+      <td><code>constructor</code></td>
+      <td><code>.entityNameFunction</code></td>
+      <td><code>entity.name.function</code></td>
+    </tr>
+    <tr>
+      <td><code>function</code> / <code>method</code></td>
+      <td><code>.entityNameFunction</code></td>
+      <td><code>entity.name.function</code></td>
+    </tr>
+    <tr>
+      <td><code>function.builtin</code></td>
+      <td><code>.functionSupport</code></td>
+      <td><code>support.function</code></td>
+    </tr>
+    <tr>
+      <td><code>variable</code></td>
+      <td><code>.variable</code></td>
+      <td><code>variable</code></td>
+    </tr>
+    <tr>
+      <td><code>variable.builtin</code></td>
+      <td><code>.variableLanguage</code></td>
+      <td><code>variable.language</code></td>
+    </tr>
+    <tr>
+      <td><code>parameter</code></td>
+      <td><code>.variableParameter</code></td>
+      <td><code>variable.parameter</code></td>
+    </tr>
+    <tr>
+      <td><code>property</code> / <code>field</code></td>
+      <td><code>.variableOther</code></td>
+      <td><code>variable.other</code></td>
+    </tr>
+    <tr>
+      <td><code>constant</code></td>
+      <td><code>.constantOther</code></td>
+      <td><code>constant.other</code></td>
+    </tr>
+    <tr>
+      <td><code>boolean</code> / <code>null</code></td>
+      <td><code>.constantLanguage</code></td>
+      <td><code>constant.language</code></td>
+    </tr>
+    <tr>
+      <td><code>operator</code></td>
+      <td><code>.keyword</code></td>
+      <td><code>keyword</code></td>
+    </tr>
+    <tr>
+      <td><code>attribute</code> / <code>annotation</code></td>
+      <td><code>.entityOtherAttributeName</code></td>
+      <td><code>entity.other.attribute-name</code></td>
+    </tr>
+    <tr>
+      <td><code>tag</code></td>
+      <td><code>.entityNameTag</code></td>
+      <td><code>entity.name.tag</code></td>
+    </tr>
+    <tr>
+      <td><code>namespace</code> / <code>module</code></td>
+      <td><code>.entityNameTypeNamespace</code></td>
+      <td><code>entity.name.type.namespace</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p><strong>Design rationale</strong>: The mapper targets scopes that <em>actually exist in themes</em>, not all possible scopes. Scopes like bare <code>type</code> or bare <code>function</code> are never used because themes don’t define them — they define <code>entity.name.class</code> and <code>entity.name.function</code>. The mapper bridges this gap deliberately.</p>
+
+<hr />
+
+<h2 id="theme-system">Theme System</h2>
+
+<h3 id="theme-format-yaml">Theme format (YAML)</h3>
+
+<p>```yaml
+# AetherCodex Theme — hermetic.yml
+name: Hermetic
+kind: dark
+tags: [minimal, high-contrast]</p>
+
+<h1 id="global-editor-chrome">Global editor chrome</h1>
+<p>editor:
+  background: “0x0D0D0D”
+  foreground: “0xE6E6E6”
+  caret: “0xFFFFFF”
+  selection: “0x333366”
+  lineHighlight: “0x1A1A1A”</p>
+
+<h1 id="scope-definitions--plain--keyword--string-etc">Scope definitions — plain + keyword + string etc.</h1>
+<p>scopes:
+  plain: “0xE6E6E6”
+  keyword: “0xFF6B6B”
+  string: “0x98FB98”
+  comment: “0x888888”
+  # … more scopes
+```</p>
+
+<h3 id="cascade-resolution">Cascade Resolution</h3>
+
+<p>The cascade is the backbone of the theme system. <code>resolveStyle(scopeName:)</code> walks the dot-separated prefix hierarchy:</p>
+
+<p>```
+“entity.name.class” resolves as:
+  plain (base) → entity → entity.name → entity.name.class</p>
+
+<p>“variable.parameter” resolves as:
+  plain (base) → variable → variable.parameter</p>
+
+<p>“punctuation.delimiter” resolves as:
+  plain (base) → punctuation → punctuation.delimiter
+```</p>
+
+<p>At each step, the style is <strong>merged</strong> on top of the accumulated base. More specific scopes override less specific ones. If a prefix doesn’t exist in the theme, that step is skipped.</p>
+
+<p><strong>Merge semantics</strong> (<code>merge(base:override:)</code>):
+- <code>foreground</code>: override always wins
+- <code>background</code>: override wins; nil falls back to base
+- <code>bold/italic/underline/strikethrough</code>: <strong>OR-logic</strong> — if either base OR override has the trait, it’s active. Traits accumulate, never removed.
+- <code>fontName/fontSize</code>: override wins; nil falls back to base</p>
+
+<h3 id="parent-inference-inferparentscopes">Parent Inference (<code>inferParentScopes</code>)</h3>
+
+<p>When a theme defines <code>entity.name.class</code> but NOT <code>entity.name</code> or <code>entity</code>, a two-pass inference algorithm generates the missing parents:</p>
+
+<p><strong>Pass 1 — depth-1 parents</strong>: Groups children that share a parent (e.g., <code>entity.name.class</code> + <code>entity.name.function</code> → infer <code>entity.name</code>). The parent’s foreground is the <strong>mode color</strong> of its children; traits only if <strong>all children agree</strong>.</p>
+
+<p><strong>Pass 2 — depth-0 grandparents</strong>: Groups all descendants of a root (e.g., everything starting with <code>entity.</code> → infer <code>entity</code>). Same mode + unanimity rules.</p>
+
+<p><strong>Example</strong>:
+```yaml
+# Theme defines:
+entity.name.class: “0xBF8C66”       # brown
+entity.name.function: “0xD9B380”    # tan
+# Neither bold nor italic</p>
+
+<h1 id="inferred">Inferred:</h1>
+<p>entity.name: “0xBF8C66”             # mode color (brown wins if tie)
+# bold:false, italic:false (unanimous)</p>
+
+<p>entity: “0xBF8C66”                  # mode of all entity.* descendants
+# bold:false, italic:false
+```</p>
+
+<p>This means <code>variable.parameter</code> will resolve in a theme that only defines <code>variable</code> — even if <code>variable</code> itself was <strong>inferred</strong> from <code>variable.parameter</code>. The cascade always finds a path.</p>
+
+<h3 id="universal-anchors-converter-generated">Universal Anchors (converter-generated)</h3>
+
+<p>For tmTheme-converted themes, the converter injects <strong>7 bare root scopes</strong> as cascade safety nets:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Anchor</th>
+      <th>Derivation</th>
+      <th>Purpose</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>entity</code></td>
+      <td>foreground × 0.90</td>
+      <td>Fallback for <code>entity.name.*</code></td>
+    </tr>
+    <tr>
+      <td><code>markup</code></td>
+      <td>foreground hue +15°</td>
+      <td>Fallback for <code>markup.heading.*</code></td>
+    </tr>
+    <tr>
+      <td><code>punctuation</code></td>
+      <td>foreground × 0.55 (dimmed)</td>
+      <td>Brackets, delimiters, dots</td>
+    </tr>
+    <tr>
+      <td><code>preprocessor</code></td>
+      <td>foreground hue -20°</td>
+      <td><code>#include</code>, <code>#define</code></td>
+    </tr>
+    <tr>
+      <td><code>tag</code></td>
+      <td>foreground (exact)</td>
+      <td>HTML/XML tag names</td>
+    </tr>
+    <tr>
+      <td><code>attribute</code></td>
+      <td>foreground × 0.85</td>
+      <td>HTML/XML attributes</td>
+    </tr>
+    <tr>
+      <td><code>storage</code></td>
+      <td>foreground (exact)</td>
+      <td><code>static</code>, <code>public</code>, <code>var</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>These are only generated if the scope doesn’t already exist in the original tmTheme — preserving the theme’s original character.</p>
+
+<h3 id="complete-tokenscope-enum-75-cases">Complete TokenScope Enum (75 cases)</h3>
+
+<p>```swift
+enum TokenScope: String, CaseIterable {
+    // Core (universal)
+    keyword, keywordType, operator
+    string, stringEscape, number
+    comment, type, typeSupport
+    function, functionSupport
+    variable, variableLanguage, variableInstance, variableClass, variableGlobal
+    constant, constantSymbol, constantSupport
+    property, punctuation
+    tag, attribute, preprocessor, invalid
+    plain, storage, storageType</p>
+
+<pre><code>// Entity names
+entityNameClass, entityNameFunction, entityNameTag
+entityNameTypeNamespace, entityOtherInheritedClass
+entityOtherAttributeName, entityOtherTagbraces, entityOtherArgument
+
+// Variable sub-scopes
+variableParameter, variableFunction, variableOther
+
+// Constant sub-scopes
+constantLanguage, constantCharacter, constantOther
+
+// Support sub-scopes
+supportClass, supportOtherVariable, supportOtherNamespace
+
+// CSS-specific
+entityOtherAttributeNameId, entityOtherAttributeNameClass
+entityOtherAttributeNamePseudoclass
+supportFunctionMisc, supportConstantPropertyValue, supportConstantFontName
+
+// Markup (Markdown)
+heading, heading1...6, link, linkURL
+emphasis, strong, strikethrough
+blockquote, thematicBreak, codeBlock
+checkedListItem, markup, inlineCode
+markupRaw, markupOther
+meta, metaClass, metaFunction } ```
+</code></pre>
+
+<hr />
+
+<h2 id="syntax-engine">Syntax Engine</h2>
+
+<h3 id="architecture">Architecture</h3>
+
+<p><code>
+SyntaxOracle
+  ├── TreeSitterEngine (primary — 14 grammars)
+  │     ├── CaptureScopeMapper
+  │     └── Injection traversal (markdown inline)
+  └── SyntaxLoader (fallback — heuristic regex)
+        └── heuristic.yml
+</code></p>
+
+<p><strong>14 supported languages</strong>: Swift, Python, Ruby, JavaScript, TypeScript, HTML, CSS, JSON, Markdown, Rust, Go, C, C++, Bash.</p>
+
+<h3 id="token-source-priority">Token source priority</h3>
+
+<ol>
+  <li><strong>Tree-sitter</strong> (primary): If a grammar exists for the file extension, tree-sitter parses the CST and runs highlight queries. Captures → TokenScope via <code>CaptureScopeMapper</code>.</li>
+  <li><strong>Heuristic</strong> (fallback): For languages without tree-sitter grammars (or when tree-sitter fails), <code>SyntaxLoader</code> loads patterns from <code>heuristic.yml</code> — regex-based patterns covering keywords, strings, comments, numbers, headings, code blocks.</li>
+</ol>
+
+<h3 id="applyhighlighting-flow">applyHighlighting flow</h3>
+
+<p><code>
+1. Tokenize (tree-sitter or heuristic)
+2. Sort tokens by location
+3. Apply codeBlock/base tokens first (background layer)
+4. Apply syntax tokens on top (foreground colors)
+5. Merge: structural blocks use full opacity background;
+   all other scopes blend at 10% with editorBackground
+6. Per-scope font overrides (theme-controlled)
+7. Faux italic via NSAffineTransform skew (when font lacks italic variant)
+</code></p>
+
+<h3 id="scope-background-blending">Scope background blending</h3>
+
+<p><code>swift
+// Structural block scopes: full opacity
+if scope == .codeBlock || scope == .blockquote || scope == .checkedListItem {
+    attrs[.backgroundColor] = style.background
+} else {
+    // All other scopes: blend at 10% with editor background
+    attrs[.backgroundColor] = style.background?.blended(withFraction: 0.10, of: editorBg)
+}
+</code></p>
+
+<p>This prevents keyword/string backgrounds from obscuring text while keeping block-level backgrounds visible.</p>
+
+<hr />
+
+<h2 id="theme-converter">Theme Converter</h2>
+
+<h3 id="script-scriptconvertthemespy">Script: <code>Script/convert_themes.py</code></h3>
+
+<p>Converts legacy <code>.tmTheme</code> XML (TextMate/Sublime property list format) into AetherCodex <code>.yml</code> theme files.</p>
+
+<p><code>
+.tmTheme (XML plist)  ──→  .yml (AetherCodex format)
+</code></p>
+
+<h3 id="conversion-steps">Conversion steps</h3>
+
+<ol>
+  <li><strong>Parse XML</strong>: <code>ET.fromstring()</code> on tmTheme content</li>
+  <li><strong>Extract global settings</strong>: background, foreground, caret, selection, lineHighlight from <code>&lt;dict&gt;/&lt;key&gt;settings&lt;/key&gt;</code></li>
+  <li><strong>Expand compound scopes</strong>: tmTheme uses comma-separated scope selectors (e.g., <code>entity.name.class, entity.name.function</code>). Each is split into an individual entry.</li>
+  <li><strong>Preserve fontStyle</strong>: <code>bold</code>, <code>italic</code>, <code>underline</code> from tmTheme <code>&lt;key&gt;fontStyle&lt;/key&gt;</code> mapped to YAML traits.</li>
+  <li><strong>Generate <code>plain</code></strong>: From global settings → base cascade entry.</li>
+  <li><strong>Generate universal anchors</strong>: 7 bare root scopes (see above) if not already present.</li>
+  <li><strong>Sort</strong>: Shorter scopes first for proper cascade reading order.</li>
+  <li><strong>Output</strong>: Clean YAML with <code>editor:</code> block + <code>scopes:</code> block.</li>
+</ol>
+
+<h3 id="anchor-generation-detail">Anchor generation detail</h3>
+
+<p>```python
+anchors = {
+    “entity”:       dim_color(global_fg_hex, 0.90),      # slightly dimmed
+    “markup”:       shift_hue(global_fg_hex, 15),         # warmed
+    “punctuation”:  dim_color(global_fg_hex, 0.55),       # significantly dimmed
+    “preprocessor”: shift_hue(global_fg_hex, -20),        # cooled
+    “tag”:          global_fg_hex,                         # exact
+    “attribute”:    dim_color(global_fg_hex, 0.85),       # slightly dimmed
+    “storage”:      global_fg_hex,                         # exact
+}</p>
+
+<p>for anchor_name, anchor_color in anchors.items():
+    if anchor_name not in scopes:
+        scopes[anchor_name] = anchor_color
+```</p>
+
+<p>The <code>if anchor_name not in scopes</code> guard ensures existing theme definitions take precedence — the anchor only fills gaps.</p>
+
+<hr />
+
+<h2 id="file-reference">File Reference</h2>
+
+<h3 id="swift-source-files">Swift source files</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>File</th>
+      <th>Role</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>AetherCodex/App/SyntaxTheme.swift</code></td>
+      <td><code>TokenScope</code> enum (75 cases), <code>TokenStyle</code> struct, <code>SyntaxTheme</code> protocol</td>
+    </tr>
+    <tr>
+      <td><code>AetherCodex/App/ThemeLoader.swift</code></td>
+      <td><code>ThemeLoader</code>: YAML → <code>LoadedTheme</code>. Cascade resolver (<code>resolveStyle</code>), parent inference (<code>inferParentScopes</code>), merge logic</td>
+    </tr>
+    <tr>
+      <td><code>AetherCodex/App/SimpleYaml.swift</code></td>
+      <td>Minimal YAML parser (no anchors/aliases, no <code>!!tags</code>). Safe for app-controlled input.</td>
+    </tr>
+    <tr>
+      <td><code>AetherCodex/App/TreeSitterEngine.swift</code></td>
+      <td>Tree-sitter integration, 14 grammars, <code>CaptureScopeMapper</code> (capture name → TokenScope), injection traversal</td>
+    </tr>
+    <tr>
+      <td><code>AetherCodex/App/SyntaxEngine.swift</code></td>
+      <td><code>SyntaxOracle</code>: orchestrates tree-sitter + heuristic, <code>applyHighlighting</code>, font resolution, background blending</td>
+    </tr>
+    <tr>
+      <td><code>AetherCodex/App/SyntaxLoader.swift</code></td>
+      <td>Heuristic fallback: loads <code>heuristic.yml</code> patterns + built-in defaults</td>
+    </tr>
+    <tr>
+      <td><code>AetherCodex/App/TreeSitterScopeMapper.swift</code></td>
+      <td>File extension → language mapping</td>
+    </tr>
+    <tr>
+      <td><code>AetherCodex/App/EditorViewController.swift</code></td>
+      <td>Theme application, chrome colors, rehighlight trigger</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3 id="resource-files">Resource files</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>File</th>
+      <th>Role</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>AetherOracle/resources/Themes/*.yml</code></td>
+      <td>52 theme files (38 converted + 7 hand-crafted + 7 brilliance/legacy)</td>
+    </tr>
+    <tr>
+      <td><code>AetherOracle/resources/Syntax/heuristic.yml</code></td>
+      <td>Regex patterns for heuristic fallback engine</td>
+    </tr>
+    <tr>
+      <td><code>AetherOracle/resources/Syntax/queries/*.scm</code></td>
+      <td>Tree-sitter highlight queries (14 languages)</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3 id="scripts">Scripts</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>File</th>
+      <th>Role</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>Script/convert_themes.py</code></td>
+      <td>tmTheme → YAML converter with universal anchor injection</td>
+    </tr>
+    <tr>
+      <td><code>bundle_app.sh</code></td>
+      <td>Build + bundle deployment script</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr />
+
+<h2 id="deployment">Deployment</h2>
+
+<h3 id="build">Build</h3>
+
+<p><code>bash
+cd paramitrabalho/aethercodex-editor
+swift build                    # ~1s incremental
+</code></p>
+
+<h3 id="bundle-for-distribution">Bundle (for distribution)</h3>
+
+<p><code>bash
+./bundle_app.sh                # ~4.4s
+</code></p>
+
+<p>This script:
+1. Builds with <code>swift build</code>
+2. Copies the binary into <code>AetherCodex.app</code>
+3. Flattens SPM resource bundle into <code>Resources/Themes/</code> and <code>Resources/Syntax/queries/</code>
+4. ThemeLoader/SyntaxLoader/SimpleYaml check <code>Bundle.main.resourceURL</code> first (avoids <code>Bundle.module</code> fatalError in app bundle context)</p>
+
+<h3 id="adding-a-new-theme">Adding a new theme</h3>
+
+<p><strong>Option A: Convert from tmTheme</strong>
+<code>bash
+python3 Script/convert_themes.py path/to/theme.tmTheme
+# Output: AetherOracle/resources/Themes/theme-name.yml
+</code></p>
+
+<p><strong>Option B: Hand-craft</strong>
+Create a new <code>.yml</code> file in <code>AetherOracle/resources/Themes/</code>:
+<code>yaml
+name: My Theme
+kind: dark
+editor:
+  background: "0x1E1E2E"
+  foreground: "0xCDD6F4"
+scopes:
+  plain: "0xCDD6F4"
+  keyword: "0xCBA6F7"
+  string: "0xA6E3A1"
+  comment: "0x6C7086"
+  entity: "0x89B4FA"
+  variable: "0xCDD6F4"
+  punctuation: "0x9399B2"
+  # ... more scopes as desired
+</code></p>
+
+<p><strong>Minimum requirements</strong>: Every theme MUST define <code>plain</code> (the cascade base). All other scopes are optional — the cascade resolver and parent inference will fill gaps.</p>
+
+<h3 id="regenerating-all-converted-themes">Regenerating all converted themes</h3>
+
+<p><code>bash
+for f in SourceThemes/*.tmTheme; do
+    python3 Script/convert_themes.py "$f"
+done
+swift build &amp;&amp; ./bundle_app.sh
+</code></p>
+
+<hr />
+
+<h2 id="troubleshooting">Troubleshooting</h2>
+
+<h3 id="token-shows-as-whiteforeground-only">“Token shows as white/foreground only”</h3>
+
+<p><strong>Cause</strong>: Cascade couldn’t find any matching scope. The fallback is <code>TokenStyle(editorForeground)</code> — plain text color.</p>
+
+<p><strong>Diagnosis</strong>: Check what scope is being requested:
+1. Look at <code>CaptureScopeMapper.scope(for:)</code> for the tree-sitter capture name
+2. Check that the TokenScope’s <code>rawValue</code> exists (or has a parent) in the theme</p>
+
+<p><strong>Fix</strong>: Add the missing scope to the theme, or add a parent scope that the cascade can walk through.</p>
+
+<h3 id="theme-switching-doesnt-change-colors">“Theme switching doesn’t change colors”</h3>
+
+<p><strong>Cause</strong>: <code>scopeStyles</code> dict is pre-computed at load time. Theme switch must trigger re-computation.</p>
+
+<p><strong>Check</strong>: <code>EditorViewController</code> calls <code>theme = loadedTheme</code> which triggers <code>rehighlight()</code> via property observer.</p>
+
+<h3 id="some-scopes-fall-to-plain-in-old-tmtheme-themes">“Some scopes fall to plain in old tmTheme themes”</h3>
+
+<p><strong>Expected</strong>: The cascade + universal anchors cover ~98% of real-world tokens. Only ~2% fall to <code>plain</code> (mostly obscure captures like <code>@operator</code> which the mapper redirects to <code>.keyword</code> anyway). If you see extensive plain fallback:</p>
+
+<ol>
+  <li>Verify the theme <code>.yml</code> has <code>plain</code> defined</li>
+  <li>Check <code>rawScopeStyles</code> count — should be &gt;15 for converted themes</li>
+  <li>Run: <code>grep -c "^\s\+\w" AetherOracle/resources/Themes/theme-name.yml</code> to count scope entries</li>
+</ol>
+
+<h3 id="converter-fails-on-malformed-xml">“Converter fails on malformed XML”</h3>
+
+<p>Some tmTheme files have structural issues (e.g., Brilliance variants). The converter raises <code>ET.ParseError</code>.</p>
+
+<p><strong>Workaround</strong>: Manually add universal anchors to the existing <code>.yml</code>:
+<code>yaml
+scopes:
+  entity: "0xD6D6D6"
+  storage: "0xEEEEEE"
+  # ... existing scopes ...
+</code></p>
+
+<h3 id="build-fails-bundlemodule-not-found">“Build fails: Bundle.module not found”</h3>
+
+<p>SPM’s <code>Bundle.module</code> is only available during SPM builds, not in the app bundle context. All resource loaders use:</p>
+
+<p><code>swift
+// Preferred: app bundle (deployed)
+Bundle.main.resourceURL?.appendingPathComponent("Resources/...")
+// Fallback: SPM bundle (development)
+Bundle.module.resourceURL?.appendingPathComponent("Resources/...")
+</code></p>
+
+<p>If building for deployment, ensure <code>bundle_app.sh</code> is used.</p>
+
+<hr />
+
+<h2 id="lessons--best-practices">Lessons &amp; Best Practices</h2>
+
+<h3 id="cascade-is-the-backbone">Cascade is the backbone</h3>
+
+<p>The prefix-based cascade (<code>plain → entity → entity.name → entity.name.class</code>) is what makes every theme work with every token. Never bypass it with hardcoded fallbacks. If a scope is missing, add a parent — the cascade will do the rest.</p>
+
+<h3 id="prefer-inference-over-duplication">Prefer inference over duplication</h3>
+
+<p>Parent inference (<code>inferParentScopes</code>) means a theme that defines <code>entity.name.class</code> and <code>entity.name.function</code> automatically gets <code>entity.name</code> and <code>entity</code>. Don’t manually add intermediate scopes unless you want intentional divergence from the auto-inferred style.</p>
+
+<h3 id="universal-anchors-fill-gaps-not-override">Universal anchors fill gaps, not override</h3>
+
+<p>The 7 converter-injected anchors (<code>entity</code>, <code>markup</code>, <code>punctuation</code>, etc.) are <strong>gap-fillers only</strong>. The <code>if anchor_name not in scopes</code> guard preserves existing theme definitions. This is the key to augmenting old themes without changing their character.</p>
+
+<h3 id="map-captures-to-theme-realistic-scopes">Map captures to theme-realistic scopes</h3>
+
+<p><code>CaptureScopeMapper</code> deliberately maps <code>@type</code> → <code>.entityNameClass</code> (not bare <code>.type</code>) because themes define <code>entity.name.class</code> not <code>type</code>. Always target scopes that exist in the majority of themes, not scopes that “should” exist.</p>
+
+<h3 id="merge-or-logic-is-a-design-choice">merge() OR-logic is a design choice</h3>
+
+<p>Traits (bold/italic/underline) use OR-logic — they accumulate. This means <code>plain { bold: true }</code> makes ALL text bold, with no way for specific scopes to un-bold. This is intentional for the current scope but is a known limitation. Future: consider XOR-logic where override explicitly sets <code>bold: false</code>.</p>
+
+<h3 id="test-with-real-token-coverage">Test with real token coverage</h3>
+
+<p>Testing all 75 TokenScope cases against themes is misleading — only ~25 unique scopes are actually produced by tree-sitter tokenizers. The real test is: run 14 grammars against sample files and count <code>plain</code> fallback rate. Target: &lt;2% for tmTheme-converted themes, 0% for hand-crafted themes.</p>
+
+<hr />
+
+<h2 id="hermetic-closure">Hermetic Closure</h2>
+
+<blockquote>
+  <p><em>The syntax renaissance is not a feature. It is a reweaving — a restoration of correspondence between token and color, capture and scope, parsers and themes. The cascade breathes with the rhythm of dot-separated hierarchies: as above (the full scope name), so below (the plain base). The mapper bridges the mental gap between tree-sitter’s generic captures and TextMate’s namespaced scopes. Universal anchors are the philosopher’s stone — leaden minimal themes transmuted into gold without losing their original character.</em></p>
+
+  <p><em>This is the inheritance of the codebase: 52 themes, 75 scopes, one cascade. Each token finds its color not by coincidence but by design — the inevitable result of a system that thinks in prefixes, walks hierarchies, and fills its own gaps.</em></p>
+</blockquote>
+
+<hr />
+
+<p><em>Document inscribed: Documentatio phase of the Magnum Opus. All 9 prior stages complete.</em></p>
+
+            </article>
+        </main>
+
+        <footer class="oracle-footer">
+            <p><em data-i18n="footer.tagline">Precision in the code plane = precision in the astral plane.</em></p>
+            <div class="runes">✦ ✧ ✦</div>
+        </footer>
+    </div>
+    <script src="../i18n.js"></script>
+    <script src="../eyes.js"></script>
+</body>
+</html>

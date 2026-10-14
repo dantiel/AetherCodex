@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tool-Result Wire Protocol — ÆtherCodex</title>
+    <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+    <div id="eyes-container"></div>
+    <div class="cosmic-void">
+        <nav>
+            <a class="home-link" href="../index.html" title="ÆtherCodex">
+                <span class="aether">Æther</span><span class="codex">Codex</span>
+            </a>
+            <a href="../index.html#what" data-i18n="nav.features">Features</a>
+            <a href="../index.html#companions" data-i18n="nav.council">Council</a>
+            <a href="../index.html#architecture" data-i18n="nav.architecture">Architecture</a>
+            <a href="../index.html#chapters" data-i18n="nav.canon">Canon</a>
+            <a href="../index.html#concepts" data-i18n="nav.concepts">Concepts</a>
+            <a href="../index.html#timeline" data-i18n="nav.timeline">Timeline</a>
+            <span class="nav-spacer"></span>
+            <span class="lang-switch" role="group" aria-label="Language">
+                <button type="button" class="lang-btn active" data-lang="en" aria-pressed="true">EN</button>
+                <button type="button" class="lang-btn" data-lang="de" aria-pressed="false">DE</button>
+                <button type="button" class="lang-btn" data-lang="es" aria-pressed="false">ES</button>
+            </span>
+            <a href="https://github.com/dantiel/AetherCodex" target="_blank" rel="noopener" title="Source on GitHub" data-i18n="nav.source">Source</a>
+            <a class="nav-cta" href="../index.html#buy" data-i18n="nav.buy">Buy · $69</a>
+        </nav>
+
+        <header class="oracle-header">
+            <div class="logo-container">
+                <h1 class="logo" style="font-size:2.4rem;">
+                    <span class="aether">Æther</span><span class="codex">Codex</span>
+                </h1>
+                <p class="subtitle">One path carries meaning, the other carries presence.</p>
+            </div>
+        </header>
+
+        <main class="content">
+            <article class="prose">
+                
+<blockquote>
+  <p><em>The full result reaches the model; the echo reaches the glass. One path carries meaning, the other carries presence.</em></p>
+</blockquote>
+
+<h2 id="purpose">Purpose</h2>
+
+<p>Instrumenta tool calls produce a result that travels <strong>two distinct routes</strong>:</p>
+
+<ol>
+  <li><strong>The model route</strong> — the complete, lossless result (via the <code>tool</code> message).</li>
+  <li><strong>The UI route</strong> — a compact, human-readable <em>echo</em> streamed to the Pythia panel
+as a live status before the final answer is composed.</li>
+</ol>
+
+<p>This document pins the contract between the Ruby oracle and the Swift file-mirror
+so that both routes stay truthful and neither leaks noise into the other.</p>
+
+<h2 id="the-ruby-side--uipreview">The Ruby side — <code>ui_preview</code></h2>
+
+<p>Location: <code>Ruby/oracle/artificer.rb</code> (class method, inside the <code>class &lt;&lt; self</code> block).</p>
+
+<p>```ruby
+def ui_preview(result, limit = 4000, name: nil)
+  # read_file behält seine Struktur, damit der Swift-Datei-Spiegel Pfad/Range/Inhalt
+  # rendern kann; andere content-tragende Ergebnisse bleiben ein kompaktes Echo.
+  return result if name&amp;.to_s == ‘read_file’ &amp;&amp; result.is_a?(Hash)</p>
+
+<p>text = if result.is_a?(Hash)
+           (result[:content] || result[‘content’] || result.to_json).to_s
+         else
+           result.to_s
+         end
+  text.truncate(limit)
+end
+```</p>
+
+<h3 id="contract">Contract</h3>
+
+<table>
+  <thead>
+    <tr>
+      <th>Input</th>
+      <th>Behaviour</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>name == 'read_file'</code> <strong>and</strong> <code>result</code> is a <code>Hash</code></td>
+      <td><strong>Pass-through</strong> — the full structure (<code>path</code>, <code>range</code>, <code>content</code>, …) is returned untouched so the Swift file mirror can decode and render it.</td>
+    </tr>
+    <tr>
+      <td>Any other <code>Hash</code> result</td>
+      <td>Collapsed to <code>result[:content] \|\| result['content'] \|\| result.to_json</code>, truncated to <code>limit</code> (4000 chars).</td>
+    </tr>
+    <tr>
+      <td>Non-<code>Hash</code> result</td>
+      <td><code>result.to_s</code>, truncated to <code>limit</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3 id="invariants">Invariants</h3>
+
+<ul>
+  <li><code>name</code> may arrive as a <code>String</code> or a <code>Symbol</code>; <code>name&amp;.to_s</code> normalises both.</li>
+  <li><code>limit</code> is a <strong>positional</strong> argument that precedes the <code>name:</code> keyword argument.
+Ruby forbids a keyword argument before a positional one — the signature is
+<code>(result, limit = 4000, name: nil)</code>, never <code>(result, name: nil, limit = 4000)</code>.</li>
+  <li>The preview is <em>cosmetic only</em>. The model never consumes it; truncation here
+cannot lose information that matters to the LLM.</li>
+</ul>
+
+<h3 id="call-sites">Call sites</h3>
+
+<p>Both <code>execute_standard</code> and <code>execute_fallback</code> emit the echo with the tool name:</p>
+
+<p><code>ruby
+sink&amp;.send_status 'tool_completed', {
+  name:, execution_time: exec_time,
+  result: ui_preview(safe_result, name: name)
+}
+</code></p>
+
+<p>The <code>sink</code> is the status stream (<code>stream</code> or <code>HorologiumAeternum</code>), which re-frames
+the payload for <code>RubyBridge</code> and ultimately <code>PythiaPanel</code>.</p>
+
+<h2 id="the-swift-side--the-file-mirror">The Swift side — the file mirror</h2>
+
+<p>Location: <code>AetherCodex/App/FileInstrumentViews.swift</code>.</p>
+
+<h3 id="decoding">Decoding</h3>
+
+<ul>
+  <li><code>ReadFileResult</code> decodes only <code>content</code> / <code>error</code> (<code>Decodable</code>). The <code>path</code> is
+<strong>not</strong> carried in the result — it is recovered from the call arguments
+(<code>args?.path ?? ""</code>), which is why the Ruby pass-through preserves the full hash
+rather than collapsing it to <code>content</code> alone.</li>
+  <li><code>PatchFileResult</code> mirrors the same shape (<code>ok</code> / error / diff statistics).</li>
+</ul>
+
+<h3 id="rendering">Rendering</h3>
+
+<ul>
+  <li>Both the <code>ReadFileView</code> and <code>PatchFileView</code> headers derive their subtitle from
+the file argument: <code>(path as NSString).lastPathComponent</code> — a non-optional
+<code>String</code> with a <code>?? ""</code> fallback, so the <code>as NSString</code> cast cannot crash.</li>
+  <li>The done-card is the minimal <code>✓ ok</code> — no prose, per the hermetic <em>subtraction
+over addition</em> discipline.</li>
+</ul>
+
+<h2 id="flow-diagram">Flow diagram</h2>
+
+<p><code>
+Ruby instrumenta call
+   └─ safe_encode(exec_result)          → full result  → model (tool message)
+   └─ ui_preview(safe_result, name:)    → live echo    → sink → RubyBridge
+                                                                   → PythiaPanel
+                                                                       → FileInstrumentViews
+</code></p>
+
+<h2 id="maintenance-notes">Maintenance notes</h2>
+
+<ul>
+  <li>If a new tool result needs <strong>structural</strong> rendering in Swift (not just a text
+echo), extend the <code>ui_preview</code> guard with its <code>name</code> rather than collapsing it,
+and add a matching <code>Decodable</code> struct in <code>FileInstrumentViews.swift</code>.</li>
+  <li>Never reorder <code>ui_preview</code>’s arguments — keyword-before-positional is a Ruby
+syntax error.</li>
+  <li>Verify with <code>ruby -c Ruby/oracle/artificer.rb</code> after any signature change.</li>
+</ul>
+
+            </article>
+        </main>
+
+        <footer class="oracle-footer">
+            <p><em data-i18n="footer.tagline">Precision in the code plane = precision in the astral plane.</em></p>
+            <div class="runes">✦ ✧ ✦</div>
+        </footer>
+    </div>
+    <script src="../i18n.js"></script>
+    <script src="../eyes.js"></script>
+</body>
+</html>
