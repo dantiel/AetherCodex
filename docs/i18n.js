@@ -642,6 +642,8 @@
   var LANG_KEY = 'aethercodex.lang';
 
   function currentLang() {
+    var pageLang = document.body.getAttribute('data-canon-lang');
+    if (pageLang && I18N[pageLang]) return pageLang;
     var stored = null;
     try { stored = localStorage.getItem(LANG_KEY); } catch (e) {}
     if (stored && I18N[stored]) return stored;
@@ -691,7 +693,15 @@
   }
 
   document.querySelectorAll('[data-lang]').forEach(function (el) {
-    el.addEventListener('click', function () { setLang(el.getAttribute('data-lang')); });
+    el.addEventListener('click', function () {
+      var lang = el.getAttribute('data-lang');
+      setLang(lang);
+      var base = document.body.getAttribute('data-canon-base');
+      if (base && lang !== (document.body.getAttribute('data-canon-lang') || 'en')) {
+        var target = lang === 'en' ? base : base + '-' + lang;
+        window.location.href = './' + target + '.html';
+      }
+    });
   });
 
   window.AetherI18N = { apply: apply, setLang: setLang, currentLang: currentLang };

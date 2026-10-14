@@ -36,7 +36,8 @@ CONCEPTS = [
   ['vision',                   'Vision',                      'One surface, many forms — morph, never spawn.'],
 ]
 
-def template(title, body, subtitle)
+def template(title, body, subtitle, slug: nil, lang: nil)
+  body_attrs = slug ? %( data-canon-base="#{slug.sub(/-(de|es|zh)\z/, '')}" data-canon-lang="#{lang}") : ''
   <<~HTML
     <!DOCTYPE html>
     <html lang="en">
@@ -46,7 +47,7 @@ def template(title, body, subtitle)
         <title>#{title} — ÆtherCodex</title>
         <link rel="stylesheet" href="../styles.css">
     </head>
-    <body>
+    <body#{body_attrs}>
         <div id="eyes-container"></div>
         <div class="cosmic-void">
             <nav>
@@ -97,25 +98,6 @@ def template(title, body, subtitle)
   HTML
 end
 
-LANG_LABELS = { 'en' => 'English', 'de' => 'Deutsch', 'es' => 'Español', 'zh' => '中文' }.freeze
-
-# Every canon page (essay or index) carries a language bar linking the same
-# text in the other three languages. Single source of truth, injected by the
-# builder — no hand-written cross-links to drift out of sync.
-def canon_lang_bar(slug, current_lang)
-  base = slug.sub(/-(de|es|zh)\z/, '')
-  parts = %w[en de es zh].map do |lang|
-    target = lang == 'en' ? base : "#{base}-#{lang}"
-    label  = LANG_LABELS[lang]
-    if target == slug
-      %(<span class="lang-jump current" aria-current="true">#{label}</span>)
-    else
-      %(<a class="lang-jump" href="./#{target}.html" hreflang="#{lang}">#{label}</a>)
-    end
-  end
-  %(<nav class="canon-lang-bar" aria-label="Read this text in another language">#{parts.join('<span class="lang-dot">·</span>')}</nav>)
-end
-
 def build(slug, title, subtitle, lang = nil)
   src = File.join(ROOT, "#{slug}.md")
   raise "missing #{src}" unless File.exist?(src)
@@ -126,10 +108,9 @@ def build(slug, title, subtitle, lang = nil)
   # so code blocks render as <pre><code> instead of flattened paragraphs.
   body = body.gsub(/^```([A-Za-z0-9_+\-.]*)\s*$/, '~~~\1')
   body = Kramdown::Document.new(body, auto_ids: true).to_html
-  body += "\n" + canon_lang_bar(slug, lang) if lang
 
   out = File.join(OUT, "#{slug}.html")
-  File.write(out, template(title, body, subtitle))
+  File.write(out, template(title, body, subtitle, slug: lang ? slug : nil, lang: lang))
   puts "  ✦ wrote chapters/#{slug}.html"
 end
 
