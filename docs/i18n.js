@@ -106,7 +106,7 @@
       "nav.concepts": "Concepts",
       "nav.timeline": "Timeline",
 
-      "council.more": "Beyond the ten sit the traveller <strong>Jindujun</strong> and the project manager <strong>👑 Salomon Rex</strong>.",
+      "council.more": "Beyond the ten sit the traveller <strong>Jindujun</strong> and the project manager <strong>👑 Solomon Rex</strong>.",
       "council.more-link": "Meet the full council →",
 
       "arch.h2": "One Oracle, Many Shells",
@@ -264,7 +264,7 @@
       "nav.concepts": "Konzepte",
       "nav.timeline": "Zeitstrahl",
 
-      "council.more": "Jenseits der zehn wachen der Reisende <strong>Jindujun</strong> und der Projektmanager <strong>👑 Salomon Rex</strong>.",
+      "council.more": "Jenseits der zehn wachen der Reisende <strong>Jindujun</strong> und der Projektmanager <strong>👑 Salomo Rex</strong>.",
       "council.more-link": "Den ganzen Rat kennenlernen →",
 
       "arch.h2": "Ein Orakel, viele Schalen",
@@ -422,7 +422,7 @@
       "nav.concepts": "Conceptos",
       "nav.timeline": "Línea de tiempo",
 
-      "council.more": "Más allá de los diez están el viajero <strong>Jindujun</strong> y el gestor de proyecto <strong>👑 Salomon Rex</strong>.",
+      "council.more": "Más allá de los diez están el viajero <strong>Jindujun</strong> y el gestor de proyecto <strong>👑 Salomón Rex</strong>.",
       "council.more-link": "Conoce al consejo completo →",
 
       "arch.h2": "Un oráculo, muchas conchas",

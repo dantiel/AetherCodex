@@ -1,6 +1,6 @@
 # The Council — Twelve Voices, One Aether
 
-> *Pythia is the voice. The council is the mind. Salomon Rex is the hand that plans.*
+> *Pythia is the voice. The council is the mind. Solomon Rex is the hand that plans.*
 
 ## Pythia — the voice
 
@@ -15,9 +15,9 @@ procedural skill (trigger → steps → tools → output).
 
 | Glyph | Name | Discipline |
 |-------|------|------------|
-| 🦉 | Eule der Athene | Architecture, structure, hidden dependencies |
+| 🦉 | Owl of Athena | Architecture, structure, hidden dependencies |
 | 🦊 | Inari-no-Kitsune | Clever paths, lateral thinking |
-| 🔥 | Phönix | The lesson extracted from every error |
+| 🔥 | Phoenix | The lesson extracted from every error |
 | 🐍 | Ouroboros | Recurring patterns, technical debt |
 | 🐈 | Bastet-Mafdet | Elegance, hidden complexity |
 | 🐺 | Fenrisúlfr | Radical simplification |
@@ -42,10 +42,10 @@ travels **between** them: it discovers a target context, checks reachability,
 performs the **metempsychosis** — the transmigration of the oracle's attention —
 then takes up the task on the far side over ÆtherLink.
 
-## Salomon Rex — the project manager
+## Solomon Rex — the project manager
 
-👑 Salomon Rex is the hand that **plans**. Unlike the single-turn specialist
-consultations, Salomon carries a persistent, multi-turn conversation and his own
+👑 Solomon Rex is the hand that **plans**. Unlike the single-turn specialist
+consultations, Solomon carries a persistent, multi-turn conversation and his own
 ledger (the `salomon` stream in Mnemosyne), so his planning *acts* — it does not
 just describe.
 
@@ -53,7 +53,7 @@ His toolset: decompose a goal into **milestones**, order the dependencies,
 delegate tasks to the council, and mark the critical path. A plan is a **seal** —
 an executive ledger entry above the task engine — which can be created, listed,
 and run (`seal_create`, `seal_status`, `seal_run`). Where Pythia speaks and the
-council thinks, Salomon Rex orchestrates.
+council thinks, Solomon Rex orchestrates.
 
 ## The pattern
 
