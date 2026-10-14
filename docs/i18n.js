@@ -684,6 +684,14 @@
       el.classList.toggle('active', el.getAttribute('data-lang') === lang);
       el.setAttribute('aria-pressed', el.getAttribute('data-lang') === lang ? 'true' : 'false');
     });
+
+    // Canon chapter links follow the chosen language — the translated
+    // essays live at <slug>-<lang>.html, the English original at <slug>.html.
+    document.querySelectorAll('[data-canon]').forEach(function (el) {
+      var base = el.getAttribute('data-canon');
+      var target = lang === 'en' ? base : base + '-' + lang;
+      el.setAttribute('href', 'chapters/' + target + '.html');
+    });
   }
 
   function setLang(lang) {
