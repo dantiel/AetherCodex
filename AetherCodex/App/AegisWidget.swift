@@ -362,7 +362,7 @@ struct AegisWidgetView: View {
 
     @ViewBuilder private var summaryLine: some View {
         if !model.state.summary.isEmpty {
-            Text(model.state.summary)
+            Text(renderInline(model.state.summary))
                 .font(.system(size: 10))
                 .foregroundStyle(.primary.opacity(0.9))
                 .lineLimit(1)
@@ -450,7 +450,7 @@ struct AegisDetailView: View {
             AegisSection(title: "Orientation") {
                 VStack(alignment: .leading, spacing: 8) {
                     if !model.state.summary.isEmpty {
-                        Text(model.state.summary)
+                        Text(renderInline(model.state.summary))
                             .font(.system(size: 11))
                             .foregroundStyle(.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -630,7 +630,7 @@ struct AegisDetailView: View {
                 .font(.system(size: 8, design: .monospaced))
                 .foregroundStyle(.tertiary)
                 .frame(width: 20, alignment: .trailing)
-            Text(note.content)
+            Text(renderInline(note.content))
                 .font(.system(size: 9.5))
                 .foregroundStyle(.primary.opacity(0.85))
                 .lineLimit(3)

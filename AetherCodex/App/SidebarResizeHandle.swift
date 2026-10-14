@@ -1,75 +1,55 @@
-import AppKit
 import SwiftUI
 
-/// A real mouse target: never delegates a resize drag to window-background dragging.
-final class SidebarResizeView: NSView {
-    var width: CGFloat = 220
-    var limits: ClosedRange<CGFloat> = 180...520
-    var direction: CGFloat = 1
-    var onChange: (CGFloat) -> Void = { _ in }
-    var onEnd: (CGFloat) -> Void = { _ in }
-    private var dragStart: (screenX: CGFloat, width: CGFloat)?
+/// A pane-width drag strip, expressed entirely in SwiftUI.
+///
+/// The four reasons an AppKit `NSView` was once required all have native
+/// SwiftUI counterparts, so none of them justifies a representable here:
+///
+/// | AppKit need | Native SwiftUI |
+/// |---|---|
+/// | screen-stable drag coordinates | `DragGesture(coordinateSpace: .global)` — the translation is resolved in a space that does not move when the pane resizes, killing the feedback loop that local coordinates would create |
+/// | `resetCursorRects` / `NSCursor.resizeLeftRight` | `.pointerStyle(.columnResize)` |
+/// | `mouseDownCanMoveWindow = false` | the window's own background-drag policy (`NSWindow.isMovableByWindowBackground` is already `false` for the editor window; a SwiftUI window uses `.windowBackgroundDragBehavior(.disabled)`) |
+/// | `acceptsFirstMouse` | *no* public SwiftUI counterpart — the only genuine loss. It matters solely for dragging the strip of an *inactive* window, where the cost is now a single activating click. |
+///
+/// The strip draws nothing; it exists as a hit target, so `.contentShape`
+/// claims the full frame.
+struct SidebarResizeHandle: View {
+    @Binding var width: CGFloat
+    let limits: ClosedRange<CGFloat>
+    /// `1` for a leading pane (drag right widens), `-1` for a trailing one.
+    let direction: CGFloat
+    let onEnd: (CGFloat) -> Void
 
-    override var mouseDownCanMoveWindow: Bool { false }
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    /// Width captured when the drag began; `translation` is applied against it
+    /// so a mid-drag relayout of the pane cannot compound into the result.
+    @State private var dragStart: CGFloat?
 
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        addCursorRect(bounds, cursor: .resizeLeftRight)
+    var body: some View {
+        Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .pointerStyle(.columnResize)
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                    .onChanged { value in
+                        let start = dragStart ?? width
+                        if dragStart == nil { dragStart = start }
+                        width = Self.resizedWidth(start: start,
+                                                  delta: value.translation.width,
+                                                  direction: direction,
+                                                  limits: limits)
+                    }
+                    .onEnded { _ in
+                        dragStart = nil
+                        onEnd(width)
+                    }
+            )
     }
 
     static func resizedWidth(start: CGFloat, delta: CGFloat, direction: CGFloat,
                              limits: ClosedRange<CGFloat>) -> CGFloat {
         min(max(start + delta * direction, limits.lowerBound), limits.upperBound)
-    }
-
-    private func screenX(for event: NSEvent) -> CGFloat {
-        window?.convertPoint(toScreen: event.locationInWindow).x ?? event.locationInWindow.x
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        dragStart = (screenX(for: event), width)
-        NSCursor.resizeLeftRight.set()
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let start = dragStart else { return }
-        // Screen coordinates remain stable when SwiftUI moves this handle as
-        // the column changes width. Local coordinates would create feedback.
-        width = Self.resizedWidth(start: start.width,
-                                  delta: screenX(for: event) - start.screenX,
-                                  direction: direction, limits: limits)
-        onChange(width)
-        NSCursor.resizeLeftRight.set()
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        guard dragStart != nil else { return }
-        mouseDragged(with: event)
-        dragStart = nil
-        onEnd(width)
-        window?.invalidateCursorRects(for: self)
-    }
-}
-
-struct SidebarResizeHandle: NSViewRepresentable {
-    @Binding var width: CGFloat
-    let limits: ClosedRange<CGFloat>
-    let direction: CGFloat
-    let onEnd: (CGFloat) -> Void
-
-    func makeNSView(context: Context) -> SidebarResizeView {
-        let view = SidebarResizeView()
-        updateNSView(view, context: context)
-        return view
-    }
-
-    func updateNSView(_ view: SidebarResizeView, context: Context) {
-        view.width = width
-        view.limits = limits
-        view.direction = direction
-        view.onChange = { width = $0 }
-        view.onEnd = onEnd
     }
 }
 
@@ -96,6 +76,14 @@ enum SidebarSheetGeometry {
     /// scroller insets its own content by the same measure — the last row clears
     /// the capsule while the content still travels *behind* it.
     static let tabBarBand: CGFloat = 48
+
+    /// Width of a pane-resize strip, and the ceiling on it. The strip is
+    /// SwiftUI-drawn, but the sidebar's hosted pane is a real `NSView` — and
+    /// AppKit hit-tests real subviews before SwiftUI-drawn content. The strip
+    /// therefore may never reach past the outer margin it lives in, or the
+    /// overlap would go to the pane beneath instead of to the drag. Equal to the
+    /// margin, the two meet without overlapping.
+    static var resizeStripWidth: CGFloat { trailing }
 }
 
 /// The canvas and both safe-area bars share exactly these widths. Reserve a

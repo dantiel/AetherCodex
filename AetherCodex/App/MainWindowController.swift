@@ -1,23 +1,5 @@
 import Cocoa
 import SwiftUI
-
-// MARK: - Glass Pane Compatibility
-
-/// Factory for creating glass effect panes that work on both macOS 15 and 26+.
-/// Returns a view controller containing an appropriately-sized glass effect view.
-func makeGlassPaneVC(wrapping content: NSView, cornerRadius: CGFloat = 18) -> NSViewController {
-    let vc = NSViewController()
-    
-    if #available(macOS 26.0, *) {
-        vc.view = GlassPane(wrapping: content, cornerRadius: cornerRadius)
-    } else {
-        // Use hudWindow material for translucent glass effect
-        vc.view = VisualEffectPane(wrapping: content, material: .windowBackground, cornerRadius: cornerRadius)
-    }
-    
-    return vc
-}
-
 // MARK: - Sidebar Tab
 
 struct SidebarTab {
@@ -171,18 +153,16 @@ final class SidebarContainer: NSViewController {
     private var dimmedColor: NSColor = .secondaryLabelColor
 }
 
-// MARK: - Seamless Split View
-
-/// NSSplitView subclass that draws transparent dividers — sidebar and line-number
-/// ruler form one continuous visual surface without visible seams.
-final class SeamlessSplitView: NSSplitView {
-    var seamlessDividerColor: NSColor = .clear
-    override var dividerColor: NSColor { seamlessDividerColor }
-}
-
 // MARK: - Main Window Controller (Liquid Glass)
 
-final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
+final class MainWindowController: NSWindowController, NSWindowDelegate, ObservableObject {
+
+    /// Window title mirrored into the SwiftUI scene, which owns the window.
+    @Published var windowTitle: String = "Untitled – ÆtherCodex"
+
+    /// The SwiftUI root. SwiftUI's `Window` scene renders this directly; SwiftUI
+    /// owns the window's creation, size, and lifecycle.
+    private(set) var rootView = AnyView(EmptyView())
 
     var fileBrowser: FileBrowserViewController!
     private(set) var tabsModel: TabsModel!
@@ -192,9 +172,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     var editorViewController: EditorViewController? { tabsModel?.activeEditor }
     var documentModel: EditorDocumentModel? { tabsModel?.activeDocument }
     private var pythiaModel = PythiaChatModel()
-    private var splitVC: NSSplitViewController!
-    private var editorItem: NSSplitViewItem!
-    private var editorHeaderView: EditorHeaderView!
     private var sidebarContainer: SidebarContainer!
     private var favouritesVC: FavouritesHostViewController!
     private var gitVC: NSHostingController<GitSidebarView>?
@@ -202,50 +179,24 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     private let gitModel = GitSidebarModel()
     private let searchModel = SidebarSearchModel()
     private var overlayPanel: OverlayFileBrowserPanel?
-    private var sidebarFloatingPanel: FloatingOverlayPanel?
-    private var pythiaFloatingPanel: FloatingOverlayPanel?
     private var themeObserver: Any?
-    private var statusBar: NSVisualEffectView!
-    private var statusLabel: NSTextField!
     private var chromeState: EditorChromeState!
     
     private var lastSidebarExpanded = false
     private var isAnimatingSidebar = false
     private var isAnimatingPythia = false
 
+    /// The shell no longer creates its window — SwiftUI's `Window` scene does.
+    /// It adopts the hosting `NSWindow` once the content has mounted, purely for
+    /// window chrome (traffic-light geometry, corner rounding, overlay parenting),
+    /// for which macOS exposes no public SwiftUI API.
     convenience init() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 100, y: 100, width: 1400, height: 900),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Untitled – ÆtherCodex"
-        window.titleVisibility = .hidden
-        window.minSize = NSSize(width: 800, height: 600)
-        window.isOpaque = false
-        window.backgroundColor = .clear
-        // Keep the full-size content canvas visible behind floating toolbar
-        // items. A solid titlebar creates an opaque strip, not Liquid Glass.
-        window.titlebarAppearsTransparent = true
-        // The custom sidebar resize strips must receive their drags. The real
-        // titlebar remains draggable through AppKit without turning every clear
-        // background region into a window-drag surface.
-        window.isMovableByWindowBackground = false
-        window.hasShadow = true
-        window.isReleasedWhenClosed = false
-
-        self.init(window: window)
-        window.delegate = self
+        self.init(window: nil)
         setupLiquidGlass()
     }
 
     // MARK: - Liquid Glass Architecture
     private func setupLiquidGlass() {
-        guard let window = window else {
-            print("[MainWindowController] FATAL: window is nil — setup aborted")
-            return
-        }
 
         // ── ScopeSettings: load ~/.aether-properties on launch ──
         ScopeSettings.shared.loadGlobal()
@@ -329,18 +280,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         // provide native scroll-edge blur on all three edges — something AppKit's
         // NSSplitViewItemAccessoryViewController cannot do (top/bottom only).
 
-        // ── Status bar ──
-        statusBar = NSVisualEffectView(frame: .zero)
-        statusBar.material = .titlebar
-        statusBar.blendingMode = .withinWindow
-        statusBar.state = .active
-        statusBar.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel = NSTextField(labelWithString: "")
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        statusLabel.textColor = .secondaryLabelColor
-        statusBar.addSubview(statusLabel)
-
         // ── Assemble SwiftUI host as window content ──
         chromeState.sidebarWidth = CGFloat(SessionState.shared.sidebarWidth ?? 180)
         chromeState.pythiaWidth = CGFloat(SessionState.shared.pythiaWidth ?? 280)
@@ -367,13 +306,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             }
         }
 
-        // Fold away the AppKit overlays (status bar, collapsed tab bar) when the
-        // window flips into oracle-only — Pythia stands alone on the reverse face.
-        chromeState.onOracleOnlyChange = { [weak self] oracleOnly in
-            guard let self else { return }
-            self.statusBar.isHidden = oracleOnly
-        }
-
         // Breadcrumb navigation: a folder peek drives the sidebar file browser;
         // a file selection opens it in a tab.
         chromeState.navigateFolder = { [weak self] url in
@@ -389,6 +321,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         // gone: the AppKit view is never laid out in the SwiftUI hierarchy, so each
         // `EditorTab` runs `newDocument()` explicitly in its `seedIfEmpty()`.
         tabsModel.onActiveTitleChange = { [weak self] title in
+            self?.windowTitle = title
             self?.window?.title = title
             self?.chromeState?.title = title
         }
@@ -406,42 +339,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             chrome: chromeState,
             tabs: tabsModel
         )
-        // Host the SwiftUI content in a plain `NSHostingView` (not
-        // `NSHostingController`) with autoresizing enabled, so the window frame
-        // stays authoritative. `NSHostingController` sizes the window to the
-        // SwiftUI content's ideal size, collapsing it to the document height
-        // (or just the chrome) on every launch.
-        let hostingView = NSHostingView(rootView: containerView)
-        // Keep the window frame authoritative: drop `.intrinsicContentSize` and
-        // `.preferredContentSize` (which size the window to the SwiftUI ideal
-        // size — the document height), keeping only the min/max bounds.
-        hostingView.sizingOptions = [.minSize, .maxSize]
-        hostingView.translatesAutoresizingMaskIntoConstraints = true
-        hostingView.autoresizingMask = [.width, .height]
-        hostingView.frame = NSRect(x: 0, y: 0, width: 1400, height: 900)
-        let hostController = NSViewController()
-        hostController.view = hostingView
-        window.contentViewController = hostController
-
-        let liveView = hostingView
-
-        // Status bar floats above the editor (AppKit overlay). The editor tab
-        // strip is no longer an AppKit overlay — it lives in the SwiftUI top
-        // `safeAreaBar` as a hosted NSView.
-        liveView.addSubview(statusBar)
-
-        NSLayoutConstraint.activate([
-            statusBar.leadingAnchor.constraint(equalTo: liveView.leadingAnchor),
-            statusBar.trailingAnchor.constraint(equalTo: liveView.trailingAnchor),
-            statusBar.bottomAnchor.constraint(equalTo: liveView.bottomAnchor),
-            statusBar.heightAnchor.constraint(equalToConstant: 24),
-
-            statusLabel.leadingAnchor.constraint(equalTo: statusBar.leadingAnchor, constant: 12),
-            statusLabel.centerYAnchor.constraint(equalTo: statusBar.centerYAnchor),
-        ])
-
-        // Ensure the text view gets focus when window becomes key
-        window.initialFirstResponder = tabsModel.activeEditor?.textView
+        // SwiftUI's `Window` scene renders this view directly: no NSHostingView,
+        // no content view controller, no frame re-assertion battle.
+        rootView = AnyView(containerView)
 
         themeObserver = NotificationCenter.default.addObserver(
             forName: ThemeSettings.didChangeNotification, object: nil, queue: .main
@@ -451,13 +351,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         }
 
         NotificationCenter.default.addObserver(
-            forName: NSWindow.didResizeNotification, object: window, queue: .main
+            forName: NSWindow.didResizeNotification, object: nil, queue: .main
         ) { [weak self] _ in
             self?.saveSessionState()
             self?.positionTrafficLights()
         }
         NotificationCenter.default.addObserver(
-            forName: NSWindow.didMoveNotification, object: window, queue: .main
+            forName: NSWindow.didMoveNotification, object: nil, queue: .main
         ) { [weak self] _ in
             self?.saveSessionState()
         }
@@ -481,9 +381,70 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
             fileBrowser.openFolder(URL(fileURLWithPath: lastFolder))
         }
 
+        // Window chrome (tints, rounding, traffic lights) waits for `adoptHostWindow()`.
+    }
+
+    // MARK: - Host Window Adoption
+
+    /// Adopt the `NSWindow` that SwiftUI's `Window` scene created. Called once the
+    /// root view has mounted, when the sidebar's AppKit view is inside the live
+    /// window hierarchy. Retries briefly — `onAppear` can fire a frame early.
+    func adoptHostWindow(attempt: Int = 0) {
+        guard window == nil else { return }
+        guard let host = sidebarContainer?.view.window
+                ?? tabsModel?.activeEditor?.textView.window else {
+            if attempt < 40 {
+                DispatchQueue.main.async { [weak self] in
+                    self?.adoptHostWindow(attempt: attempt + 1)
+                }
+            }
+            return
+        }
+        window = host
+        host.titleVisibility = .hidden
+        host.titlebarAppearsTransparent = true
+        host.isOpaque = false
+        host.backgroundColor = .clear
+        host.isMovableByWindowBackground = false
+        host.delegate = self
+
         applyGlassTints()
         applyWindowRounding()
+        if let textView = tabsModel?.activeEditor?.textView {
+            host.makeFirstResponder(textView)
+        }
 
+        restoreSessionFromDisk()
+        for arg in CommandLine.arguments.dropFirst()
+        where FileManager.default.fileExists(atPath: arg) {
+            openFileInTab(URL(fileURLWithPath: arg))
+        }
+    }
+
+    /// Restore the previous session: open tabs, project folder, pane widths,
+    /// overlay mode, and the active theme. (SwiftUI restores the window frame.)
+    func restoreSessionFromDisk() {
+        let s = SessionState.shared
+        let openPaths = s.openTabs.isEmpty ? (s.lastOpenFile.map { [$0] } ?? []) : s.openTabs
+        for path in openPaths where FileManager.default.fileExists(atPath: path) {
+            openFileInTab(URL(fileURLWithPath: path))
+        }
+        if let path = s.lastProjectFolder {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+                fileBrowser?.openFolder(URL(fileURLWithPath: path))
+            }
+        }
+        if let w = s.sidebarWidth { restoreSidebarWidth(CGFloat(w)) }
+        if let w = s.pythiaWidth { restorePythiaWidth(CGFloat(w)) }
+        if s.fileBrowserOverlay {
+            ThemeSettings.shared.fileBrowserOverlay = true
+            syncOverlayMode()
+        }
+        if let name = s.activeThemeName,
+           let index = ThemeRegistry.shared.themes.firstIndex(where: { $0.name == name }) {
+            ThemeRegistry.shared.activate(index: index)
+        }
     }
 
     // MARK: - Window rounding + nested traffic lights
@@ -544,45 +505,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
                 button.setFrameOrigin(origin)
             }
         }
-    }
-
-    // MARK: - Floating Overlay Panels
-
-    /// Creates the sidebar and Pythia floating overlay panels as siblings
-    /// of splitVC.splitView inside the given content view.
-    private func setupFloatingOverlayPanels(in contentView: NSView) {
-        // ── Sidebar floating panel (leading edge) ──
-        let sidebarPanel = FloatingOverlayPanel(
-            contentView: sidebarContainer.view
-        )
-        sidebarPanel.onWidthChanged = { [weak self] width in
-            self?.editorViewController?.sidebarOverlayWidth = width
-            self?.saveSessionState()
-        }
-        sidebarFloatingPanel = sidebarPanel
-
-        // ── Pythia floating panel (trailing edge) ──
-        let pythiaPanel = FloatingOverlayPanel(
-            contentView: NSHostingView(rootView: PythiaPanel(model: pythiaModel))
-        )
-        pythiaPanel.onWidthChanged = { [weak self] width in
-            self?.editorViewController?.pythiaOverlayWidth = width
-            self?.saveSessionState()
-        }
-        pythiaFloatingPanel = pythiaPanel
-
-        // Preload panels into contentView (hidden by default)
-        sidebarPanel.prepare(in: contentView, atEdge: .leading)
-        pythiaPanel.prepare(in: contentView, atEdge: .trailing)
-    }
-
-    private func sidebarWidth() -> CGFloat {
-        chromeState?.sidebarWidth ?? CGFloat(SessionState.shared.sidebarWidth ?? 180)
-    }
-
-    // Helper to get the glass view from a split view item's view controller
-    private func glassView(from item: NSSplitViewItem?) -> NSView? {
-        return item?.viewController.view
     }
 
     // MARK: - Overlay File Browser
@@ -658,9 +580,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         sidebarContainer?.applySidebarTint(fill: .clear, tint: .clear)
         // SwiftUI owns the inspector's material; no AppKit backing remains.
 
-        // Split view = clear — Liquid Glass shows through in titlebar zone & dividers.
-        (splitVC?.splitView as? SeamlessSplitView)?.seamlessDividerColor = .clear
-        
         // Tab icon tints
         sidebarContainer?.applyThemeColors(
             tintColor: tabTint,
@@ -672,30 +591,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         fileBrowser?.setTransparentBackground()
 
     }
-
-
-    /// Human-readable name for the material at a given blur strength.
-    func materialNameForBlurStrength(_ strength: CGFloat) -> String {
-        return glassMaterialName(for: strength)
-    }
-
-    /// Map a string material name to NSVisualEffectView.Material.
-    func materialForName(_ name: String) -> NSVisualEffectView.Material {
-        switch name.lowercased() {
-        case "fullscreenui", "fullscreen":  return .fullScreenUI
-        case "tooltip":                     return .toolTip
-        case "menu":                        return .menu
-        case "sidebar":                     return .sidebar
-        case "sheet":                       return .sheet
-        case "windowbackground", "window":   return .windowBackground
-        case "underwindowbackground", "underwindow", "under": return .underWindowBackground
-        case "hudwindow", "hud":            return .hudWindow
-        case "header":                      return .headerView
-        case "contentbackground", "content": return .contentBackground
-        default:                            return .sidebar
-        }
-    }
-
 
     deinit {
         if let o = themeObserver { NotificationCenter.default.removeObserver(o) }
@@ -754,7 +649,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     
     func windowWillClose(_ notification: Notification) {
         saveSessionState()
-        (NSApp.delegate as? AppDelegate)?.windowControllerWillClose(self)
     }
 
     /// Restore text view focus when the window becomes key — prevents
@@ -877,9 +771,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
         guard let tabs = tabsModel else { return }
         let tab = tabs.tabForOpening(url)
         tab.controller.openFile(url)
-        if let line { tab.controller.revealLine(line) }
-        saveSessionState()
-        syncFileBrowserToActiveFile()
     }
 
     /// Follow the active document *inside* the current sidebar root. Opening a file
@@ -996,60 +887,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, NSToolba
     }
 }
 
-// MARK: - NSToolbarDelegate
-
-extension NSToolbarItem.Identifier {
-    static let sidebarToggle = NSToolbarItem.Identifier("SidebarToggle")
-    static let documentTitle = NSToolbarItem.Identifier("DocumentTitle")
-}
-
 extension MainWindowController {
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebarToggle, .flexibleSpace, .documentTitle, .flexibleSpace]
-    }
-    
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.sidebarToggle, .flexibleSpace, .space, .documentTitle]
-    }
-    
-    func toolbar(_ toolbar: NSToolbar,
-                 itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
-                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        switch itemIdentifier {
-        case .sidebarToggle:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.image = NSImage(systemSymbolName: "sidebar.left",
-                                 accessibilityDescription: "Toggle Sidebar")
-            item.label = "Sidebar"
-            item.paletteLabel = "Sidebar"
-            item.toolTip = "Toggle Sidebar"
-            item.target = self
-            item.action = #selector(toggleFileBrowserAnimated(_:))
-            item.isBordered = true
-            item.visibilityPriority = .high
-            return item
-        case .documentTitle:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.label = "Document Title"
-            item.paletteLabel = "Document Title"
-            let titleField = NSTextField(labelWithString: window?.title ?? "Untitled")
-            titleField.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-            titleField.textColor = .labelColor
-            titleField.lineBreakMode = .byTruncatingTail
-            titleField.alignment = .center
-            titleField.isEditable = false
-            titleField.isSelectable = false
-            titleField.drawsBackground = false
-            titleField.isBezeled = false
-            titleField.tag = 42  // marker for title updates
-            item.view = titleField
-            item.visibilityPriority = .high
-            return item
-        default:
-            return nil
-        }
-    }
-    
     @objc func toggleWordWrap(_ sender: Any?) {
         // Per-window override — doesn't touch global/user defaults state.
         // nil → false, false → true, true → nil
@@ -1191,6 +1029,7 @@ extension MainWindowController {
         return true
     }
 }
+
 // MARK: - Overlay File Browser Panel
 
 /// Floating glass overlay panel — sits atop the editor as a subview of the main window
@@ -1354,198 +1193,6 @@ private final class OverlayFileBrowserPanel: NSObject {
     }
 }
 
-// MARK: - Floating Overlay Panel
-
-/// Floating glass overlay panel for sidebar or Pythia content in the
-/// single-pane architecture. Sits as a sibling of splitVC.splitView
-/// inside contentView — not a split-view item.
-///
-/// The NSVisualEffectView (.fullScreenUI, .withinWindow) provides native
-/// glass blur on content scrolling behind the panel. A thin drag-resize
-/// handle at the inner edge allows width adjustment.
-private final class FloatingOverlayPanel: NSObject {
-
-    let glassView: NSVisualEffectView
-    let contentView: NSView
-    let resizeHandle: ResizeHandleView
-
-    private(set) var isVisible = false
-    var width: CGFloat = 260 {
-        didSet { widthConstraint?.constant = width }
-    }
-    var onWidthChanged: ((CGFloat) -> Void)?
-
-    /// The host view this panel was prepared in.
-    private(set) weak var parentView: NSView?
-
-    private var widthConstraint: NSLayoutConstraint?
-    private var leadingConstraint: NSLayoutConstraint?
-    private var trailingConstraint: NSLayoutConstraint?
-
-    private let minWidth: CGFloat = 160
-    private let maxWidth: CGFloat = 500
-
-    // MARK: - Init
-
-    init(contentView: NSView) {
-        self.contentView = contentView
-
-        glassView = NSVisualEffectView()
-        glassView.material = .fullScreenUI
-        glassView.blendingMode = .withinWindow
-        glassView.state = .active
-        glassView.wantsLayer = true
-        glassView.translatesAutoresizingMaskIntoConstraints = false
-
-        resizeHandle = ResizeHandleView()
-        resizeHandle.translatesAutoresizingMaskIntoConstraints = false
-
-        super.init()
-
-        contentView.translatesAutoresizingMaskIntoConstraints = false
-        glassView.addSubview(contentView)
-        glassView.addSubview(resizeHandle)
-
-        // Content fills the glass, leaving room for the resize handle at inner edge
-        NSLayoutConstraint.activate([
-            contentView.topAnchor.constraint(equalTo: glassView.topAnchor),
-            contentView.bottomAnchor.constraint(equalTo: glassView.bottomAnchor),
-        ])
-
-        // Resize handle: 5pt strip at the inner boundary
-        NSLayoutConstraint.activate([
-            resizeHandle.topAnchor.constraint(equalTo: glassView.topAnchor),
-            resizeHandle.bottomAnchor.constraint(equalTo: glassView.bottomAnchor),
-            resizeHandle.widthAnchor.constraint(equalToConstant: 5),
-        ])
-
-        resizeHandle.onDrag = { [weak self] delta in
-            self?.applyResizeDelta(delta)
-        }
-    }
-
-    // MARK: - Prepare (add to host, hidden)
-
-    /// Adds the glass view to the host and sets up edge-appropriate constraints.
-    /// The panel starts hidden (alpha=0, isVisible=false).
-    func prepare(in host: NSView, atEdge edge: NSLayoutConstraint.Attribute) {
-        parentView = host
-        glassView.removeFromSuperview()
-        host.addSubview(glassView)
-
-        widthConstraint = glassView.widthAnchor.constraint(equalToConstant: width)
-        widthConstraint?.priority = .dragThatCannotResizeWindow
-        widthConstraint?.isActive = true
-
-        let topC = glassView.topAnchor.constraint(equalTo: host.topAnchor)
-        let bottomC = glassView.bottomAnchor.constraint(equalTo: host.bottomAnchor)
-
-        switch edge {
-        case .leading:
-            leadingConstraint = glassView.leadingAnchor.constraint(equalTo: host.leadingAnchor)
-            leadingConstraint?.isActive = true
-
-            // Content hugs the left, resize handle at right (inner) edge
-            contentView.leadingAnchor.constraint(equalTo: glassView.leadingAnchor).isActive = true
-            contentView.trailingAnchor.constraint(equalTo: resizeHandle.leadingAnchor).isActive = true
-            resizeHandle.trailingAnchor.constraint(equalTo: glassView.trailingAnchor).isActive = true
-
-        case .trailing:
-            trailingConstraint = glassView.trailingAnchor.constraint(equalTo: host.trailingAnchor)
-            trailingConstraint?.isActive = true
-
-            // Resize handle at left (inner) edge, content fills the rest
-            resizeHandle.leadingAnchor.constraint(equalTo: glassView.leadingAnchor).isActive = true
-            contentView.leadingAnchor.constraint(equalTo: resizeHandle.trailingAnchor).isActive = true
-            contentView.trailingAnchor.constraint(equalTo: glassView.trailingAnchor).isActive = true
-
-        default:
-            break
-        }
-
-        NSLayoutConstraint.activate([topC, bottomC])
-        glassView.alphaValue = 0
-        glassView.isHidden = true
-    }
-
-    // MARK: - Resize
-
-    private func applyResizeDelta(_ delta: CGFloat) {
-        let newWidth = min(max(width + delta, minWidth), maxWidth)
-        guard newWidth != width else { return }
-        width = newWidth
-        onWidthChanged?(newWidth)
-    }
-
-    // MARK: - Show / Dismiss
-
-    func show(width: CGFloat) {
-        guard let host = parentView else {
-            return
-        }
-        self.width = min(max(width, minWidth), maxWidth)
-        glassView.isHidden = false
-
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.2
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            self.glassView.animator().alphaValue = 1.0
-            host.layoutSubtreeIfNeeded()
-        }, completionHandler: {
-            self.isVisible = true
-            self.onWidthChanged?(width)
-        })
-    }
-
-    func dismiss() {
-        isVisible = false
-        onWidthChanged?(0)
-
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.18
-            self.glassView.animator().alphaValue = 0
-        }, completionHandler: {
-            self.glassView.isHidden = true
-        })
-    }
-}
-
-// MARK: - Resize Handle View
-
-/// Thin vertical strip that shows a resize cursor and tracks horizontal
-/// drag to resize the parent floating panel.
-private final class ResizeHandleView: NSView {
-
-    var onDrag: ((CGFloat) -> Void)?
-
-    private var dragStart: CGFloat = 0
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .resizeLeftRight)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        dragStart = event.locationInWindow.x
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        let current = event.locationInWindow.x
-        let delta = current - dragStart
-        dragStart = current
-        onDrag?(delta)
-    }
-}
-
 // MARK: - Shared Glass Utilities
 
 /// Map blur strength to material.
@@ -1574,17 +1221,5 @@ func glassMaterialName(for strength: CGFloat) -> String {
     case ..<0.6:  return "Regular"
     case ..<0.8:  return "Thick"
     default:      return "Ultra Thick"
-    }
-}
-
-
-// MARK: - NSView → NSViewController adapter
-
-/// Thin wrapper so a GlassPane's view can be used as an NSSplitViewItem.viewController.
-private extension NSView {
-    var viewController: NSViewController {
-        let vc = NSViewController()
-        vc.view = self
-        return vc
     }
 }

@@ -201,6 +201,10 @@ class EditorViewController: NSViewController {
     private(set) var textStorage: NSTextStorage!
     private var settingsObserver: NSObjectProtocol?
     private var themeObserver:    NSObjectProtocol?
+    /// Token for the scroll-view bounds observer. Block-based observers are *not*
+    /// auto-unregistered, so the token must be held to be removed in `deinit` —
+    /// otherwise every closed tab leaves a live block inside NotificationCenter.
+    private var scrollBoundsObserver: NSObjectProtocol?
 
     // MARK: - Per-Window Word Wrap Override
 
@@ -265,9 +269,8 @@ class EditorViewController: NSViewController {
 
     // MARK: - Incremental Search (Ctrl+S)
 
-    /// SwiftUI-owned quicksearch. The AppKit `IncrementalSearchBar` was orphaned
-    /// when the editor moved into the SwiftUI TextKit 2 surface; this model is the
-    /// new single source of truth and is observed by `TextKit2ScrollSurface`.
+    /// SwiftUI-owned quicksearch — the single source of truth, observed by
+    /// `TextKit2ScrollSurface`. The editor has no AppKit search bar.
     let quickSearch = QuickSearchModel()
     /// TextMate-style find & replace state (⌘F / ⌘⌥F / ⌘G / ⌘E).
     let findReplace = FindReplaceModel()
@@ -362,7 +365,7 @@ class EditorViewController: NSViewController {
         )
 
         // Direct callback — fires on every ThemeRegistry.current change
-        ThemeRegistry.shared.onChange = { [weak self] in
+        ThemeRegistry.shared.observeChanges(target: self) { [weak self] in
             self?.applyThemeChrome()
             self?.rehighlight()
         }
@@ -761,6 +764,7 @@ class EditorViewController: NSViewController {
         backgroundParseWork?.cancel()
         if let o = settingsObserver { NotificationCenter.default.removeObserver(o) }
         if let o = themeObserver    { NotificationCenter.default.removeObserver(o) }
+        if let o = scrollBoundsObserver { NotificationCenter.default.removeObserver(o) }
         foldDetectionDebounce?.invalidate()
         scrollHighlightTimer?.invalidate()
         // Titlebar auto-hide disabled — see bounds observer.
@@ -921,7 +925,7 @@ class EditorViewController: NSViewController {
         textView.textContainerInset = NSSize(width: EditorChromeMetrics.codeLeadingPadding, height: 52)
 
         // Re-highlight newly visible text on scroll.
-        NotificationCenter.default.addObserver(
+        scrollBoundsObserver = NotificationCenter.default.addObserver(
             forName: NSView.boundsDidChangeNotification,
             object: scrollView.contentView, queue: .main
         ) { [weak self] _ in

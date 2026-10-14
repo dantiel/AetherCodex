@@ -12,6 +12,7 @@ import SwiftUI
 struct MarkdownTableView: View {
     let header: [String]
     let rows: [[String]]
+    @Environment(\.markdownBodyScale) private var scale
 
     private var columns: Int { max(header.count, rows.map(\.count).max() ?? 0) }
 
@@ -49,7 +50,8 @@ struct MarkdownTableView: View {
 
     private func cell(_ text: String, header: Bool, last: Bool) -> some View {
         Text(renderInline(text))
-            .font(.system(size: ThemeSettings.shared.proportionalFontSize, weight: header ? .semibold : .regular))
+            .font(.system(size: markdownScaled(CGFloat(ThemeSettings.shared.proportionalFontSize), scale),
+                          weight: header ? .semibold : .regular))
             .foregroundStyle(Color(nsColor: header ? MarkdownTableStyle.headerForeground : MarkdownTableStyle.bodyForeground))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, MarkdownTableStyle.cellPaddingH)

@@ -3156,10 +3156,8 @@ private struct AegisNoteCard: View {
                 }
             }
 
-            Text(note.content)
-                .font(.system(size: 10.5))
-                .lineSpacing(2)
-                .foregroundStyle(.primary)
+            MarkdownBody(text: note.content)
+                .environment(\.markdownBodyScale, noteMarkdownScale)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
 
@@ -3734,7 +3732,7 @@ private struct SystemInstrumentChipView: View {
                 }
             }
             if let note {
-                Text(note)
+                Text(renderInline(note))
                     .font(.system(size: 10))
                     .foregroundStyle(.primary)
                     .lineLimit(3)

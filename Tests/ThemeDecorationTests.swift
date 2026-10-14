@@ -29,9 +29,15 @@ final class ThemeDecorationTests: XCTestCase {
         ]))
         let model = EditorDocumentModel()
         model.attributedString = NSAttributedString(string: "Heading\ntext", attributes: [.font: NSFont.systemFont(ofSize: 48)])
-        let gutter = EditorContainerView.makeGutter(document: model, theme: theme,
-                                                  baseFont: NSFont.monospacedSystemFont(ofSize: 16, weight: .regular))
-        XCTAssertEqual(gutter.font.pointSize, 13.6, accuracy: 0.01)
+        let baseFont = NSFont.monospacedSystemFont(ofSize: 16, weight: .regular)
+        let gutter = EditorContainerView.makeGutter(document: model, theme: theme, baseFont: baseFont)
+        // Shape, not value: the gutter face derives from the *base* font — never
+        // from the document's first-line attributes (a 48pt heading) — and stays
+        // slightly smaller than the code face it numbers.
+        XCTAssertEqual(gutter.font.pointSize, baseFont.pointSize * EditorGutterStyle.rulerFontScale,
+                       accuracy: 0.01)
+        XCTAssertLessThan(gutter.font.pointSize, baseFont.pointSize)
+        XCTAssertGreaterThan(gutter.font.pointSize, baseFont.pointSize * 0.7)
         XCTAssertEqual(theme.sidebarAccent.usingColorSpace(.deviceRGB)!.blueComponent, 0x77 / 255.0, accuracy: 0.001)
     }
 

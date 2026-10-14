@@ -417,6 +417,10 @@ class RubyBridge: ObservableObject {
         readerTask = nil
         errorReaderTask?.cancel()
         errorReaderTask = nil
+        // A live `readabilityHandler` is retained by its FileHandle and would keep
+        // firing into a stopped bridge; release the handlers before the pipes.
+        outputPipe?.readabilityHandler = nil
+        errorPipe?.readabilityHandler = nil
         inputPipe = nil
         outputPipe = nil
         errorPipe = nil

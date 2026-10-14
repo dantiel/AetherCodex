@@ -413,7 +413,7 @@ struct FileOverviewView: View {
             ForEach(notes) { note in
                 VStack(alignment: .leading, spacing: 2) {
                     if !note.excerpt.isEmpty {
-                        Text(note.excerpt)
+                        Text(renderInline(note.excerpt))
                             .font(.system(size: 9.5))
                             .foregroundStyle(.primary.opacity(0.85))
                             .lineLimit(3)

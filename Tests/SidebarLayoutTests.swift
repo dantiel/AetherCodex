@@ -1,8 +1,15 @@
-import AppKit
 import SwiftUI
 import XCTest
 @testable import AetherCodex
 
+/// Panel geometry, pinned where it is structural.
+///
+/// Two invariants that used to be exercised through AppKit — that a pane drag
+/// never moves the window, and that the resize strip outranks the pane beneath
+/// it — no longer have an `NSView` to test against. They moved, so the tests
+/// move: the window is made non-background-draggable once, at its single
+/// construction site; the strip's priority is now guaranteed by *geometry* and
+/// pinned by `testResizeStripNeverReachesBeneathTheHostedSidebar`.
 @MainActor
 final class SidebarLayoutTests: XCTestCase {
     func testRestoredPanelWidthsLeaveRoomForEditor() {
@@ -31,69 +38,45 @@ final class SidebarLayoutTests: XCTestCase {
     }
 
     func testBothResizeDirectionsAndLimits() {
-        XCTAssertEqual(SidebarResizeView.resizedWidth(start: 220, delta: 30,
+        XCTAssertEqual(SidebarResizeHandle.resizedWidth(start: 220, delta: 30,
                          direction: 1, limits: 180...520), 250)
-        XCTAssertEqual(SidebarResizeView.resizedWidth(start: 280, delta: -30,
+        XCTAssertEqual(SidebarResizeHandle.resizedWidth(start: 280, delta: -30,
                          direction: -1, limits: 220...640), 310)
-        XCTAssertEqual(SidebarResizeView.resizedWidth(start: 220, delta: -500,
+        XCTAssertEqual(SidebarResizeHandle.resizedWidth(start: 220, delta: -500,
                          direction: 1, limits: 180...520), 180)
-        XCTAssertEqual(SidebarResizeView.resizedWidth(start: 280, delta: -1000,
+        XCTAssertEqual(SidebarResizeHandle.resizedWidth(start: 280, delta: -1000,
                          direction: -1, limits: 220...640), 640)
     }
 
-    func testNativeMouseDragResizesWithoutMovingWindow() throws {
-        _ = NSApplication.shared
-        let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 800, height: 600),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        // Deliberately enable the old problematic setting: the handle must
-        // still claim its events rather than moving the window.
-        window.isMovableByWindowBackground = true
-        let handle = SidebarResizeView(frame: CGRect(x: 220, y: 0, width: 12, height: 600))
-        window.contentView?.addSubview(handle)
-        defer { window.close() }
-
-        XCTAssertFalse(handle.mouseDownCanMoveWindow)
-        XCTAssertTrue(handle.acceptsFirstMouse(for: nil))
-        let windowFrame = window.frame
-        var changes: [CGFloat] = []
-        var committed: CGFloat?
-        handle.onChange = { changes.append($0) }
-        handle.onEnd = { committed = $0 }
-        func event(_ type: NSEvent.EventType, x: CGFloat) throws -> NSEvent {
-            try XCTUnwrap(NSEvent.mouseEvent(with: type, location: CGPoint(x: x, y: 100),
-                modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
-                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+    /// The load-bearing geometry of the drag strip. The sidebar's hosted pane is
+    /// a real `NSView` inset by `SidebarSheetGeometry` on both sides, and AppKit
+    /// hit-tests real subviews before SwiftUI-drawn content. The strip is drawn
+    /// by SwiftUI — so if it reached beneath the pane it would lose exactly that
+    /// overlap to the file browser, and the drag would start only in the sliver
+    /// left over. Equal widths make the two meet, never overlap.
+    func testResizeStripNeverReachesBeneathTheHostedSidebar() {
+        for sheetWidth in [180.0, 220, 350, 520] {
+            let container = SidebarSheetGeometry.containerWidth(for: sheetWidth)
+            let sheet = SidebarSheetGeometry.frame(in: CGSize(width: container, height: 600))
+            let stripMinX = container - SidebarSheetGeometry.resizeStripWidth
+            XCTAssertGreaterThanOrEqual(
+                stripMinX, sheet.maxX,
+                "strip reaches \(sheet.maxX - stripMinX)pt beneath the sidebar's hosted content"
+            )
         }
-        handle.mouseDown(with: try event(.leftMouseDown, x: 224))
-        handle.mouseDragged(with: try event(.leftMouseDragged, x: 254))
-        // Simulate SwiftUI relocating the resize strip after updating the width.
-        handle.setFrameOrigin(CGPoint(x: 250, y: 0))
-        handle.mouseDragged(with: try event(.leftMouseDragged, x: 264))
-        handle.mouseUp(with: try event(.leftMouseUp, x: 264))
-        XCTAssertEqual(changes, [250, 260, 260])
-        XCTAssertEqual(committed, 260)
-        XCTAssertEqual(window.frame, windowFrame)
     }
 
-    func testResizeStripReceivesHitsAboveHostedAppKitContent() throws {
-        _ = NSApplication.shared
-        let host = NSHostingView(rootView:
-            ZStack(alignment: .trailing) {
-                AppKitViewHost { NSView() }
-                SidebarResizeHandle(width: .constant(220), limits: 180...520,
-                                    direction: 1, onEnd: { _ in })
-                    .frame(width: 12)
-            }
-        )
-        let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 220, height: 300),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.contentView = host
-        defer { window.close() }
-        host.frame = CGRect(x: 0, y: 0, width: 220, height: 300)
-        host.layoutSubtreeIfNeeded()
-        let hit = host.hitTest(CGPoint(x: 214, y: 150))
-        XCTAssertTrue(hit is SidebarResizeView, "Resize strip must own its mouse events, got \(String(describing: hit))")
+    /// The drag is resolved against the width captured at gesture start, never
+    /// against the pane's current width. That is what keeps a mid-drag relayout —
+    /// SwiftUI re-placing the strip as the pane widens — from compounding into
+    /// the result: the same translation always yields the same width.
+    func testDragTranslationIsAbsoluteNotIncremental() {
+        let start: CGFloat = 220
+        let width = SidebarResizeHandle.resizedWidth(start: start, delta: 264 - 224,
+                                                     direction: 1, limits: 180...520)
+        XCTAssertEqual(width, 260)
+        XCTAssertEqual(SidebarResizeHandle.resizedWidth(start: start, delta: 264 - 224,
+                                                        direction: 1, limits: 180...520),
+                       width)
     }
 }

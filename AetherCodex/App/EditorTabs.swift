@@ -36,9 +36,12 @@ final class EditorTab: Identifiable, ObservableObject {
         }
         controller.onDocumentMetricsChange = { [weak self] lineCount, maxLineWidth in
             guard let self else { return }
-            self.document.lineCount = lineCount
-            self.document.maxLineWidth = maxLineWidth
-            self.document.revision += 1
+            // Runs on *every* keystroke. An @Published write emits objectWillChange
+            // whether or not the value changed, so assigning unconditionally
+            // re-evaluated the whole editor surface (gutter, overlays, scroll
+            // extent) per character. Publish only a real shape change.
+            if self.document.lineCount != lineCount { self.document.lineCount = lineCount }
+            if self.document.maxLineWidth != maxLineWidth { self.document.maxLineWidth = maxLineWidth }
         }
         controller.onTitleChange = { [weak self] title in
             self?.title = title

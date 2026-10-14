@@ -10,6 +10,34 @@ extension EnvironmentValues {
     }
 }
 
+private struct MarkdownBodyScaleKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 1
+}
+extension EnvironmentValues {
+    /// Uniform font scale for everything `MarkdownBody` emits. Oracle prose
+    /// breathes at 1.0; the compact memory cards read at `noteMarkdownScale`,
+    /// so a recalled note is rendered by the *same* renderer at the size of the
+    /// card that hosts it instead of by a second, forked one.
+    var markdownBodyScale: CGFloat {
+        get { self[MarkdownBodyScaleKey.self] }
+        set { self[MarkdownBodyScaleKey.self] = newValue }
+    }
+}
+
+/// The card-scale preset the memory surfaces — Mnemosyne's cauldron and the
+/// Aegis veil — hand to `MarkdownBody`.
+let noteMarkdownScale: CGFloat = 0.78
+
+/// The ambient note scale applied to a base font.
+func markdownScaled(_ base: NSFont, _ scale: CGFloat) -> Font {
+    scale == 1 ? Font(base) : Font(base.withSize(max(6, base.pointSize * scale)))
+}
+
+/// The ambient note scale applied to a raw point size or a spacing.
+func markdownScaled(_ size: CGFloat, _ scale: CGFloat) -> CGFloat {
+    scale == 1 ? size : size * scale
+}
+
 // MARK: - Block model
 
 /// Lightweight markdown block parser: separates fenced code blocks from prose
@@ -310,6 +338,7 @@ struct MarkdownBody: View {
     let text: String
     var plain = false
     @Environment(\.markdownThemeName) private var themeName
+    @Environment(\.markdownBodyScale) private var scale
     @State private var settingsRevision = 0
 
     var body: some View {
@@ -318,11 +347,11 @@ struct MarkdownBody: View {
         Group {
         if plain || text.isEmpty {
             Text(text)
-                .font(Font(ThemeRegistry.shared.current.pythia.proseFont))
+                .font(markdownScaled(ThemeRegistry.shared.current.pythia.proseFont, scale))
                 .lineSpacing(3)
                 .textSelection(.enabled)
         } else {
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: markdownScaled(7, scale)) {
                 ForEach(MarkdownBlock.parse(text)) { block in
                     blockView(block)
                 }
@@ -357,7 +386,7 @@ struct MarkdownBody: View {
             ListView(items: items)
         case .paragraph(let text):
             Text(renderInline(text))
-                .font(Font(ThemeRegistry.shared.current.pythia.proseFont))
+                .font(markdownScaled(ThemeRegistry.shared.current.pythia.proseFont, scale))
                 .lineSpacing(4)
                 .textSelection(.enabled)
         }
@@ -413,19 +442,22 @@ func highlightCode(_ code: String, language: String, fallback: NSColor? = nil) -
 private struct CodeBlockView: View {
     let code: String
     @State private var language: String
+    @Environment(\.markdownBodyScale) private var scale
 
     init(code: String, language: String) {
         self.code = code
         _language = State(initialValue: language.isEmpty ? "text" : language)
     }
 
+    private var codeSize: CGFloat { markdownScaled(11.5, scale) }
+
     var body: some View {
         let theme = ThemeRegistry.shared.current
         let scope = theme.style(for: .codeBlock)
         LineNumberedCodeView(code: code,
                              language: language,
-                             font: .system(size: 11.5, design: .monospaced),
-                             fontSize: 11.5,
+                             font: .system(size: codeSize, design: .monospaced),
+                             fontSize: codeSize,
                              lineSpacing: 2,
                              background: Color(nsColor: scope.background ?? theme.pythia.codeBackground),
                              border: Color(nsColor: theme.pythia.shine).opacity(0.14),
@@ -479,11 +511,12 @@ private struct CodeBlockView: View {
 private struct HeadingView: View {
     let text: String
     let level: Int
+    @Environment(\.markdownBodyScale) private var scale
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(renderInline(text))
-                .font(Font(MarkdownRichCodec.font(level: level)))
+                .font(markdownScaled(MarkdownRichCodec.font(level: level), scale))
                 .foregroundStyle(Color(nsColor: ThemeRegistry.shared.current.style(for: TokenScope(rawValue: "markup.heading.\(level)") ?? .heading).foreground ?? ThemeRegistry.shared.current.sidebarAccent))
                 .lineSpacing(3)
                 .textSelection(.enabled)
@@ -499,6 +532,7 @@ private struct HeadingView: View {
 
 private struct BlockquoteView: View {
     let text: String
+    @Environment(\.markdownBodyScale) private var scale
 
     var body: some View {
         let theme = ThemeRegistry.shared.current
@@ -508,6 +542,7 @@ private struct BlockquoteView: View {
         HStack(alignment: .top, spacing: 0) {
             Rectangle().fill(Color(nsColor: bar)).frame(width: 3)
             Text(renderInline(text))
+                .font(markdownScaled(theme.pythia.proseFont, scale))
                 .italic()
                 .foregroundStyle(Color(nsColor: scope.foreground ?? theme.pythia.foreground))
                 .textSelection(.enabled)
@@ -522,17 +557,18 @@ private struct BlockquoteView: View {
 
 private struct ListView: View {
     let items: [ListItem]
+    @Environment(\.markdownBodyScale) private var scale
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: markdownScaled(3, scale)) {
             ForEach(items) { item in
-                HStack(alignment: .top, spacing: 6) {
+                HStack(alignment: .top, spacing: markdownScaled(6, scale)) {
                     Text(marker(for: item))
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.system(size: markdownScaled(12, scale), design: .monospaced))
                         .foregroundStyle(Color(nsColor: markerColor(for: item)))
-                        .frame(width: 16, alignment: .trailing)
+                        .frame(width: markdownScaled(16, scale), alignment: .trailing)
                     Text(renderInline(label(for: item)))
-                        .font(.system(size: 13))
+                        .font(.system(size: markdownScaled(13, scale)))
                         .lineSpacing(3)
                         .textSelection(.enabled)
                 }

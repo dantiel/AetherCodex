@@ -201,8 +201,6 @@ protocol SyntaxTheme {
     // ── Liquid Glass (macOS 26+) ──
     /// Tint color for NSGlassEffectView sidebar and Pythia panes.
     var glassTintColor: NSColor { get }
-    /// Glass style: .regular (standard) or .clear (transparent).
-    var glassStyle: NSGlassEffectView.Style { get }
     /// Glass tint: 0.0 = no tint (clear glass), 1.0 = fully tinted (opaque glass).
     var glassTint: CGFloat { get }
     /// Glass blur density: 0.0 = clearest (thin blur), 1.0 = heaviest blur.
@@ -212,14 +210,6 @@ protocol SyntaxTheme {
     /// The Pythia oracle chamber palette — derived from the chrome when not
     /// explicitly declared via a first-class `pythia:` block.
     var pythia: PythiaPalette { get }
-
-    // ── Deprecated pre-Liquid-Glass materials (kept for compatibility) ──
-    @available(macOS, deprecated: 26.0, message: "Liquid Glass uses glassTintColor")
-    var rootBlurMaterial: NSVisualEffectView.Material { get }
-    @available(macOS, deprecated: 26.0, message: "Liquid Glass uses glassTintColor")
-    var rootBlendingMode: NSVisualEffectView.BlendingMode { get }
-    @available(macOS, deprecated: 26.0, message: "Liquid Glass uses glassTintColor")
-    var pythiaGlassMaterial: NSVisualEffectView.Material { get }
 }
 
 extension SyntaxTheme {
@@ -286,13 +276,9 @@ extension SyntaxTheme {
     var lineSpacing: CGFloat { 4.0 }
     /// Glass tint — subtle violet for dark themes, golden for light.
     var glassTintColor: NSColor { NSColor(red: 0.45, green: 0.35, blue: 0.60, alpha: 0.25) }
-    var glassStyle: NSGlassEffectView.Style { .regular }
     var glassTint: CGFloat { 0.70 }
     var glassBlurStrength: CGFloat { 0.50 }
     var sidebarGlassMaterialName: String? { nil }
-    var rootBlurMaterial: NSVisualEffectView.Material { .fullScreenUI }
-    var rootBlendingMode: NSVisualEffectView.BlendingMode { .behindWindow }
-    var pythiaGlassMaterial: NSVisualEffectView.Material { .menu }
 
     // ── Pythia palette (derived) ──
     var pythia: PythiaPalette {
@@ -328,14 +314,42 @@ final class ThemeRegistry {
     private(set) var activeIndex: Int = 0 {
         didSet {
             guard activeIndex != oldValue else { return }
+            // Prune boxes whose editor has been closed, then notify the survivors.
+            observers.removeAll { $0.target == nil }
+            for observer in observers { observer.fire() }
             onChange?()
         }
     }
 
     var activeName: String { current.name }
 
-    /// Fires when theme changes — editors re-highlight and reconfigure chrome.
+    /// Legacy single-slot hook. Prefer `observeChanges(target:)`: with one editor
+    /// per tab, a single slot let the newest tab silence every older one, so any
+    /// tab beyond the first kept rendering its stale theme.
     var onChange: (() -> Void)?
+
+    /// A theme observer, held strongly while its `target` lives. The closure
+    /// captures its editor weakly, so the registry never extends a tab's life.
+    final class ThemeChangeObserver {
+        weak var target: AnyObject?
+        let fire: () -> Void
+
+        init(target: AnyObject, fire: @escaping () -> Void) {
+            self.target = target
+            self.fire = fire
+        }
+    }
+
+    private var observers: [ThemeChangeObserver] = []
+
+    /// Register an editor to be told when the active theme changes. Stale entries
+    /// are pruned on the next change, so opening and closing tabs never accumulates.
+    @discardableResult
+    func observeChanges(target: AnyObject, _ fire: @escaping () -> Void) -> ThemeChangeObserver {
+        let observer = ThemeChangeObserver(target: target, fire: fire)
+        observers.append(observer)
+        return observer
+    }
 
     private var appearanceObserver: NSKeyValueObservation?
 

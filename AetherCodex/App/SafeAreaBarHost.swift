@@ -92,9 +92,6 @@ final class EditorChromeState: ObservableObject {
     
     /// Callback to reposition traffic lights when sidebar visibility changes
     var onSidebarVisibilityChange: ((Bool) -> Void)?
-    /// Callback to fold away AppKit overlays (status bar, tab bar) when the
-    /// window flips into oracle-only mode.
-    var onOracleOnlyChange: ((Bool) -> Void)?
     /// Navigate the sidebar file browser to a folder (breadcrumb peek).
     var navigateFolder: ((URL) -> Void)?
     /// Open a document (breadcrumb sibling / path commit targeting a file).
@@ -109,13 +106,6 @@ final class EditorChromeState: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] visible in
                 self?.onSidebarVisibilityChange?(visible)
-            }
-            .store(in: &cancellables)
-        
-        $oracleOnly
-            .removeDuplicates()
-            .sink { [weak self] oracleOnly in
-                self?.onOracleOnlyChange?(oracleOnly)
             }
             .store(in: &cancellables)
     }
@@ -177,7 +167,17 @@ extension SyntaxTheme {
 @available(macOS 26.0, *)
 struct EditorContainerView: View {
     let sidebar: NSView
-    @ObservedObject var pythiaModel: PythiaChatModel
+    /// Held, NOT observed. The chat model is only ever *handed down* to the
+    /// hosted `PythiaPanel`, which observes it itself. Observing it here made
+    /// every chat-model change (i.e. every keystroke in the prompt) re-evaluate
+    /// this body — and each re-evaluation rebuilt the `HostedView`, replacing
+    /// the inspector's `NSHostingView.rootView` inside a `safeAreaBar` band.
+    /// macOS 26 re-solves that hosting view's SizeConstraints on every such
+    /// replacement and then drops the whole trailing accessory: Pythia vanishes
+    /// while `pythiaVisible` still reads `true`, the prompt keeps focus (it is
+    /// only clipped away), and the toggle needs two presses to force a clean
+    /// layout pass. A reference does not need a subscription to be passed on.
+    let pythiaModel: PythiaChatModel
     @ObservedObject var chrome: EditorChromeState
     @ObservedObject var tabs: TabsModel
     @ObservedObject private var displaySettings = EditorDisplaySettings.shared
@@ -363,7 +363,7 @@ struct EditorContainerView: View {
                             limits: 180...widths.sidebarMaximum, direction: 1) {
                                 SessionState.shared.sidebarWidth = Double($0)
                             }
-                            .frame(width: 10)
+                            .frame(width: SidebarSheetGeometry.resizeStripWidth)
                             .frame(maxHeight: .infinity)
                             .contentShape(Rectangle())
                             .zIndex(10)
@@ -419,7 +419,7 @@ struct EditorContainerView: View {
                                 limits: 220...widths.inspectorMaximum, direction: -1) {
                                     SessionState.shared.pythiaWidth = Double($0)
                                 }
-                                .frame(width: 10)
+                                .frame(width: SidebarSheetGeometry.resizeStripWidth)
                                 .frame(maxHeight: .infinity)
                                 .contentShape(Rectangle())
                                 .zIndex(10)
@@ -427,7 +427,14 @@ struct EditorContainerView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // Definite width — an `NSHostingView` inside a `safeAreaBar`
+                    // band must never be laid out from an ambiguous proposal.
+                    // macOS 26 otherwise re-solves its SizeConstraints on every
+                    // content change and can drop the accessory entirely: the
+                    // inspector disappears even though `pythiaVisible` is true.
+                    // The tab strip carries the same cure for the same reason.
+                    .frame(width: chrome.pythiaVisible ? max(widths.trailing, 1) : 1)
+                    .frame(maxHeight: .infinity)
                 }
                 // Background fills to the window top even with the strip shown;
                 // the inspector *content* clears the strip via its own top inset.
@@ -492,7 +499,11 @@ struct EditorContainerView: View {
 @available(macOS 26.0, *)
 struct OracleFlipRoot: View {
     let sidebar: NSView
-    @ObservedObject var pythiaModel: PythiaChatModel
+    /// Reference only — see `EditorContainerView`. Observing it here would
+    /// re-evaluate the flip card (and thus re-mount the front face's hosting
+    /// views) on every chat-model change: the same bar-drop that folds the
+    /// inspector away.
+    let pythiaModel: PythiaChatModel
     @ObservedObject var chrome: EditorChromeState
     @ObservedObject var tabs: TabsModel
 
@@ -501,7 +512,6 @@ struct OracleFlipRoot: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let _ = { try? "size=\(proxy.size) insets=\(proxy.safeAreaInsets)\n".write(toFile: "/tmp/aether_proxy.txt", atomically: true, encoding: .utf8) }()
             ZStack {
                 // Desktop glass — an isotropic frosted blur of what sits behind the
                 // window, so it correctly stays put while the window's *content*
@@ -547,7 +557,8 @@ struct OracleFlipRoot: View {
 /// The reverse face of the flip card — Pythia stands alone, filling the window.
 @available(macOS 26.0, *)
 private struct OracleOnlyView: View {
-    @ObservedObject var pythiaModel: PythiaChatModel
+    /// Reference only — the panel observes the model itself.
+    let pythiaModel: PythiaChatModel
     @ObservedObject var chrome: EditorChromeState
 
     private var palette: PythiaPalette { chrome.theme.pythia }
@@ -910,7 +921,7 @@ struct TopBar: View {
             }
 
             titleGlyph
-                .padding(.leading, gutterInset)
+                .padding(.leading, gutterInset + 8)
             titleLabel
 
             Spacer(minLength: 0)

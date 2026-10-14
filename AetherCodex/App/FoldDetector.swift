@@ -61,7 +61,7 @@ enum FoldDetector {
 
         // Iterate graphemes but track the running UTF-16 offset so that
         // openCharIndex/closeCharIndex stay NSRange-aligned (consumed as
-        // NSRange(location:) by FoldState and CodeFoldingRibbon).
+        // NSRange(location:) by FoldState).
         for ch in text {
             if ch == "\n" { line += 1 }
 

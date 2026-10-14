@@ -108,12 +108,8 @@ enum ThemeLoader {
         let opacity    = (dict["editorBackgroundOpacity"] as? Double).map { CGFloat($0) } ?? 0.0
         let shadow     = (dict["textShadowStrength"] as? Double).map { CGFloat($0) } ?? 0.6
         let spacing    = (dict["lineSpacing"] as? Double).map { CGFloat($0) } ?? 4.0
-        let blurMat    = parseMaterial(dict["rootBlurMaterial"])
-        let blendMode  = parseBlendMode(dict["rootBlendingMode"])
-        let pythiaMat  = parseMaterial(dict["pythiaGlassMaterial"])
         let glassTintColor = parseColor(dict["glassTintColor"])
             ?? NSColor(white: 0.5, alpha: 0.15)
-        let glassStyleVal = parseGlassStyle(dict["glassStyle"])
         let sideBg     = parseColor(dict["sidebarBackground"])
         let sideOp     = (dict["sidebarBackgroundOpacity"] as? Double).map { CGFloat($0) }
         let glassTintStrength = parseAlphaValue(dict["glassTint"]) ?? 0.70
@@ -179,12 +175,8 @@ enum ThemeLoader {
             textShadowStrength: shadow,
             lineSpacing: spacing,
             glassTintColor: glassTintColor,
-            glassStyle: glassStyleVal,
             glassTint: glassTintStrength,
             glassBlurStrength: glassBlurStrength,
-            rootBlurMaterial: blurMat,
-            rootBlendingMode: blendMode,
-            pythiaGlassMaterial: pythiaMat,
             sidebarGlassMaterialName: sideMat,
             pythia: pythia,
             rulerForeground: parseColor(dict["rulerForeground"]) ?? editorForeground.withAlphaComponent(0.65),
@@ -303,39 +295,6 @@ enum ThemeLoader {
         )
     }
 
-    private static func parseMaterial(_ value: Any?) -> NSVisualEffectView.Material {
-        guard let str = value as? String else { return .fullScreenUI }
-        switch str {
-        case "fullScreenUI":           return .fullScreenUI
-        case "underWindowBackground":  return .underWindowBackground
-        case "menu":                   return .menu
-        case "sidebar":                return .sidebar
-        case "headerView":             return .headerView
-        case "popover":                return .popover
-        case "hudWindow":              return .hudWindow
-        case "toolTip":                return .toolTip
-        case "sheet":                  return .sheet
-        default:                       return .fullScreenUI
-        }
-    }
-
-    private static func parseBlendMode(_ value: Any?) -> NSVisualEffectView.BlendingMode {
-        guard let str = value as? String else { return .behindWindow }
-        switch str {
-        case "behindWindow": return .behindWindow
-        case "withinWindow": return .withinWindow
-        default:             return .behindWindow
-        }
-    }
-
-    private static func parseGlassStyle(_ value: Any?) -> NSGlassEffectView.Style {
-        guard let str = value as? String else { return .regular }
-        switch str {
-        case "clear":   return .clear
-        default:        return .regular
-        }
-    }
-
     private static func parseAlphaValue(_ value: Any?) -> CGFloat? {
         if let d = value as? Double { return CGFloat(d) }
         if let i = value as? Int { return CGFloat(i) / 100.0 }
@@ -383,12 +342,8 @@ private struct LoadedTheme: SyntaxTheme {
     let textShadowStrength: CGFloat
     let lineSpacing: CGFloat
     let glassTintColor: NSColor
-    let glassStyle: NSGlassEffectView.Style
     let glassTint: CGFloat
     let glassBlurStrength: CGFloat
-    let rootBlurMaterial: NSVisualEffectView.Material
-    let rootBlendingMode: NSVisualEffectView.BlendingMode
-    let pythiaGlassMaterial: NSVisualEffectView.Material
     let sidebarGlassMaterialName: String?
     let pythia: PythiaPalette
     var rulerForeground: NSColor = .secondaryLabelColor
@@ -530,12 +485,8 @@ extension ThemeLoader {
             textShadowStrength: 0.6,
             lineSpacing: 4.0,
             glassTintColor: NSColor(white: 0.5, alpha: 0.15),
-            glassStyle: .regular,
             glassTint: 0.70,
             glassBlurStrength: 0.50,
-            rootBlurMaterial: .fullScreenUI,
-            rootBlendingMode: .behindWindow,
-            pythiaGlassMaterial: .menu,
             sidebarGlassMaterialName: nil,
             pythia: PythiaPalette.derive(
                 background: NSColor(white: 0.08, alpha: 1.0),
@@ -616,11 +567,7 @@ extension ThemeLoader {
         editorBackgroundOpacity: 0.0
         textShadowStrength: 0.6
         lineSpacing: 4.0
-        rootBlurMaterial: fullScreenUI
-        rootBlendingMode: behindWindow
-        pythiaGlassMaterial: menu
         glassTintColor: "0x808080"
-        glassStyle: regular
         """
         let dict = SimpleYaml.load(hermeticYaml)
         if let theme = theme(from: dict) { return [theme] }

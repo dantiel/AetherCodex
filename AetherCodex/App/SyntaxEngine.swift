@@ -61,8 +61,14 @@ final class HeuristicSyntaxEngine: SyntaxEngineProtocol {
             return Rule(scope: spec.scope, pattern: re)
         }
         allRules = compiled
+        // Longest-pattern-first is a property of the rule *set*, not of a call.
+        // Sorting here keeps the order once for the app's lifetime; sorting inside
+        // `tokenize` re-sorted the whole array on every keystroke and every
+        // scroll-band re-highlight.
         proseRules = compiled.filter { Self.proseScopes.contains($0.scope) }
+            .sorted { $0.pattern.pattern.count > $1.pattern.pattern.count }
         codeRules = compiled.filter { !Self.markupOnlyScopes.contains($0.scope) }
+            .sorted { $0.pattern.pattern.count > $1.pattern.pattern.count }
     }
 
     /// - Parameter proseMode: When true, only prose-safe rules are applied
@@ -72,7 +78,7 @@ final class HeuristicSyntaxEngine: SyntaxEngineProtocol {
         var tokens: [Token] = []
         var covered = IndexSet()
 
-        for rule in rules.sorted(by: { $0.pattern.pattern.count > $1.pattern.pattern.count }) {
+        for rule in rules {
             let matches = rule.pattern.matches(in: text, options: [], range: range)
             for m in matches {
                 let r = m.range
