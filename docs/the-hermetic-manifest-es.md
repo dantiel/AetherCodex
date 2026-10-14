@@ -106,4 +106,4 @@ Donde se toma, se vuelve la diferencia entre una herramienta que ejecuta y una i
 
 ---
 
-*← [Ingeniería Etérica](./aetheric-engineering-es.html) · [El Poder de lo Desconocido](./the-power-of-the-unknown-es.html) → · parte [del Canon Etérico](./aetheric-canon-es.html) · [English](./the-hermetic-manifest.html)*
+*← [Ingeniería Etérica](./aetheric-engineering-es.html) · [El Poder de lo Desconocido](./the-power-of-the-unknown-es.html) → · parte [del Canon Etérico](./aetheric-canon-es.html)*

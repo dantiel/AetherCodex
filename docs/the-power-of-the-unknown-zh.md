@@ -82,4 +82,4 @@
 
 ---
 
-*← [赫尔墨斯宣言](./the-hermetic-manifest-zh.html) · [以太翠玉录](./tabula-smaragdina-aetherica-zh.html) → · 属于[以太经典](./aetheric-canon-zh.html) · [English](./the-power-of-the-unknown.html)*
+*← [赫尔墨斯宣言](./the-hermetic-manifest-zh.html) · [以太翠玉录](./tabula-smaragdina-aetherica-zh.html) → · 属于[以太经典](./aetheric-canon-zh.html)*

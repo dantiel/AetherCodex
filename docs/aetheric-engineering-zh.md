@@ -161,4 +161,4 @@
 
 ---
 
-*续：[赫尔墨斯宣言](./the-hermetic-manifest-zh.html) → · 属于[以太经典](./aetheric-canon-zh.html) · [English](./aetheric-engineering.html)*
+*续：[赫尔墨斯宣言](./the-hermetic-manifest-zh.html) → · 属于[以太经典](./aetheric-canon-zh.html)*

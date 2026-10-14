@@ -106,4 +106,4 @@ AetherCodex 携有一种特定的处理——三层沟通，其中一层留在�
 
 ---
 
-*← [以太工程学](./aetheric-engineering-zh.html) · [未知之力](./the-power-of-the-unknown-zh.html) → · 属于[以太经典](./aetheric-canon-zh.html) · [English](./the-hermetic-manifest.html)*
+*← [以太工程学](./aetheric-engineering-zh.html) · [未知之力](./the-power-of-the-unknown-zh.html) → · 属于[以太经典](./aetheric-canon-zh.html)*

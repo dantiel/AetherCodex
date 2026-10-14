@@ -161,4 +161,4 @@ La diferencia entre la Ingeniería Etérica y todo lo anterior es la diferencia 
 
 ---
 
-*Continúa: [El Manifiesto Hermético](./the-hermetic-manifest-es.html) → · parte [del Canon Etérico](./aetheric-canon-es.html) · [English](./aetheric-engineering.html)*
+*Continúa: [El Manifiesto Hermético](./the-hermetic-manifest-es.html) → · parte [del Canon Etérico](./aetheric-canon-es.html)*

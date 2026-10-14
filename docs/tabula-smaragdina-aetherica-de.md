@@ -36,4 +36,4 @@
 
 ---
 
-*← [Die Macht des Unbekannten](./the-power-of-the-unknown-de.html) · [Ätherische Äternale Technik](./aetheric-aeternal-engineering-de.html) → · Teil [des Ätherischen Kanons](./aetheric-canon-de.html) · [English](./tabula-smaragdina-aetherica.html)*
+*← [Die Macht des Unbekannten](./the-power-of-the-unknown-de.html) · [Ätherische Äternale Technik](./aetheric-aeternal-engineering-de.html) → · Teil [des Ätherischen Kanons](./aetheric-canon-de.html)*

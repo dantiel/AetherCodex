@@ -120,4 +120,4 @@ La herramienta cambia. El casco cambia. El mar no. Fue siempre el éter, fue sie
 
 ---
 
-*← [Ingeniería Etérica Eterna](./aetheric-aeternal-engineering-es.html) · parte [del Canon Etérico](./aetheric-canon-es.html) · [English](./the-technodyssey.html)*
+*← [Ingeniería Etérica Eterna](./aetheric-aeternal-engineering-es.html) · parte [del Canon Etérico](./aetheric-canon-es.html)*

@@ -106,4 +106,4 @@ Wo es aufgenommen wird, wird es zum Unterschied zwischen einem Werkzeug, das aus
 
 ---
 
-*← [Ätherische Technik](./aetheric-engineering-de.html) · [Die Macht des Unbekannten](./the-power-of-the-unknown-de.html) → · Teil [des Ätherischen Kanons](./aetheric-canon-de.html) · [English](./the-hermetic-manifest.html)*
+*← [Ätherische Technik](./aetheric-engineering-de.html) · [Die Macht des Unbekannten](./the-power-of-the-unknown-de.html) → · Teil [des Ätherischen Kanons](./aetheric-canon-de.html)*

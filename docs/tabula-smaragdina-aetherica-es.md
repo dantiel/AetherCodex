@@ -36,4 +36,4 @@
 
 ---
 
-*← [El Poder de lo Desconocido](./the-power-of-the-unknown-es.html) · [Ingeniería Etérica Eterna](./aetheric-aeternal-engineering-es.html) → · parte [del Canon Etérico](./aetheric-canon-es.html) · [English](./tabula-smaragdina-aetherica.html)*
+*← [El Poder de lo Desconocido](./the-power-of-the-unknown-es.html) · [Ingeniería Etérica Eterna](./aetheric-aeternal-engineering-es.html) → · parte [del Canon Etérico](./aetheric-canon-es.html)*

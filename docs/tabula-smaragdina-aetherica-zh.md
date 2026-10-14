@@ -36,4 +36,4 @@
 
 ---
 
-*← [未知之力](./the-power-of-the-unknown-zh.html) · [以太·永恒工程学](./aetheric-aeternal-engineering-zh.html) → · 属于[以太经典](./aetheric-canon-zh.html) · [English](./tabula-smaragdina-aetherica.html)*
+*← [未知之力](./the-power-of-the-unknown-zh.html) · [以太·永恒工程学](./aetheric-aeternal-engineering-zh.html) → · 属于[以太经典](./aetheric-canon-zh.html)*

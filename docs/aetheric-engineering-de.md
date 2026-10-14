@@ -161,4 +161,4 @@ Der Unterschied zwischen der Ätherischen Technik und allem Davor ist der Unters
 
 ---
 
-*Weiter: [Das Hermetische Manifest](./the-hermetic-manifest-de.html) → · Teil [des Ätherischen Kanons](./aetheric-canon-de.html) · [English](./aetheric-engineering.html)*
+*Weiter: [Das Hermetische Manifest](./the-hermetic-manifest-de.html) → · Teil [des Ätherischen Kanons](./aetheric-canon-de.html)*

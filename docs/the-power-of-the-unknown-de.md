@@ -82,4 +82,4 @@ Das Unbekannte ist nicht der Feind des Offenen. Es ist der andere Pol des Offene
 
 ---
 
-*← [Das Hermetische Manifest](./the-hermetic-manifest-de.html) · [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica-de.html) → · Teil [des Ätherischen Kanons](./aetheric-canon-de.html) · [English](./the-power-of-the-unknown.html)*
+*← [Das Hermetische Manifest](./the-hermetic-manifest-de.html) · [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica-de.html) → · Teil [des Ätherischen Kanons](./aetheric-canon-de.html)*

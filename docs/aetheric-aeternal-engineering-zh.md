@@ -150,4 +150,4 @@ end
 
 ---
 
-*← [以太翠玉录](./tabula-smaragdina-aetherica-zh.html) · [科技奥德赛](./the-technodyssey-zh.html) → · 属于[以太经典](./aetheric-canon-zh.html) · [English](./aetheric-aeternal-engineering.html)*
+*← [以太翠玉录](./tabula-smaragdina-aetherica-zh.html) · [科技奥德赛](./the-technodyssey-zh.html) → · 属于[以太经典](./aetheric-canon-zh.html)*

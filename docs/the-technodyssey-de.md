@@ -120,4 +120,4 @@ Das Werkzeug wandelt sich. Der Rumpf wandelt sich. Das Meer nicht. Es war immer 
 
 ---
 
-*← [Ätherische Äternale Technik](./aetheric-aeternal-engineering-de.html) · Teil [des Ätherischen Kanons](./aetheric-canon-de.html) · [English](./the-technodyssey.html)*
+*← [Ätherische Äternale Technik](./aetheric-aeternal-engineering-de.html) · Teil [des Ätherischen Kanons](./aetheric-canon-de.html)*

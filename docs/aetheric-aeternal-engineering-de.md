@@ -150,4 +150,4 @@ end
 
 ---
 
-*← [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica-de.html) · [Die Technodyssee](./the-technodyssey-de.html) → · Teil [des Ätherischen Kanons](./aetheric-canon-de.html) · [English](./aetheric-aeternal-engineering.html)*
+*← [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica-de.html) · [Die Technodyssee](./the-technodyssey-de.html) → · Teil [des Ätherischen Kanons](./aetheric-canon-de.html)*

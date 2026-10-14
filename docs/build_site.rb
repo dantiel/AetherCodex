@@ -97,7 +97,26 @@ def template(title, body, subtitle)
   HTML
 end
 
-def build(slug, title, subtitle)
+LANG_LABELS = { 'en' => 'English', 'de' => 'Deutsch', 'es' => 'Español', 'zh' => '中文' }.freeze
+
+# Every canon page (essay or index) carries a language bar linking the same
+# text in the other three languages. Single source of truth, injected by the
+# builder — no hand-written cross-links to drift out of sync.
+def canon_lang_bar(slug, current_lang)
+  base = slug.sub(/-(de|es|zh)\z/, '')
+  parts = %w[en de es zh].map do |lang|
+    target = lang == 'en' ? base : "#{base}-#{lang}"
+    label  = LANG_LABELS[lang]
+    if target == slug
+      %(<span class="lang-jump current" aria-current="true">#{label}</span>)
+    else
+      %(<a class="lang-jump" href="./#{target}.html" hreflang="#{lang}">#{label}</a>)
+    end
+  end
+  %(<nav class="canon-lang-bar" aria-label="Read this text in another language">#{parts.join('<span class="lang-dot">·</span>')}</nav>)
+end
+
+def build(slug, title, subtitle, lang = nil)
   src = File.join(ROOT, "#{slug}.md")
   raise "missing #{src}" unless File.exist?(src)
 
@@ -107,19 +126,20 @@ def build(slug, title, subtitle)
   # so code blocks render as <pre><code> instead of flattened paragraphs.
   body = body.gsub(/^```([A-Za-z0-9_+\-.]*)\s*$/, '~~~\1')
   body = Kramdown::Document.new(body, auto_ids: true).to_html
+  body += "\n" + canon_lang_bar(slug, lang) if lang
 
   out = File.join(OUT, "#{slug}.html")
   File.write(out, template(title, body, subtitle))
   puts "  ✦ wrote chapters/#{slug}.html"
 end
 
-CANON.each { |slug, title| build(slug, title, CANON_SUBTITLE) }
+CANON.each { |slug, title| build(slug, title, CANON_SUBTITLE, 'en') }
 CONCEPTS.each { |slug, title, subtitle| build(slug, title, subtitle) }
 
 # The canon index (links to all chapters).
 canon = File.join(ROOT, 'aetheric-canon.md')
 if File.exist?(canon)
-  build('aetheric-canon', 'The Ætheric Canon', CANON_SUBTITLE)
+  build('aetheric-canon', 'The Ætheric Canon', CANON_SUBTITLE, 'en')
 end
 
 # ── Translations of the Ætheric Canon ────────────────────────────────────
@@ -162,10 +182,10 @@ CANON_I18N = {
 CANON_I18N.each do |lang, t|
   CANON.each do |slug, _title|
     src = "#{slug}-#{lang}.md"
-    build("#{slug}-#{lang}", t[slug], t['subtitle']) if File.exist?(File.join(ROOT, src))
+    build("#{slug}-#{lang}", t[slug], t['subtitle'], lang) if File.exist?(File.join(ROOT, src))
   end
   idx = "aetheric-canon-#{lang}.md"
-  build("aetheric-canon-#{lang}", t['aetheric-canon'], t['subtitle']) if File.exist?(File.join(ROOT, idx))
+  build("aetheric-canon-#{lang}", t['aetheric-canon'], t['subtitle'], lang) if File.exist?(File.join(ROOT, idx))
 end
 
 puts '  ✧ done.'

@@ -82,4 +82,4 @@ Lo desconocido no es el enemigo de lo abierto. Es el otro polo de lo abierto, y 
 
 ---
 
-*← [El Manifiesto Hermético](./the-hermetic-manifest-es.html) · [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica-es.html) → · parte [del Canon Etérico](./aetheric-canon-es.html) · [English](./the-power-of-the-unknown.html)*
+*← [El Manifiesto Hermético](./the-hermetic-manifest-es.html) · [Tabula Smaragdina Ætherica](./tabula-smaragdina-aetherica-es.html) → · parte [del Canon Etérico](./aetheric-canon-es.html)*
