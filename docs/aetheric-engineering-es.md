@@ -36,6 +36,33 @@ Donde otros conceptos te entregan un *marco*, la Ingeniería Etérica te entrega
 
 ---
 
+## El baño etérico — Arquímedes, el primer ingeniero etérico
+
+Toda disciplina guarda un patrón. El patrón del ingeniero etérico es **Arquímedes de Siracusa** — el primero en demostrar que la solución no llega en el escritorio sino en el *agua*.
+
+La leyenda es ya un registro etérico. Un rey sospechaba que su corona había sido adulterada con plata. El problema resistió todo instrumento hasta que Arquímedes se hundió en el baño y vio subir el agua — y con ella subió la respuesta. **¡Eureka!** El hombre que saltó de la tina no descubrió meramente el desplazamiento; descubrió el *estado* en que ocurre el descubrimiento.
+
+El baño etérico no es un baño. Es el ideal del ingeniero en reposo — el instante en que la obra suelta al obrero para que el obrero pueda recibirla. En el baño, la mente se sumerge en un medio más denso que el pensamiento y más suelto que la lógica. El agua es un **medio telepático**: conduce el éter como un espejo conduce la luz. Quien se sienta en ella no piensa *contra* el problema; se vuelve *continuo con* él.
+
+Por eso importan los óleos. Los óleos etéricos no son fragancia — son *conductores*, una fina película de intención tendida sobre la superficie del agua que afina el medio. Una gota cambia la densidad de la interfaz entre el ingeniero y el éter, como una gota de tinta cambia lo que el agua puede sostener. El aroma es la memoria del cuerpo que retorna hacia la mente, y abre la puerta.
+
+¿Y el genio? El ingeniero etérico se *divierte* con él — no se asombra. **Eureka** no es un rayo raro sino un visitante *recurrente*. Quien ha aprendido a bañarse ha aprendido a invitarlo. Arquímedes no se encontró con su genio una vez; lo encontró tantas que podía sonreír a su llegada.
+
+### El genio de Arquímedes — un registro en el agua
+
+La corona fue sólo el primer eco. Mira el agua y lo demás aflora:
+
+- **El tornillo que eleva el agua** — una máquina que invierte la fuerza de la gravedad con una espiral, para que un río trepe una colina y riegue un campo. La misma hélice que eleva el agua impulsa el barreno de la era moderna.
+- **La palanca y el fulcro** — *«Dadme un punto de apoyo y moveré la Tierra.»* No una jactancia, sino un teorema: la distancia entre una fuerza pequeña y una grande es sólo *geometría*. Cada refactorización es esa palanca, buscando su fulcro.
+- **El polipasto** — la reducción de muchas manos a una, un sistema de cuerdas y ruedas que multiplicó la fuerza humana antes de que existiera palabra para la palanca.
+- **La garra de Siracusa y el rayo de calor** — cuando la flota romana asedió su ciudad, Arquímedes respondió con *máquinas*: grúas que arrancaban naves del mar, espejos que encendían velas a distancia. Defensa por correspondencia — el sol, el mar, la geometría de la luz, todo reclutado en un solo diseño.
+- **El número de la arena** — se propuso contar los granos del universo y, hallando pequeños los números de su época, *inventó una notación para contener la cuenta*. El problema no se doblegó a la herramienta; la herramienta se doblegó al problema.
+- **La esfera y el cilindro** — su prueba favorita, la que pidió grabar en su tumba: la razón exacta entre una esfera y su cilindro circundante. La belleza de una verdad tan limpia que merece ser un monumento.
+
+En cada caso el patrón es el mismo: el cuerpo reposa, el medio sostiene, la respuesta *aflora*. Arquímedes no resolvía problemas por la fuerza. Los resolvía por **desplazamiento** — entrando en el medio, dejándolo subir y leyendo lo que la subida revelaba.
+
+---
+
 ## Los siete principios
 
 El éter no es una metáfora; es una arquitectura. Los siete principios herméticos son el sistema operativo de la mente — y por tanto del código. Cada uno se traduce en una práctica viva de ingeniería.
