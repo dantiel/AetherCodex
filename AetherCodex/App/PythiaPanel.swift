@@ -963,6 +963,39 @@ final class PythiaChatModel: ObservableObject {
         }
     }
 
+    /// Whether an assistant message is a transient failure a plain "Continue"
+    /// can retry (server overload, rate limit, too busy, …). Deterministic — it
+    /// never mistakes a real oracle answer for a failure. The daemon may prefix
+    /// the raw provider error with its own glyph (⚠️/❌), so we match on the
+    /// provider's own words, not the glyph.
+    static func isRetryableError(_ text: String) -> Bool {
+        let t = text.lowercased()
+        return t.contains("server overloaded")
+            || t.contains("overloaded due to")
+            || t.contains("service is too busy")
+            || t.contains("api error")
+            || t.contains("rate limit")
+            || t.contains("please retry your request")
+            || t.contains("temporarily switch to alternative")
+    }
+
+    /// Re-issue the last turn after a transient failure. The user's prompt is
+    /// already woven into `history`, so this only calls `beginTurn()` again — no
+    /// duplicate user message. The trailing error veil is retracted first so the
+    /// timeline doesn't accumulate a dead end.
+    func retryLastTurn() {
+        guard !busy else { return }
+        if case .message(let last) = flow.last,
+           last.role == "assistant",
+           Self.isRetryableError(last.text) {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                _ = flow.removeLast()
+            }
+            scheduleFlowSave()
+        }
+        beginTurn()
+    }
+
     /// Execute a `$`-prefixed shell command through the polymorphic CLI and
     /// weave its output into the flow as a CLI block.
     func sendCli(_ command: String) {
@@ -2462,7 +2495,9 @@ private struct MessageList: View {
                                 MessageRow(message: message,
                                            level: level,
                                            queued: model.queuedMessageIDs.contains(message.id),
-                                           rebased: model.rebasedMessageIDs.contains(message.id))
+                                           rebased: model.rebasedMessageIDs.contains(message.id),
+                                           onRetry: (index == model.flow.count - 1 && !model.busy && PythiaChatModel.isRetryableError(message.text))
+                                               ? { model.retryLastTurn() } : nil)
                             case .toolGroup(let group):
                                 ToolGroupView(group: group,
                                               level: level,
@@ -2635,6 +2670,9 @@ private struct MessageRow: View {
     var plain = false
     var queued = false
     var rebased = false
+    /// Non-nil when this message is a transient failure (server overload / rate
+    /// limit) and the reader may re-issue the turn in one click.
+    var onRetry: (() -> Void)? = nil
     @State private var showThinking = false
     /// Lifts a degraded (compact/micro) message back to full markdown on demand,
     /// so the decay law never makes a far-past answer unreadable.
@@ -2693,9 +2731,30 @@ private struct MessageRow: View {
             bodyText
                 .padding(.vertical, 2)
                 .padding(.leading, 4)
+            if let onRetry {
+                retryButton(onRetry)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .transition(.opacity.combined(with: .move(edge: .bottom)))
+    }
+
+    /// A quiet "Continue" affordance offered for a transient failure (server
+    /// overload / rate limit). Retrying is a re-issue, not a new prompt — the
+    /// user's word is already in the conduit.
+    private func retryButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label("Continue", systemImage: "arrow.clockwise")
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(palette.accentColor.opacity(0.12), in: Capsule())
+                .overlay(Capsule().strokeBorder(palette.accentColor.opacity(0.3), lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(palette.accentColor)
+        .padding(.leading, 4)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     /// The message body at the row's compaction level. The live edge renders full
