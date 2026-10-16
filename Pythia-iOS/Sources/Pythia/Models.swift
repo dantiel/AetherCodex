@@ -13,15 +13,20 @@ public struct ChatMessage: Identifiable, Equatable, Codable {
     public var reasoning: String? = nil
     /// Non-empty when a companion speaks through Pythia's turn; nil = Pythia's voice.
     public var speakerName: String? = nil
+    /// The companion this turn was addressed to ("pythia" default) — lets the
+    /// per-voice history be rebuilt after an edit/reload/delete truncates the stream.
+    public var companionID: String? = nil
 
     public init(id: UUID = UUID(), role: String, text: String, glyph: String,
-                reasoning: String? = nil, speakerName: String? = nil) {
+                reasoning: String? = nil, speakerName: String? = nil,
+                companionID: String? = nil) {
         self.id = id
         self.role = role
         self.text = text
         self.glyph = glyph
         self.reasoning = reasoning
         self.speakerName = speakerName
+        self.companionID = companionID
     }
 }
 

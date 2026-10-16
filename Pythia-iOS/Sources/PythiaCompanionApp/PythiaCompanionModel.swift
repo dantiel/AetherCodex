@@ -26,9 +26,6 @@ final class PythiaCompanionModel: ObservableObject {
     /// answers in the active companion's persona when `autoSpeak` is on.
     let voice = PythiaVoice()
 
-    /// Per-voice multi-turn memory — mirrors the Mac's `companionHistories`.
-    private var histories: [String: [[String: String]]] = [:]
-
     /// Bonjour discovery — finds the Mac on the LAN without an IP address.
     private let bonjour = AetherBonjour()
 
@@ -93,30 +90,68 @@ final class PythiaCompanionModel: ObservableObject {
         return OracleClient(host: peer.host, port: peer.port)
     }
 
+    /// The most recent user prompt — the only prompt that may be *changed*
+    /// (edit loads it into the input bar; older prompts may only be forked).
+    var lastUserPromptID: UUID? {
+        messages.last(where: { $0.role == "user" })?.id
+    }
+
     func send() async {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !busy, let client else { return }
         draft = ""
         errorText = nil
+        let user = ChatMessage(role: "user", text: text, glyph: "✦", companionID: companionID)
+        messages.append(user)
+        await runTurn(prompt: text, user: user, client: client)
+    }
 
-        messages.append(ChatMessage(role: "user", text: text, glyph: "✦"))
+    /// Edit the last prompt: load its text into the input bar and withdraw the
+    /// last exchange (the prompt and its answer) so re-sending replaces it.
+    func editLastPrompt() {
+        guard !busy, let last = messages.last(where: { $0.role == "user" }) else { return }
+        draft = last.text
+        deletePrompt(last)
+    }
+
+    /// Fork at a prompt: keep it, drop everything after (its answer and any
+    /// later turns), then re-issue the prompt to regenerate the answer.
+    func regenerate(_ message: ChatMessage) async {
+        guard !busy, message.role == "user", let client else { return }
+        if let idx = messages.firstIndex(where: { $0.id == message.id }) {
+            messages.removeSubrange((idx + 1)...)
+        }
+        await runTurn(prompt: message.text, user: message, client: client)
+    }
+
+    /// Delete a prompt and everything after it — truncate the thread back to
+    /// just before this prompt.
+    func deletePrompt(_ message: ChatMessage) {
+        guard !busy, message.role == "user",
+              let idx = messages.firstIndex(where: { $0.id == message.id }) else { return }
+        messages.removeSubrange(idx...)
+    }
+
+    /// Run one oracle turn. `user` is already (or still) in `messages`; history
+    /// is derived from the stream strictly *before* it, then the prompt is
+    /// appended — so edit/reload/delete stay in lockstep with the wire memory.
+    private func runTurn(prompt: String, user: ChatMessage, client: OracleClient) async {
         busy = true
         defer { busy = false }
-
         do {
-            var history = histories[companionID] ?? []
-            history.append(["role": "user", "content": text])
+            let history = historyForCurrentCompanion(before: user.id)
+            let fullHistory = history + [["role": "user", "content": prompt]]
             let answer = try await client.invoke(
-                prompt: text,
+                prompt: prompt,
                 companion: companionID,
-                history: history
+                history: fullHistory
             )
-            histories[companionID] = history + [["role": "assistant", "content": answer.answer]]
             messages.append(ChatMessage(
                 role: "assistant",
                 text: answer.answer,
                 glyph: activeCompanion.glyph,
-                speakerName: companionID == "pythia" ? nil : activeCompanion.displayName
+                speakerName: companionID == "pythia" ? nil : activeCompanion.displayName,
+                companionID: companionID
             ))
             if voice.autoSpeak {
                 voice.speak(answer.answer, persona: activeCompanion.voicePersona)
@@ -124,5 +159,17 @@ final class PythiaCompanionModel: ObservableObject {
         } catch {
             errorText = error.localizedDescription
         }
+    }
+
+    /// The active companion's memory, in stream order, stopping just before the
+    /// given message — the turns that precede the prompt being (re-)issued.
+    private func historyForCurrentCompanion(before id: UUID) -> [[String: String]] {
+        var history: [[String: String]] = []
+        for message in messages {
+            if message.id == id { break }
+            guard (message.companionID ?? "pythia") == companionID else { continue }
+            history.append(["role": message.role, "content": message.text])
+        }
+        return history
     }
 }

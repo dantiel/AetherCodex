@@ -4,16 +4,21 @@ import Pythia
 /// One message: user → trailing bubble; companion → glyph + name; Pythia → base flow.
 struct MessageRow: View {
     let message: ChatMessage
+    var isLastUserPrompt: Bool = false
     var onReplay: (() -> Void)? = nil
+    var onEdit: (() -> Void)? = nil
+    var onRegenerate: (() -> Void)? = nil
+    var onDelete: (() -> Void)? = nil
 
     var body: some View {
         if message.role == "user" {
-            HStack {
-                Spacer()
+            VStack(alignment: .trailing, spacing: 4) {
                 Text(message.text)
                     .padding(12)
                     .background(AetherPalette.accent.opacity(0.18), in: RoundedRectangle(cornerRadius: 16))
+                userMarkers
             }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         } else if let name = message.speakerName {
             HStack(alignment: .top, spacing: 10) {
                 Text(message.glyph).font(.title3)
@@ -52,6 +57,35 @@ struct MessageRow: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    /// The three markers on the user's own prompt: edit (only the last prompt is
+    /// *changeable*), reload (regenerate that turn), and delete (truncate here).
+    @ViewBuilder
+    private var userMarkers: some View {
+        if onEdit != nil || onRegenerate != nil || onDelete != nil {
+            HStack(spacing: 14) {
+                if isLastUserPrompt, let onEdit {
+                    marker("pencil", action: onEdit)
+                }
+                if let onRegenerate {
+                    marker("arrow.clockwise", action: onRegenerate)
+                }
+                if let onDelete {
+                    marker("trash", action: onDelete)
+                }
+            }
+            .padding(.trailing, 4)
+        }
+    }
+
+    private func marker(_ systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
     }
 }
 

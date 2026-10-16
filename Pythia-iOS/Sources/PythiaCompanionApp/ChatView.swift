@@ -16,9 +16,16 @@ struct ChatView: View {
                         ForEach(model.messages) { message in
                             MessageRow(
                                 message: message,
+                                isLastUserPrompt: message.id == model.lastUserPromptID,
                                 onReplay: message.role == "assistant"
                                     ? { model.voice.speak(message.text, persona: model.activeCompanion.voicePersona) }
-                                    : nil
+                                    : nil,
+                                onEdit: message.role == "user" && message.id == model.lastUserPromptID
+                                    ? { model.editLastPrompt() } : nil,
+                                onRegenerate: message.role == "user"
+                                    ? { regenerate(message) } : nil,
+                                onDelete: message.role == "user"
+                                    ? { model.deletePrompt(message) } : nil
                             )
                             .id(message.id)
                         }
@@ -43,6 +50,10 @@ struct ChatView: View {
             inputBar
         }
         .background(AetherPalette.surface)
+    }
+
+    private func regenerate(_ message: ChatMessage) {
+        Task { await model.regenerate(message) }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy) {
