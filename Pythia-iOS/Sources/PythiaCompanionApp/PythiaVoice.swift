@@ -7,14 +7,21 @@ import Pythia
 /// voices: premium-quality synthesis, per-companion personas, language-matching,
 /// and sentence-level enqueuing so the first words arrive before the answer
 /// finishes thinking itself into text.
+/// How the oracle's voice is rendered. `.natural` is the plain synthesizer;
+/// `.aetheric` is the priestess voice — presence and æther at once.
+enum VoiceMode: Equatable { case natural, aetheric }
+
 @MainActor
 final class PythiaVoice: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate {
     enum State: Equatable { case idle, speaking }
 
     @Published private(set) var state: State = .idle
     @Published var autoSpeak = false
+    /// The priestess speaks ætheric by default — close *and* from the internet.
+    @Published var mode: VoiceMode = .aetheric
 
     private let synthesizer = AVSpeechSynthesizer()
+    private let aetheric = AethericVoiceRenderer()
     private var pendingCount = 0
 
     override init() {
@@ -34,24 +41,34 @@ final class PythiaVoice: NSObject, ObservableObject, @preconcurrency AVSpeechSyn
         stop()
         let language = Self.dominantLanguage(of: clean) ?? Locale.current.language.languageCode?.identifier ?? "en-US"
         let voice = Self.bestVoice(for: language, persona: persona)
-        let sentences = Self.sentences(in: clean)
 
-        for sentence in sentences {
-            let utterance = AVSpeechUtterance(string: sentence)
-            utterance.voice = voice
-            utterance.pitchMultiplier = persona.pitch
-            utterance.rate = persona.rate
-            utterance.volume = persona.volume
-            utterance.preUtteranceDelay = 0.02
-            utterance.postUtteranceDelay = 0.08
-            synthesizer.speak(utterance)
+        switch mode {
+        case .natural:
+            let sentences = Self.sentences(in: clean)
+            for sentence in sentences {
+                let utterance = AVSpeechUtterance(string: sentence)
+                utterance.voice = voice
+                utterance.pitchMultiplier = persona.pitch
+                utterance.rate = persona.rate
+                utterance.volume = persona.volume
+                utterance.preUtteranceDelay = 0.02
+                utterance.postUtteranceDelay = 0.08
+                synthesizer.speak(utterance)
+            }
+            pendingCount = sentences.count
+            state = .speaking
+
+        case .aetheric:
+            state = .speaking
+            aetheric.speak(clean, voice: voice, persona: persona) { [weak self] in
+                self?.state = .idle
+            }
         }
-        pendingCount = sentences.count
-        state = .speaking
     }
 
     func stop() {
         synthesizer.stopSpeaking(at: .immediate)
+        aetheric.stop()
         pendingCount = 0
         state = .idle
     }

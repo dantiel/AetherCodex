@@ -86,6 +86,13 @@ struct ChatView: View {
             )
 
             Button {
+                model.voice.mode = model.voice.mode == .aetheric ? .natural : .aetheric
+            } label: {
+                Image(systemName: model.voice.mode == .aetheric ? "sparkles" : "waveform")
+                    .foregroundStyle(model.voice.mode == .aetheric ? AetherPalette.accent : Color.secondary)
+            }
+
+            Button {
                 model.voice.autoSpeak.toggle()
                 if model.voice.autoSpeak {
                     model.voice.speak(
