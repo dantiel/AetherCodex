@@ -36,6 +36,7 @@ hermetic.manifest.md
 *.xcworkspace/
 xcuserdata/
 DerivedData/
+Pythia-iOS/build/
 
 # ---------------------------------------------------------------------------
 # App bundle

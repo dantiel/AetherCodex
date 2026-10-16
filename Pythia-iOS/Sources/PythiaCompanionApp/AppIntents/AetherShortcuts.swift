@@ -6,9 +6,9 @@ struct AetherShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: AskPythiaIntent(),
             phrases: [
-                "Ask Pythia \(\.$prompt)",
-                "Ask the oracle \(\.$prompt)",
-                "\(\.$prompt)"
+                "Ask Pythia ${applicationName} \\(\\.$prompt)",
+                "Ask the oracle ${applicationName} \\(\\.$prompt)",
+                "${applicationName} \\(\\.$prompt)"
             ],
             shortTitle: "Ask Pythia",
             systemImageName: "sparkles"
