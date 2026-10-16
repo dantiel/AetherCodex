@@ -4,6 +4,7 @@ import Pythia
 /// One message: user → trailing bubble; companion → glyph + name; Pythia → base flow.
 struct MessageRow: View {
     let message: ChatMessage
+    var onReplay: (() -> Void)? = nil
 
     var body: some View {
         if message.role == "user" {
@@ -21,6 +22,7 @@ struct MessageRow: View {
                     MarkdownText(text: message.text)
                 }
                 Spacer()
+                replayButton
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
@@ -31,8 +33,24 @@ struct MessageRow: View {
                         .padding(8)
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
                 }
-                MarkdownText(text: message.text)
+                HStack(alignment: .top, spacing: 8) {
+                    MarkdownText(text: message.text)
+                    Spacer(minLength: 0)
+                    replayButton
+                }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var replayButton: some View {
+        if let onReplay {
+            Button(action: onReplay) {
+                Image(systemName: "speaker.wave.2")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
         }
     }
 }

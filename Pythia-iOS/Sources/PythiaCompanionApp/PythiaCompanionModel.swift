@@ -22,6 +22,10 @@ final class PythiaCompanionModel: ObservableObject {
     @Published var errorText: String?
     @Published var draft: String = ""
 
+    /// The oracle's audible voice — a premium-tuned speech engine that speaks
+    /// answers in the active companion's persona when `autoSpeak` is on.
+    let voice = PythiaVoice()
+
     /// Per-voice multi-turn memory — mirrors the Mac's `companionHistories`.
     private var histories: [String: [[String: String]]] = [:]
 
@@ -82,6 +86,9 @@ final class PythiaCompanionModel: ObservableObject {
                 glyph: activeCompanion.glyph,
                 speakerName: companionID == "pythia" ? nil : activeCompanion.displayName
             ))
+            if voice.autoSpeak {
+                voice.speak(answer.answer, persona: activeCompanion.voicePersona)
+            }
         } catch {
             errorText = error.localizedDescription
         }

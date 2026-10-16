@@ -14,8 +14,13 @@ struct ChatView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 16) {
                         ForEach(model.messages) { message in
-                            MessageRow(message: message)
-                                .id(message.id)
+                            MessageRow(
+                                message: message,
+                                onReplay: message.role == "assistant"
+                                    ? { model.voice.speak(message.text, persona: model.activeCompanion.voicePersona) }
+                                    : nil
+                            )
+                            .id(message.id)
                         }
                         if model.busy {
                             HStack(spacing: 6) {
@@ -74,6 +79,26 @@ struct ChatView: View {
             }
 
             Spacer()
+
+            VoiceBreathView(
+                speaking: model.voice.state == .speaking,
+                glyph: model.activeCompanion.glyph
+            )
+
+            Button {
+                model.voice.autoSpeak.toggle()
+                if model.voice.autoSpeak {
+                    model.voice.speak(
+                        "I am listening.",
+                        persona: model.activeCompanion.voicePersona
+                    )
+                } else {
+                    model.voice.stop()
+                }
+            } label: {
+                Image(systemName: model.voice.autoSpeak ? "speaker.wave.3.fill" : "speaker.slash")
+                    .foregroundStyle(model.voice.autoSpeak ? AetherPalette.accent : Color.secondary)
+            }
 
             Button {
                 model.disconnect()
