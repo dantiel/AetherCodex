@@ -1,7 +1,8 @@
 import SwiftUI
 import Pythia
 
-/// First face — discover the Mac's daemon by LAN address, or pick a live peer.
+/// First face — auto-discover the Mac's daemon over Bonjour, or fall back to a
+/// manual LAN address. The æther finds itself: no IP, no typing, just presence.
 struct ConnectionView: View {
     @ObservedObject var model: PythiaCompanionModel
 
@@ -21,17 +22,35 @@ struct ConnectionView: View {
                 .foregroundStyle(.secondary)
 
             VStack(spacing: 12) {
+                // Auto-discovery: browse Bonjour, no host required.
+                Button {
+                    Task { await model.autoDiscover() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if model.connection == .discovering {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                        }
+                        Text(model.connection == .discovering ? "Searching the æther…" : "Find my Mac")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.connection == .discovering)
+
+                // Manual fallback: probe one explicit host across the port range.
                 HStack {
-                    TextField("Mac address (e.g. 192.168.1.10)", text: $model.host)
+                    TextField("…or Mac address (192.168.1.10)", text: $model.host)
                         .autocorrectionDisabled()
                         .textFieldStyle(.roundedBorder)
                     #if os(iOS)
                         .textInputAutocapitalization(.never)
                     #endif
-                    Button(model.connection == .discovering ? "…" : "Scan") {
+                    Button("Scan") {
                         Task { await model.discover() }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     .disabled(model.host.isEmpty || model.connection == .discovering)
                 }
 
@@ -71,5 +90,10 @@ struct ConnectionView: View {
             Spacer()
         }
         .padding()
+        .onAppear {
+            if case .disconnected = model.connection {
+                Task { await model.autoDiscover() }
+            }
+        }
     }
 }

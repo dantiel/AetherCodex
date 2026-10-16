@@ -29,10 +29,14 @@ final class PythiaCompanionModel: ObservableObject {
     /// Per-voice multi-turn memory — mirrors the Mac's `companionHistories`.
     private var histories: [String: [[String: String]]] = [:]
 
+    /// Bonjour discovery — finds the Mac on the LAN without an IP address.
+    private let bonjour = AetherBonjour()
+
     var activeCompanion: Companion {
         pythiaCompanions.first { $0.id == companionID } ?? pythiaCompanions[0]
     }
 
+    /// Manual scan: probe the daemon port range on one explicit host.
     func discover() async {
         connection = .discovering
         errorText = nil
@@ -43,6 +47,34 @@ final class PythiaCompanionModel: ObservableObject {
         } else {
             connection = .disconnected
             errorText = "No context answers on \(host). Is the Mac's daemon running?"
+        }
+    }
+
+    /// Auto-discovery: browse `_aethercodex._tcp` via Bonjour and connect to the
+    /// first Mac that answers — no IP required. Polls the resolver for a short
+    /// window, then falls back to disconnected with a hint.
+    func autoDiscover() async {
+        guard !bonjour.isSearching else { return }
+        connection = .discovering
+        errorText = nil
+        peers = []
+        bonjour.search()
+
+        for _ in 0..<20 {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if let first = bonjour.peers.first {
+                peers = bonjour.peers
+                connection = .connected(first)
+                OracleConnectionStore.shared.save(host: first.host, port: first.port)
+                bonjour.stop()
+                return
+            }
+        }
+
+        bonjour.stop()
+        if case .discovering = connection {
+            connection = .disconnected
+            errorText = "No Mac found. Is AetherCodex running on this Wi-Fi?"
         }
     }
 
