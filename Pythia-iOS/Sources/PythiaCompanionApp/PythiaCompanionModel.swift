@@ -21,6 +21,9 @@ final class PythiaCompanionModel: ObservableObject {
     @Published var busy = false
     @Published var errorText: String?
     @Published var draft: String = ""
+    /// A live `ask_user` consultation broadcast by the daemon — surfaced as a
+    /// native dialog so the user can answer from the phone, not just the Mac.
+    @Published var pendingQuestion: PendingQuestion?
 
     /// The oracle's audible voice — a premium-tuned speech engine that speaks
     /// answers in the active companion's persona when `autoSpeak` is on.
@@ -28,6 +31,9 @@ final class PythiaCompanionModel: ObservableObject {
 
     /// Bonjour discovery — finds the Mac on the LAN without an IP address.
     private let bonjour = AetherBonjour()
+
+    /// Polls `/aether/pending` while a turn runs so `ask_user` reaches the phone.
+    private var questionPoller: Task<Void, Never>?
 
     var activeCompanion: Companion {
         pythiaCompanions.first { $0.id == companionID } ?? pythiaCompanions[0]
@@ -137,7 +143,17 @@ final class PythiaCompanionModel: ObservableObject {
     /// appended — so edit/reload/delete stay in lockstep with the wire memory.
     private func runTurn(prompt: String, user: ChatMessage, client: OracleClient) async {
         busy = true
-        defer { busy = false }
+        defer {
+            busy = false
+            pendingQuestion = nil
+            questionPoller?.cancel()
+            questionPoller = nil
+        }
+        // While the turn runs, poll the daemon for an `ask_user` consultation so
+        // the phone can answer it the instant it is raised — not only on the Mac.
+        questionPoller = Task { [weak self] in
+            await self?.pollForQuestion(client: client)
+        }
         do {
             let history = historyForCurrentCompanion(before: user.id)
             let fullHistory = history + [["role": "user", "content": prompt]]
@@ -158,6 +174,25 @@ final class PythiaCompanionModel: ObservableObject {
             }
         } catch {
             errorText = error.localizedDescription
+        }
+    }
+
+    /// Answer the agent's `ask_user` consultation, unblocking the paused turn.
+    func respond(to question: PendingQuestion, answer: String) {
+        guard let client else { return }
+        pendingQuestion = nil
+        Task {
+            _ = try? await client.respond(uuid: question.uuid, response: answer)
+        }
+    }
+
+    /// Poll `/aether/pending` while the turn runs and surface the first question.
+    private func pollForQuestion(client: OracleClient) async {
+        while !Task.isCancelled {
+            if pendingQuestion == nil, let question = try? await client.pendingQuestions().first {
+                if !Task.isCancelled { pendingQuestion = question }
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
     }
 

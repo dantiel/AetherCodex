@@ -50,6 +50,11 @@ struct ChatView: View {
             inputBar
         }
         .background(AetherPalette.surface)
+        .sheet(item: $model.pendingQuestion) { question in
+            AskUserSheet(question: question) { answer in
+                model.respond(to: question, answer: answer)
+            }
+        }
     }
 
     private func regenerate(_ message: ChatMessage) {

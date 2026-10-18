@@ -84,6 +84,36 @@ public struct OracleClient {
         return json["ok"] as? Bool ?? false
     }
 
+    // MARK: User interaction (ask_user)
+
+    /// Poll the daemon for a pending `ask_user` consultation raised mid-turn.
+    public func pendingQuestions() async throws -> [PendingQuestion] {
+        let (data, _) = try await URLSession.shared.data(from: baseURL.appendingPathComponent("/aether/pending"))
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        let raw = json["questions"] as? [[String: Any]] ?? []
+        return raw.compactMap { q in
+            guard let uuid = q["uuid"] as? String else { return nil }
+            return PendingQuestion(
+                uuid: uuid,
+                type: q["type"] as? String ?? "prompt",
+                message: q["message"] as? String ?? "",
+                options: q["options"] as? [String] ?? []
+            )
+        }
+    }
+
+    /// Answer a pending `ask_user` consultation, unblocking the paused turn.
+    public func respond(uuid: String, response: String) async throws -> Bool {
+        let payload: [String: Any] = ["uuid": uuid, "response": response]
+        var request = URLRequest(url: baseURL.appendingPathComponent("/aether/respond"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+        return json["ok"] as? Bool ?? false
+    }
+
     // MARK: Aegis
 
     public func aegis() async throws -> AegisState {

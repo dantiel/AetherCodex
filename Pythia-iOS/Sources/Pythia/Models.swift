@@ -99,6 +99,24 @@ public struct PeerContext: Identifiable, Hashable {
     }
 }
 
+/// A pending `ask_user` consultation raised by the agent mid-turn. The iOS
+/// companion polls `/aether/pending` while a turn runs and surfaces it as a
+/// native dialog; answering posts `/aether/respond` to unblock the turn.
+public struct PendingQuestion: Identifiable, Equatable {
+    public var id: String { uuid }
+    public let uuid: String
+    public let type: String      // confirm | select | prompt
+    public let message: String
+    public let options: [String]
+
+    public init(uuid: String, type: String, message: String, options: [String]) {
+        self.uuid = uuid
+        self.type = type
+        self.message = message
+        self.options = options
+    }
+}
+
 /// `POST /aether/invoke` (type == "chat") response.
 public struct OracleAnswer: Codable {
     public let answer: String

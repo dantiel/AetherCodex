@@ -1351,6 +1351,14 @@ final class PythiaChatModel: ObservableObject {
             let name = (data["tool"] ?? data["name"]) as? String ?? ""
             if name == "run_command" || name == "aegis" { break }  // aegis shown via aegis_unveiled
             completeTool(toolId: toolId, output: instrumentaStringify(data["result"]))
+        case "user_message", "user_prompt":
+            // The iOS companion sent its prompt through the shared æther — render
+            // it as a user turn so the Mac panel shows the whole conversation, not
+            // just the tool telemetry that followed.
+            let content = (data["content"] ?? data["message"]) as? String ?? ""
+            if !content.isEmpty {
+                appendMessage(ChatMessage(role: "user", text: content, glyph: "✦"))
+            }
         case "oracle_revelation":
             // The oracle's spoken narration is a genuine assistant turn — preserve
             // it as a permanent message instead of a transient streaming bubble

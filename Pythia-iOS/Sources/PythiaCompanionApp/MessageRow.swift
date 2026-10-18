@@ -102,7 +102,7 @@ struct MarkdownText: View {
     private var attributed: AttributedString {
         (try? AttributedString(
             markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+            options: .init(interpretedSyntax: .full)
         )) ?? AttributedString(text)
     }
 }
