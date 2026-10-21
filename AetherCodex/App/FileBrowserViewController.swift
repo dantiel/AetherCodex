@@ -364,7 +364,7 @@ final class FileBrowserViewController: NSViewController {
             scrollModel.goToFile = { [weak self] in
                 guard let self, let root = self.scrollModel.root?.url else { return }
                 let opener = self.scrollModel.open
-                GoToFilePanel.show(projectRoot: root, onSelect: opener)
+                AppScene.shared.showGoToFile(projectRoot: root, onSelect: opener)
             }
             let host = NSHostingView(rootView: FileBrowserScrollContent(model: scrollModel, chrome: chrome))
             host.translatesAutoresizingMaskIntoConstraints = false

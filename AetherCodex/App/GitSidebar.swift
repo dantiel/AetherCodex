@@ -39,7 +39,7 @@ enum GitCommand {
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
-        process.environment = ProcessInfo.processInfo.environment.merging(["GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"]) { _, new in new }
+        process.environment = EnvironmentSettings.shared.mergedEnvironment.merging(["GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"]) { _, new in new }
         try process.run()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()

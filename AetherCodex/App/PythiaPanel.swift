@@ -1821,7 +1821,7 @@ struct PythiaPanel: View {
     /// — hidden chrome, revealed only when a project context breathes.
     private var debugGlyphButton: some View {
         Button {
-            AetherDebugWindowController.shared.toggle()
+            AppScene.shared.toggleDebugLog()
         } label: {
             Image(systemName: "antenna.radiowaves.left.and.right")
                 .font(.system(size: 10, weight: .semibold))
@@ -1914,7 +1914,7 @@ private struct ContextPill: View {
 
     var body: some View {
         Button {
-            ProjectSettingsViewController.open(contextTab: true)
+            AppScene.shared.openProjectSettings(contextTab: true)
         } label: {
             HStack(spacing: 5) {
                 Text("◈")

@@ -19,5 +19,8 @@ struct WindowBackdrop: NSViewRepresentable {
         view.blendingMode = .behindWindow
         view.state = .active
         view.material = glassMaterial(for: strength)
+        // No corner radius here: `.behindWindow` glass is composited by the
+        // window server into the window's own rounded frame, so masking it with a
+        // second radius would double the corner against the server's native arc.
     }
 }

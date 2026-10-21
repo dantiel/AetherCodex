@@ -422,7 +422,7 @@ struct AegisWidgetView: View {
 
     private var detachButton: some View {
         Button {
-            AegisWidgetController.shared.toggle()
+            AppScene.shared.toggleAegisWidget()
         } label: {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
                 .font(.system(size: 10, weight: .medium))
@@ -750,54 +750,18 @@ private struct AegisSection<Content: View>: View {
     }
 }
 
-// MARK: - Detached window
 
-/// The Aegis widget lifted out of Pythia into its own small SwiftUI-native
-/// floating window — a familiar that follows the editor without stealing focus.
-final class AegisWidgetController: NSWindowController, NSWindowDelegate {
+// MARK: - Detached scene
 
-    static let shared = AegisWidgetController()
-
-    private var panel: NSWindow?
-
-    private init() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 460),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Aegis"
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.isMovableByWindowBackground = true
-        window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 320, height: 240)
-        window.contentView = NSHostingView(rootView: DetachedAegisWidgetView(model: .shared))
-        window.center()
-        self.panel = window
-        super.init(window: window)
-        window.delegate = self
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    /// Show or hide the floating panel. `orderOut` (not close) keeps the
-    /// controller warm for an instant re-show.
-    func toggle() {
-        guard let panel else { return }
-        if panel.isVisible {
-            panel.orderOut(nil)
-        } else {
-            panel.orderFrontRegardless()
-        }
-    }
-
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
-        return false
-    }
+/// The Aegis widget lifted out of Pythia into a window of its own — a familiar
+/// that follows the editor without stealing focus.
+///
+/// The `NSWindow` this replaced declared its own floating level, hidden
+/// titlebar, minimum size and background dragging; all four are stated on the
+/// scene in `AetherCodexApp.body` now, so nothing about the window is assembled
+/// in code.
+struct AegisWidgetScene: View {
+    var body: some View { DetachedAegisWidgetView(model: .shared) }
 }
 
 // MARK: - Detached content
@@ -833,7 +797,7 @@ private struct DetachedAegisWidgetView: View {
                     .scaleEffect(0.6)
             }
             Button {
-                AegisWidgetController.shared.toggle()
+                AppScene.shared.toggleAegisWidget()
             } label: {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .medium))

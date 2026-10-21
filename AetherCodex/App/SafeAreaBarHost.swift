@@ -98,6 +98,14 @@ final class EditorChromeState: ObservableObject {
     var openDocument: ((URL) -> Void)?
     /// Switch the sidebar pane (drives SidebarContainer.selectTab).
     var onSidebarTabSelected: ((String) -> Void)?
+    /// Toggle the sidebar through the controller's guarded path — the same one
+    /// ⌘1 takes. The SwiftUI toggle buttons must not mutate `sidebarVisible`
+    /// directly, or the AppKit pane container's collapsed state drifts and the
+    /// sheet can reopen empty (content hidden while the band expands).
+    var onToggleSidebar: (() -> Void)?
+    /// Open/toggle Pythia through the controller's guarded path (⌘2). Keeps the
+    /// animation guard + session save consistent with the menu entry.
+    var onTogglePythia: (() -> Void)?
     
     init(sidebarTabs: [SidebarTab] = []) {
         self.sidebarTabs = sidebarTabs
@@ -261,6 +269,19 @@ struct EditorContainerView: View {
         return gutterWidth
     }
 
+    /// The active document's incremental-search model — `nil` whenever the
+    /// visible surface owns no searchable text (entity/diff tabs, image, HTML,
+    /// rich-text previews), so the bottom dock is only mounted where Ctrl+S
+    /// actually searches something. Read, never observed: see `pythiaModel`.
+    private var activeQuickSearch: QuickSearchModel? {
+        guard tabs.activeEntityTabId == nil, tabs.activeDiffTabId == nil,
+              let controller = tabs.activeTab?.controller,
+              !controller.richDocument.active,
+              !controller.imagePreview.isActive,
+              !controller.htmlPreview.isActive else { return nil }
+        return controller.quickSearch
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let widths = EditorPanelWidths(available: geometry.size.width,
@@ -302,76 +323,111 @@ struct EditorContainerView: View {
                 }
             }
             .ignoresSafeArea(.container, edges: [.top, .leading, .trailing])
+            .safeAreaBar(edge: .bottom, spacing: 0) {
+                // Status strip + the docked quick-search bar. Declared *first*
+                // (innermost) so its band spans only the code column: the leading
+                // sidebar and trailing inspector are outer bars that run the full
+                // window height and cover this band's left/right flanks. Declared
+                // last, the full-width band forced both sidebars to stop above it,
+                // leaving the window short of its bottom edge.
+                EditorBottomBar(
+                    quickSearch: activeQuickSearch,
+                    status: tabs.status,
+                    theme: chrome.theme
+                )
+            }
             .safeAreaBar(edge: .leading, spacing: 0) {
-                if chrome.sidebarVisible {
-                    ZStack(alignment: .trailing) {
-                        Rectangle().fill(.ultraThinMaterial)
-                            .overlay(Color(nsColor: chrome.theme.rulerBackground.withAlphaComponent(1)).opacity(0.86))
-                        GeometryReader { bounds in
-                            let sheet = SidebarSheetGeometry.frame(in: bounds.size)
-                            AppKitViewHost { sidebar }
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                // Full sheet height — the floating tab bar is *not*
-                                // declared here. Each pane docks it in its own
-                                // SwiftUI graph (`sidebarTabBar`), the only place the
-                                // scroller hears of the bar: there it insets its
-                                // content and the compositor ramps the soft blur
-                                // across the whole band. Declared on the AppKit
-                                // bridge, the bar is invisible to the panes and only
-                                // a few pixels ever blur.
-                                .ignoresSafeArea(.container, edges: .bottom)
-                                .frame(width: sheet.width, height: sheet.height)
-                                .background {
-                                    Rectangle().fill(chrome.theme.sidebarMaterial)
-                                        .overlay(Color(nsColor: chrome.theme.sidebarBackground ?? chrome.theme.rulerBackground)
-                                            .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme)))
-                                }
-                                .clipShape(.rect(cornerRadius: 18))
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 18)
-                                        .strokeBorder(.white.opacity(0.16), lineWidth: 0.75)
-                                }
-                                .shadow(color: .black.opacity(0.12), radius: 7, y: 2)
-                                .position(x: sheet.midX, y: sheet.midY)
-                        }
-
-                        // Breadcrumb (address bar) + sidebar toggle, living inside
-                        // the sheet between the traffic lights and its trailing edge.
-                        VStack(spacing: 0) {
-                            HStack(spacing: 6) {
-                                // The breadcrumb trail is gone — the sidebar now
-                                // speaks the opened folder's name only. One line,
-                                // one truth: the project the window breathes in.
-                                Text(chrome.currentFolder?.lastPathComponent ?? "Kein Ordner")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                SidebarToggleButton(chrome: chrome)
-                            }
-                            .padding(.leading, 100)
-                            .padding(.trailing, 16)
-                            Spacer(minLength: 0)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .padding(.top, 18)
-
-                        SidebarResizeHandle(width: Binding(
-                            get: { widths.leading - SidebarSheetGeometry.horizontalInsets },
-                            set: { chrome.sidebarWidth = $0 }),
-                            limits: 180...widths.sidebarMaximum, direction: 1) {
-                                SessionState.shared.sidebarWidth = Double($0)
-                            }
-                            .frame(width: SidebarSheetGeometry.resizeStripWidth)
-                            .frame(maxHeight: .infinity)
-                            .contentShape(Rectangle())
-                            .zIndex(10)
+                // The sidebar is *always mounted*, exactly like the trailing
+                // inspector — collapsed to width 0 instead of being removed from
+                // the hierarchy. Conditionally mounting it made macOS 26 re-tile
+                // the bar bands on every toggle; that re-tile is what flipped the
+                // sibling inspector around (filebrowser "opening on its own" while
+                // Pythia closes — the bars fought over the same layout pass).
+                // Collapsing preserves state and keeps both panels independent.
+                ZStack(alignment: .trailing) {
+                    // Continue the gutter through the sheet's shadow margin.
+                    // Split off the bottom band rather than stacking two
+                    // materials: its paint must match the adjacent status bar.
+                    VStack(spacing: 0) {
+                        EditorChromeSurface(color: chrome.theme.rulerBackground)
+                        EditorStatusSurface(theme: chrome.theme)
+                            .frame(height: EditorChromeMetrics.statusBarHeight)
                     }
-                    .frame(width: widths.leading)
-                    .frame(maxHeight: .infinity)
-                    .ignoresSafeArea(.container, edges: .top)
+                    .allowsHitTesting(false)
+                    GeometryReader { bounds in
+                        let sheet = SidebarSheetGeometry.frame(in: bounds.size)
+                        AppKitViewHost { sidebar }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            // Full sheet height — the floating tab bar is *not*
+                            // declared here. Each pane docks it in its own
+                            // SwiftUI graph (`sidebarTabBar`), the only place the
+                            // scroller hears of the bar: there it insets its
+                            // content and the compositor ramps the soft blur
+                            // across the whole band. Declared on the AppKit
+                            // bridge, the bar is invisible to the panes and only
+                            // a few pixels ever blur.
+                            .ignoresSafeArea(.container, edges: .bottom)
+                            .frame(width: sheet.width, height: sheet.height)
+                            .background {
+                                Rectangle().fill(chrome.theme.sidebarMaterial)
+                                    .overlay(Color(nsColor: chrome.theme.sidebarBackground ?? chrome.theme.rulerBackground)
+                                        .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme)))
+                            }
+                            // Round all four corners: the sheet is a complete
+                            // floating card on every edge, so its right side keeps
+                            // the same arc as the left instead of docking square.
+                            .clipShape(RoundedRectangle(
+                                cornerRadius: SidebarSheetGeometry.sheetCornerRadius,
+                                style: .continuous))
+                            .overlay {
+                                RoundedRectangle(
+                                    cornerRadius: SidebarSheetGeometry.sheetCornerRadius,
+                                    style: .continuous)
+                                    .strokeBorder(.white.opacity(0.16), lineWidth: 0.75)
+                            }
+                            .shadow(color: .black.opacity(0.12), radius: 7, y: 2)
+                            .position(x: sheet.midX, y: sheet.midY)
+                    }
+
+                    // Breadcrumb (address bar) + sidebar toggle, living inside
+                    // the sheet between the traffic lights and its trailing edge.
+                    VStack(spacing: 0) {
+                        HStack(spacing: 6) {
+                            // The breadcrumb trail is gone — the sidebar now
+                            // speaks the opened folder's name only. One line,
+                            // one truth: the project the window breathes in.
+                            Text(chrome.currentFolder?.lastPathComponent ?? "Kein Ordner")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            SidebarToggleButton(chrome: chrome)
+                        }
+                        .padding(.leading, 100)
+                        .padding(.trailing, 16)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(.top, 18)
+
+                    SidebarResizeHandle(width: Binding(
+                        get: { widths.leading - SidebarSheetGeometry.horizontalInsets },
+                        set: { chrome.sidebarWidth = $0 }),
+                        limits: 180...widths.sidebarMaximum, direction: 1) {
+                            SessionState.shared.sidebarWidth = Double($0)
+                        }
+                        .frame(width: SidebarSheetGeometry.resizeStripWidth)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .zIndex(10)
                 }
+                .frame(width: chrome.sidebarVisible ? max(widths.leading, 1) : 0)
+                .frame(maxHeight: .infinity)
+                .clipped()
+                .opacity(chrome.sidebarVisible ? 1 : 0)
+                .allowsHitTesting(chrome.sidebarVisible)
+                .ignoresSafeArea(.container, edges: .top)
             }
             .safeAreaBar(edge: .top, spacing: 0) {
                 // The bar *grows* by the strip band while tabs are visible: the
@@ -405,6 +461,12 @@ struct EditorContainerView: View {
                         .fill(chrome.theme.sidebarMaterial)
                         .overlay(Color(nsColor: chrome.theme.pythia.background)
                             .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme)))
+                        // The bottom strip belongs to the code column, so it no
+                        // longer paints under the inspector — the inspector's own
+                        // glass must therefore carry its column to the window's
+                        // bottom edge, or a bare band would show where the strip
+                        // used to be.
+                        .ignoresSafeArea(.container, edges: .bottom)
                     HostedView {
                         ZStack(alignment: .leading) {
                             PythiaPanel(model: pythiaModel,
@@ -921,7 +983,7 @@ struct TopBar: View {
             }
 
             titleGlyph
-                .padding(.leading, gutterInset + 8)
+                .padding(.leading, gutterInset + 12)
             titleLabel
 
             Spacer(minLength: 0)
@@ -983,7 +1045,7 @@ struct TopBar: View {
     /// Minimal launcher shown in the titlebar only while Pythia is closed.
     private var openPythiaButton: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.25)) { chrome.pythiaVisible = true }
+            chrome.onTogglePythia?()
         } label: {
             Image(systemName: "rectangle.righthalf.inset.filled")
                 .font(.system(size: 12, weight: .semibold))
@@ -1068,7 +1130,7 @@ private struct SidebarToggleButton: View {
     @ObservedObject var chrome: EditorChromeState
     var body: some View {
         Button {
-            withAnimation(.easeInOut(duration: 0.25)) { chrome.sidebarVisible.toggle() }
+            chrome.onToggleSidebar?()
         } label: {
             Image(systemName: "sidebar.left")
                 .font(.system(size: 15, weight: .semibold))

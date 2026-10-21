@@ -270,36 +270,6 @@ struct ProjectConfig {
     }
 }
 
-// MARK: - Controller
-
-final class ProjectSettingsViewController: NSHostingController<ProjectSettingsView> {
-    init(contextTab: Bool = false) {
-        super.init(rootView: ProjectSettingsView(initialTab: contextTab ? .context : .general))
-    }
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    static func open(contextTab: Bool = false) {
-        if let window = NSApp.windows.first(where: { $0.contentViewController is ProjectSettingsViewController }) {
-            window.makeKeyAndOrderFront(nil)
-            if contextTab {
-                NotificationCenter.default.post(name: .projectSettingsOpenContextTab, object: nil)
-            }
-            return
-        }
-        let window = NSWindow(contentViewController: ProjectSettingsViewController(contextTab: contextTab))
-        window.title = "Project Settings · AetherCodex"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 640, height: 600))
-        window.contentMinSize = NSSize(width: 560, height: 520)
-        window.isReleasedWhenClosed = false
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-    }
-}
-
-// MARK: - View
-
 struct ProjectSettingsView: View {
     enum Tab: Hashable { case general, context }
 

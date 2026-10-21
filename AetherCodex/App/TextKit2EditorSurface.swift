@@ -420,6 +420,13 @@ final class GutterRenderView: NSView {
     /// Observer for the adopted text view's selection changes (see
     /// `rewireSelectionObserver()`). Held so it can be removed on deinit.
     private var selectionObserver: NSObjectProtocol? = nil
+    /// Observer for the live storage's `didProcessEditing` — the only signal
+    /// that knows whether an edit changed the *line structure* (inserted or
+    /// removed a newline). Held so it can be removed on deinit.
+    private var storageObserver: NSObjectProtocol? = nil
+    /// Set when the line structure may have changed since the last index build.
+    /// Rebuilt lazily on the next paint; typing on one line never rebuilds.
+    private var lineStructureDirty = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -433,6 +440,9 @@ final class GutterRenderView: NSView {
 
     deinit {
         if let observer = selectionObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = storageObserver {
             NotificationCenter.default.removeObserver(observer)
         }
     }
@@ -453,14 +463,72 @@ final class GutterRenderView: NSView {
             NotificationCenter.default.removeObserver(observer)
             selectionObserver = nil
         }
-        guard let tv = sourceLayoutManager?.textContainers.first?.textView else { return }
-        selectionObserver = NotificationCenter.default.addObserver(
-            forName: NSTextView.didChangeSelectionNotification,
-            object: tv,
+        if let observer = storageObserver {
+            NotificationCenter.default.removeObserver(observer)
+            storageObserver = nil
+        }
+        guard let lm = sourceLayoutManager else { return }
+        if let tv = lm.textContainers.first?.textView {
+            selectionObserver = NotificationCenter.default.addObserver(
+                forName: NSTextView.didChangeSelectionNotification,
+                object: tv,
+                queue: nil
+            ) { [weak self] _ in
+                self?.needsDisplay = true
+            }
+        }
+        guard let storage = lm.textStorage else { return }
+        storageObserver = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification,
+            object: storage,
             queue: nil
         ) { [weak self] _ in
-            self?.needsDisplay = true
+            self?.noteStorageEdited()
         }
+    }
+
+    /// Maintains the line-start index incrementally on every character edit —
+    /// O(edit size), never O(document). Offsets after the edit shift by the
+    /// length delta even when no newline is involved (typing on one line moves
+    /// every later line's start), which is exactly why the old rebuild-once
+    /// approach let the numbers drift away from the code while editing.
+    private func noteStorageEdited() {
+        guard let storage = sourceLayoutManager?.textStorage,
+              storage.editedMask.contains(.editedCharacters) else { return }
+        let edited = storage.editedRange
+        let delta = storage.changeInLength
+        guard edited.length > 0, !lineStartOffsets.isEmpty else {
+            // A pure deletion shrinking the document to nothing, or a first edit
+            // into an empty index — fall back to a full rebuild on the next paint.
+            lineStructureDirty = true
+            return
+        }
+        let text = storage.string as NSString
+        // The prefix before `edited.location` is identical in old and new text,
+        // so binary-searching the OLD index with this coordinate is exact.
+        let idx = lineNumber(forUTF16Offset: edited.location)
+        guard idx < lineStartOffsets.count else {
+            lineStructureDirty = true
+            return
+        }
+        var rebuilt: [Int] = [lineStartOffsets[idx]]
+        var cursor = edited.location
+        let editEnd = edited.location + edited.length
+        while cursor < editEnd {
+            if text.character(at: cursor) == 0x0A { rebuilt.append(cursor + 1) }
+            cursor += 1
+        }
+        // The old span's last consumed line — derived from the OLD index, not
+        // the new text: the removed text is gone, but every line it consumed is
+        // one whose start lay in (editPoint, editPoint + removedLength]. The
+        // binary search over the still-old index bounds that span exactly.
+        let removedLength = max(0, edited.length - delta)
+        let oldLast = removedLength > 0
+            ? lineNumber(forUTF16Offset: edited.location + removedLength)
+            : idx
+        lineStartOffsets = Array(lineStartOffsets[..<idx]) + rebuilt
+            + lineStartOffsets[(oldLast + 1)...].map { $0 + delta }
+        lineCount = lineStartOffsets.count
     }
 
     override var isFlipped: Bool { true }
@@ -468,35 +536,47 @@ final class GutterRenderView: NSView {
     func setAttributedString(_ attributedString: NSAttributedString) {
         // Prefer the live layout manager's text storage (the exact text the
         // fragments are laid out from) so line starts never lag the SwiftUI
-        // snapshot. Rebuild line count + line-start index only when the document
-        // actually changed — never on a scroll/selection change, which is what
-        // caused the gutter to re-walk the whole layout manager every frame before.
+        // snapshot.
         let liveString = sourceLayoutManager?.textStorage?.string as NSString?
         let source = liveString ?? (attributedString.string as NSString)
         let identity = ObjectIdentifier(attributedString)
-        if identity != cachedStringIdentity || source.length != cachedSourceLength {
+        if identity != cachedStringIdentity {
+            // A fresh snapshot object = the document was replaced (load/new).
             cachedStringIdentity = identity
-            cachedSourceLength = source.length
-            lineCount = source.length > 0 ? 1 : 0
-            lineStartOffsets = []
-            if source.length > 0 {
-                lineStartOffsets.append(0)
-                var i = 0
-                while i < source.length {
-                    if source.character(at: i) == 0x0A {
-                        lineCount += 1
-                        lineStartOffsets.append(i + 1)
-                    }
-                    i += 1
-                }
-            }
+            lineStructureDirty = true
         }
+        refreshLineIndexIfNeeded(source: source)
         needsDisplay = true
     }
 
-    /// Uniform per-line pitch, used only as a fallback when no live layout manager
-    /// is attached (passive render path). The editable path places every number at
-    /// its own fragment origin instead.
+    /// Rebuilds `lineStartOffsets` + `lineCount` when the document was replaced
+    /// or an edit changed the line structure — never on scroll/selection changes
+    /// and never on single-line typing, which is what made the gutter re-walk
+    /// the whole document per keystroke before.
+    private func refreshLineIndexIfNeeded(source: NSString? = nil) {
+        let liveString = source ?? (sourceLayoutManager?.textStorage?.string as NSString?)
+        guard let text = liveString, lineStructureDirty else { return }
+        lineStructureDirty = false
+        cachedSourceLength = text.length
+        lineCount = text.length > 0 ? 1 : 0
+        lineStartOffsets = []
+        if text.length > 0 {
+            lineStartOffsets.append(0)
+            var i = 0
+            while i < text.length {
+                if text.character(at: i) == 0x0A {
+                    lineCount += 1
+                    lineStartOffsets.append(i + 1)
+                }
+                i += 1
+            }
+        }
+    }
+
+    /// Uniform per-line pitch. Every visual row in this editor shares it — the
+    /// text carries one uniform font + paragraph style and never soft-wraps
+    /// (the container width is unbounded), and attachment bounds never change
+    /// fragment height — so the arithmetic grid below is exact, not approximate.
     private var liveLineHeight: CGFloat {
         if let lm = sourceLayoutManager, lm.numberOfGlyphs > 0 {
             let height = lm.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
@@ -505,24 +585,15 @@ final class GutterRenderView: NSView {
         return gutter.lineHeight
     }
 
-    /// Exact line rect for a 1-based line number, read from the live layout
-    /// manager's fragment for that line. A taller line (emoji, larger inline face)
-    /// keeps its number locked to it. Falls back to the uniform pitch when no
-    /// layout manager is attached.
+    /// Line rect for a 1-based line number, computed on the arithmetic grid.
+    /// Deliberately NOT read from the live layout manager: fragment rects are
+    /// stale for the entire document while a mid-edit layout is pending, which
+    /// made numbers drift relative to the code until the next display pass.
+    /// Grid positions are immune — line index × uniform pitch.
     private func rect(forLine number: Int) -> CGRect {
-        if let lm = sourceLayoutManager, lm.numberOfGlyphs > 0,
-           number > 0, number - 1 < lineStartOffsets.count {
-            let charOffset = lineStartOffsets[number - 1]
-            let glyphRange = lm.glyphRange(forCharacterRange: NSRange(location: charOffset, length: 0),
-                                           actualCharacterRange: nil)
-            if glyphRange.location < lm.numberOfGlyphs {
-                let rect = lm.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
-                if rect.height > 0 { return rect }
-            }
-        }
         let lineHeight = liveLineHeight
         return CGRect(x: 0, y: CGFloat(number - 1) * lineHeight,
-                      width: bounds.width, height: lineHeight)
+                       width: bounds.width, height: lineHeight)
     }
 
     /// 0-based line index for a UTF-16 character offset (binary search).
@@ -552,15 +623,21 @@ final class GutterRenderView: NSView {
         }
         let glyphRange = lm.glyphRange(forBoundingRect: dirtyRect, in: tc)
         guard glyphRange.length > 0 else { return [] }
+        let lineHeight = liveLineHeight
         var lines: [(Int, CGRect, Bool)] = []
-        lm.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, fragGlyphRange, _ in
+        lm.enumerateLineFragments(forGlyphRange: glyphRange) { _, _, _, fragGlyphRange, _ in
             let charRange = lm.characterRange(forGlyphRange: fragGlyphRange, actualGlyphRange: nil)
             let lineIndex = self.lineNumber(forUTF16Offset: charRange.location)
             // A fragment that does not begin at its logical line's first character
             // is a soft-wrapped continuation — same line number, extra visual row.
             let isContinuation = lineIndex < self.lineStartOffsets.count
                 && charRange.location != self.lineStartOffsets[lineIndex]
-            lines.append((lineIndex + 1, rect, isContinuation))
+            // Arithmetic placement: the line index IS the visual row (uniform
+            // pitch, no soft wrap), so the y coordinate stays grid-locked even
+            // while the layout manager's fragment rects are stale mid-edit.
+            let frame = CGRect(x: 0, y: CGFloat(lineIndex) * lineHeight,
+                               width: self.bounds.width, height: lineHeight)
+            lines.append((lineIndex + 1, frame, isContinuation))
         }
         return lines
     }
@@ -578,6 +655,10 @@ final class GutterRenderView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+        // The storage notification can mark the line structure dirty between
+        // SwiftUI passes (selection-only repaints, programmatic edits) — rebuild
+        // before reading the index so every paint sees the current text shape.
+        refreshLineIndexIfNeeded()
         guard gutter.width > 0, lineCount > 0 else { return }
 
         // The gutter background is a translucent glass surface applied by
@@ -952,14 +1033,20 @@ struct TextKit2ScrollSurface: View {
                                    height: renderedHeight)
                     }
                     .overlay(alignment: .topLeading) {
+                        // The reveal anchors sit at the *viewport's* horizontal
+                        // centre in content space, so centring one vertically
+                        // (`scrollTo(anchor: .center)`) leaves the horizontal
+                        // offset exactly where the reader left it. An anchor
+                        // pinned to x = 0 would snap a long line back to its
+                        // first column on every single match.
                         Color.clear
                             .frame(width: 1, height: 1)
                             .id("quick-search-reveal")
-                            .position(x: 0, y: revealY)
+                            .position(x: scrollOffset.x + proxy.size.width / 2, y: revealY)
                         Color.clear
                             .frame(width: 1, height: 1)
                             .id("find-replace-reveal")
-                            .position(x: 0, y: findReplaceRevealY)
+                            .position(x: scrollOffset.x + proxy.size.width / 2, y: findReplaceRevealY)
                     }
                     .padding(.top, topContentInset)
                     .frame(minWidth: visibleEditorWidth,
@@ -1011,8 +1098,7 @@ struct TextKit2ScrollSurface: View {
                 // code. Only the numbers participate in the native progressive
                 // scroll-edge effect; the gutter background never disappears.
                 ZStack(alignment: .trailing) {
-                    Rectangle().fill(.ultraThinMaterial)
-                    Color(nsColor: (gutter.backgroundColor ?? NSColor.clear).withAlphaComponent(1)).opacity(0.86)
+                    EditorChromeSurface(color: gutter.backgroundColor ?? NSColor.clear)
                     if let separator = gutter.separatorColor {
                         // Rectangle (not Color) guarantees a full-height 1px rule;
                         // a bare Color.frame(width: 1) collapses to zero height and
@@ -1050,45 +1136,16 @@ struct TextKit2ScrollSurface: View {
                     .offset(x: leadingChromeWidth - leftOverhang)
                     .allowsHitTesting(false)
 
-                // Incremental quick-search bar (Ctrl+S), floating above the
-                // status bar. Kept in this ZStack so it hovers over the code
-                // and never enlarges the scroll viewport. Bottom-aligned and
-                // inset past the gutter + chrome so it stays clear of the
-                // sidebar and the line-number column.
-                if searchModel.isVisible {
-                    HStack {
-                        Spacer()
-                        QuickSearchBar(model: searchModel)
-                        Spacer()
-                    }
-                    .padding(.leading, leadingChromeWidth + gutter.width)
-                    .padding(.trailing, trailingChromeWidth)
-                    .padding(.bottom, 30)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(2)
-                }
-
-                // TextMate-style find & replace dialog (⌘F / ⌘⌥F). Floats above
-                // the same bottom band, polymorphic around scope + replace mode.
-                if findReplace.isVisible {
-                    HStack {
-                        Spacer()
-                        FindReplaceBar(model: findReplace)
-                        Spacer()
-                    }
-                    .padding(.leading, leadingChromeWidth + gutter.width)
-                    .padding(.trailing, trailingChromeWidth)
-                    .padding(.bottom, 30)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .zIndex(3)
-                }
+                // The incremental quick-search bar (Ctrl+S) docks in the window's
+                // bottom safe-area band beside the status strip, and find & replace
+                // (⌘F / ⌘⌥F) lives in its own TextMate-style window — neither
+                // floats over the code here. The surface keeps only what it alone
+                // can do: the reveal anchors above, scrolled on every
+                // `revealToken` bump.
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .clipped()
             .animation(.easeInOut(duration: 0.18), value: searchModel.isVisible)
-            .animation(.easeInOut(duration: 0.18), value: findReplace.isVisible)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onReceive(NotificationCenter.default.publisher(for: NSTextView.didChangeSelectionNotification)) { notification in

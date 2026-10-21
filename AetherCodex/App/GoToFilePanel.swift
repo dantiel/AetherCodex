@@ -803,102 +803,72 @@ struct GoToFileView: View {
     }
 }
 
-// MARK: - Panel controller
+// MARK: - Scene content
 
-/// A borderless panel that can still become key. AppKit refuses key status to
-/// windows without a title/resize bar (`canBecomeKey == false`), which leaves an
-/// embedded SwiftUI search field deaf to keystrokes. Overriding it is the fix.
-final class KeyablePanel: NSPanel {
-    override var canBecomeKey: Bool { true }
+/// The Go to File palette as a scene.
+///
+/// The `NSWindowController` this replaced owned the result callback privately
+/// and used `objc_setAssociatedObject` to keep itself alive while its borderless
+/// panel was up. The callback now travels in the `GoToFileRequest`, and the
+/// palette's lifetime is the scene's.
+@MainActor
+struct GoToFileScene: View {
+    @ObservedObject private var scene = AppScene.shared
+    @Environment(\.dismissWindow) private var dismissWindow
+
+    var body: some View {
+        Group {
+            if let request = scene.goToFile {
+                // A fresh invocation is a fresh palette: new model, new root,
+                // new focus. Without this the previous search would survive
+                // into the next ⌘T.
+                GoToFilePalette(request: request).id(request.id)
+            } else {
+                Color.clear
+            }
+        }
+        // A palette lives only while the app is in front — the old panel's
+        // `hidesOnDeactivate`. No scene modifier expresses that, so the
+        // resignation is observed directly.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didResignActiveNotification)) { _ in
+            dismissWindow(id: AppWindowID.goToFile)
+        }
+    }
 }
 
-/// Floating panel hosting the SwiftUI go-to-file chooser. Invoked via Cmd+T.
-final class GoToFilePanel: NSWindowController {
-    private var onSelect: ((URL) -> Void)?
-    private var hostingController: NSHostingController<GoToFileView>?
+@MainActor
+private struct GoToFilePalette: View {
+    let request: GoToFileRequest
+    @StateObject private var model: GoToFileModel
+    @Environment(\.dismissWindow) private var dismissWindow
 
-    static func show(projectRoot: URL, currentURL: URL? = nil,
-                     openPaths: Set<String> = [], onSelect: @escaping (URL) -> Void) {
-        let panel = GoToFilePanel()
-        panel.onSelect = onSelect
-
-        let panelWindow = KeyablePanel(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 360),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        panelWindow.isFloatingPanel = true
-        panelWindow.level = .floating
-        panelWindow.hidesOnDeactivate = true
-        panelWindow.becomesKeyOnlyIfNeeded = false
-        panelWindow.isReleasedWhenClosed = false
-        panelWindow.isOpaque = false
-        panelWindow.backgroundColor = .clear
-        panelWindow.hasShadow = true
-
-        // Spotlight-style placement: horizontally centered, upper third.
-        if let screen = NSScreen.main {
-            let visible = screen.visibleFrame
-            let x = visible.midX - panelWindow.frame.width / 2
-            let y = visible.maxY - panelWindow.frame.height - 88
-            panelWindow.setFrameOrigin(NSPoint(x: x, y: y))
-        }
-        panel.window = panelWindow
-
-        let view = GoToFileView(
-            model: GoToFileModel(projectRoot: projectRoot, currentURL: currentURL, openPaths: openPaths),
-            onSelect: { url in
-                onSelect(url)
-                panel.dismiss()
-            },
-            onDismiss: { panel.dismiss() }
-        )
-
-        let host = NSHostingController(rootView: view)
-        panel.hostingController = host
-
-        // Rounded glass container — the borderless palette's "chrome".
-        let container = NSView()
-        container.wantsLayer = true
-        container.layer?.cornerRadius = 12
-        container.layer?.masksToBounds = true
-        container.layer?.borderWidth = 0.5
-        container.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
-        panelWindow.contentView = container
-
-        let effect = NSVisualEffectView()
-        effect.material = .hudWindow
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        effect.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(effect)
-
-        host.view.translatesAutoresizingMaskIntoConstraints = false
-        effect.addSubview(host.view)
-        NSLayoutConstraint.activate([
-            effect.topAnchor.constraint(equalTo: container.topAnchor),
-            effect.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            effect.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            effect.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            host.view.topAnchor.constraint(equalTo: effect.topAnchor),
-            host.view.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
-            host.view.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-            host.view.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
-        ])
-
-        panel.showWindow(nil)
-        panelWindow.makeKeyAndOrderFront(nil)
-        // A borderless floating panel only accepts keystrokes once the app is
-        // active and the panel is genuinely key — make both explicit so the
-        // search field is typeable the instant Cmd+T lands.
-        NSApp.activate(ignoringOtherApps: true)
-        panelWindow.makeFirstResponder(host.view)
-        objc_setAssociatedObject(panelWindow, "GoToFilePanel.owner", panel, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    init(request: GoToFileRequest) {
+        self.request = request
+        _model = StateObject(wrappedValue: GoToFileModel(
+            projectRoot: request.projectRoot,
+            currentURL: request.currentURL,
+            openPaths: request.openPaths
+        ))
     }
 
-    private func dismiss() {
-        window?.close()
-        objc_setAssociatedObject(window as Any, "GoToFilePanel.owner", nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+    var body: some View {
+        GoToFileView(
+            model: model,
+            onSelect: { url in
+                request.onSelect(url)
+                dismissWindow(id: AppWindowID.goToFile)
+            },
+            onDismiss: { dismissWindow(id: AppWindowID.goToFile) }
+        )
+        // The palette's chrome used to be a hand-built layer stack: a rounded,
+        // bordered container over an `NSVisualEffectView`. The scene is
+        // `.plain`, so the silhouette is the view's to draw.
+        .background(.ultraThinMaterial,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.10), lineWidth: 0.5)
+        }
     }
 }

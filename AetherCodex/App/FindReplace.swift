@@ -9,8 +9,21 @@ struct ProjectMatch: Identifiable {
     let id = UUID()
     let url: URL
     let line: Int
+    /// 1-based UTF-16 column of the match's start within its line.
+    let column: Int
     let range: NSRange
     let lineText: String
+}
+
+/// One highlighted row in the find window's results list (`.file`/`.selection`).
+/// `localRange` is the match's range *within* `text`, offset past any leading
+/// indentation so the highlight lands on the actual characters.
+struct FindResultRow: Identifiable {
+    let index: Int
+    let line: Int
+    let text: String
+    let localRange: NSRange
+    var id: Int { index }
 }
 
 // MARK: - Model
@@ -47,7 +60,14 @@ final class FindReplaceModel: ObservableObject {
 
     /// Project scope results (find-only — replace is not offered across files).
     @Published private(set) var projectMatches: [ProjectMatch] = []
+    /// Project results grouped per file, streamed incrementally.
+    @Published private(set) var projectFileGroups: [ProjectFileMatch] = []
+    /// Non-nil when the last project search failed (e.g. invalid regex).
+    @Published private(set) var projectSearchError: String? = nil
     @Published private(set) var isSearchingProject = false
+
+    /// Display rows for the find window's list — snapshot of each match's line.
+    @Published private(set) var rows: [FindResultRow] = []
 
     /// Line to scroll into view (1-based) + monotonically-increasing token so
     /// SwiftUI reacts even when two consecutive matches land on one line.
@@ -76,6 +96,7 @@ final class FindReplaceModel: ObservableObject {
         captureSelectionIfNeeded()
         isVisible = true
         if !query.isEmpty { search() }
+        AppScene.shared.presentFind(self)
     }
 
     /// ⌘G (next) toggles on when closed, otherwise advances.
@@ -91,12 +112,6 @@ final class FindReplaceModel: ObservableObject {
             tv.setSelectedRange(origin)
         }
         resetResults()
-        if let tv = textView { tv.window?.makeFirstResponder(tv) }
-    }
-
-    /// Return in the find field — accept the current match and fold away.
-    func confirm() {
-        isVisible = false
         if let tv = textView { tv.window?.makeFirstResponder(tv) }
     }
 
@@ -182,6 +197,7 @@ final class FindReplaceModel: ObservableObject {
 
     private func resetResults() {
         matches = []
+        rows = []
         currentIndex = 0
         pendingRevealLine = nil
         resultSummary = ""
@@ -220,6 +236,7 @@ final class FindReplaceModel: ObservableObject {
         let found = scan(ns, in: range)
         matches = found
         currentIndex = 0
+        rebuildRows(in: ns, matches: found)
         if found.isEmpty {
             pendingRevealLine = nil
             resultSummary = "No results"
@@ -250,6 +267,48 @@ final class FindReplaceModel: ObservableObject {
         }
         pendingRevealLine = m.line
         revealToken += 1
+    }
+
+    /// Jump to the given result row (the find window's list) — selects the
+    /// match in the editor and scrolls it into view without touching the query.
+    func select(rowIndex: Int) {
+        guard rowIndex >= 0, rowIndex < matches.count else { return }
+        currentIndex = rowIndex
+        applyCurrent()
+    }
+
+    /// Snapshots each match's enclosing line into a display row (bounded for
+    /// very large files) so the results list renders without re-reading the
+    /// text storage on every frame.
+    private func rebuildRows(in ns: NSString, matches: [QuickMatch]) {
+        let limit = 400
+        let cap = min(matches.count, limit)
+        var out: [FindResultRow] = []
+        out.reserveCapacity(cap)
+        var lastLineStart = -1
+        var lastText = ""
+        for i in 0..<cap {
+            let m = matches[i]
+            let loc = min(max(m.range.location, 0), max(ns.length - 1, 0))
+            let lineRange = ns.lineRange(for: NSRange(location: loc, length: 0))
+            let text: String
+            if lineRange.location == lastLineStart {
+                text = lastText
+            } else {
+                var raw = ns.substring(with: lineRange)
+                while let c = raw.last, c == "\n" || c == "\r" { raw.removeLast() }
+                lastLineStart = lineRange.location
+                lastText = raw
+                text = raw
+            }
+            let lead = text.prefix { $0 == " " || $0 == "\t" }.count
+            let rawLoc = m.range.location - lineRange.location - lead
+            let loc2 = max(0, rawLoc)
+            let len = min(max(0, m.range.length), max(0, text.count - loc2))
+            out.append(FindResultRow(index: i, line: m.line, text: text,
+                                     localRange: NSRange(location: loc2, length: len)))
+        }
+        rows = out
     }
 
     /// Computes the replacement string for the whole `range` (used by replaceAll).
@@ -317,12 +376,15 @@ final class FindReplaceModel: ObservableObject {
     private func searchProject() {
         guard let root = projectRootProvider?(), !query.isEmpty else {
             projectMatches = []
+            projectFileGroups = []
             resultSummary = ""
             return
         }
         projectSearchTask?.cancel()
         isSearchingProject = true
         projectMatches = []
+        projectFileGroups = []
+        projectSearchError = nil
         resultSummary = "Searching…"
 
         let q = query
@@ -331,15 +393,40 @@ final class FindReplaceModel: ObservableObject {
         let rx = regularExpression
 
         projectSearchTask = Task.detached(priority: .userInitiated) {
-            let results = grepProject(root: root, query: q, ignoreCase: ic, wholeWord: ww, regularExpression: rx)
-            let fileCount = Set(results.map { $0.url.path }).count
-            await MainActor.run { [weak self] in
-                guard let self, !Task.isCancelled else { return }
-                self.projectMatches = results
-                self.isSearchingProject = false
-                self.resultSummary = results.isEmpty
-                    ? "No results in project"
-                    : "\(results.count) matches in \(fileCount) files"
+            do {
+                try await runProjectSearch(
+                    roots: [root],
+                    query: q,
+                    ignoreCase: ic,
+                    wholeWord: ww,
+                    regularExpression: rx,
+                    onBatch: { files in
+                        await MainActor.run { [weak self] in
+                            guard let self else { return }
+                            let matches = files.flatMap(\.matches)
+                            self.projectMatches.append(contentsOf: matches)
+                            self.projectFileGroups.append(contentsOf: files)
+                        }
+                    }
+                )
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.isSearchingProject = false
+                    if self.projectMatches.isEmpty {
+                        self.resultSummary = "No results in project"
+                    } else {
+                        let fileCount = Set(self.projectMatches.map(\.url.path)).count
+                        self.resultSummary = "\(self.projectMatches.count) matches in \(fileCount) files"
+                    }
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.isSearchingProject = false
+                    self.projectSearchError = (error as? ProjectSearchError)?.errorDescription
+                        ?? error.localizedDescription
+                    self.resultSummary = "Invalid regular expression"
+                }
             }
         }
     }
@@ -372,272 +459,8 @@ final class FindReplaceModel: ObservableObject {
     }
 }
 
-// MARK: - Project grep (runs off the main actor)
 
-/// Walks `root` and collects text-file matches. Bounded by file/match caps so a
-/// huge tree can never freeze the editor. Runs detached; only the result array
-/// crosses back to the main actor.
-func grepProject(root: URL, query: String, ignoreCase: Bool, wholeWord: Bool, regularExpression: Bool) -> [ProjectMatch] {
-    let fm = FileManager.default
-    guard let enumerator = fm.enumerator(at: root,
-                                         includingPropertiesForKeys: [.isRegularFileKey],
-                                         options: [.skipsHiddenFiles]) else { return [] }
-
-    let regex: NSRegularExpression?
-    if regularExpression {
-        regex = try? NSRegularExpression(pattern: query, options: ignoreCase ? [.caseInsensitive] : [])
-    } else {
-        regex = nil
-    }
-    if regularExpression && regex == nil { return [] }
-
-    let maxFiles = 500
-    let maxMatches = 2000
-    var filesSeen = 0
-    var results: [ProjectMatch] = []
-
-    for case let url as URL in enumerator {
-        if results.count >= maxMatches || filesSeen >= maxFiles { break }
-        if isSkippedProjectPath(url.path) { continue }
-        guard let data = try? Data(contentsOf: url) else { continue }
-        guard isTextData(data) else { continue }
-        guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) else { continue }
-
-        let ns = text as NSString
-        var ranges: [NSRange] = []
-
-        if let regex {
-            ranges = regex.matches(in: text, options: [], range: NSRange(location: 0, length: ns.length)).map { $0.range }
-        } else {
-            var opts: NSString.CompareOptions = [.literal]
-            if ignoreCase { opts.insert(.caseInsensitive) }
-            var searchRange = NSRange(location: 0, length: ns.length)
-            while searchRange.length > 0 {
-                let r = ns.range(of: query, options: opts, range: searchRange)
-                guard r.location != NSNotFound else { break }
-                if wholeWord && !grepIsWholeWord(ns, range: r) {
-                    let next = r.location + 1
-                    if next >= ns.length { break }
-                    searchRange = NSRange(location: next, length: ns.length - next)
-                    continue
-                }
-                ranges.append(r)
-                let next = r.location + max(r.length, 1)
-                if next >= ns.length { break }
-                searchRange = NSRange(location: next, length: ns.length - next)
-            }
-        }
-
-        guard !ranges.isEmpty else { continue }
-        filesSeen += 1
-        for r in ranges.prefix(100) {
-            let line = grepLineNumber(at: r.location, in: ns)
-            results.append(ProjectMatch(url: url, line: line, range: r, lineText: grepLineText(at: r.location, in: ns)))
-            if results.count >= maxMatches { break }
-        }
-    }
-    return results
-}
-
-private func isSkippedProjectPath(_ path: String) -> Bool {
-    let skip = Set([".git", "node_modules", "Pods", "Carthage", "build", "DerivedData",
-                    ".build", "vendor", ".svn", ".hg", "xcuserdata", ".idea"])
-    return path.split(separator: "/").map(String.init).contains { skip.contains($0) }
-}
-
-private func isTextData(_ data: Data) -> Bool {
-    !data.prefix(8192).contains(0)
-}
-
-private func grepLineNumber(at index: Int, in ns: NSString) -> Int {
-    let end = min(max(index, 0), ns.length)
-    var line = 1
-    var i = 0
-    while i < end {
-        if ns.character(at: i) == 0x0A { line += 1 }
-        i += 1
-    }
-    return line
-}
-
-private func grepLineText(at index: Int, in ns: NSString) -> String {
-    var start = 0
-    var end = 0
-    ns.getLineStart(&start, end: &end, contentsEnd: nil, for: NSRange(location: index, length: 0))
-    return ns.substring(with: NSRange(location: start, length: end - start))
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-}
-
-private func grepIsWholeWord(_ s: NSString, range: NSRange) -> Bool {
-    func word(_ i: Int) -> Bool {
-        guard i >= 0, i < s.length else { return false }
-        let c = s.character(at: i)
-        if c == 0x5F { return true }
-        guard let scalar = UnicodeScalar(c) else { return false }
-        return CharacterSet.alphanumerics.contains(scalar)
-    }
-    return !word(range.location - 1) && !word(NSMaxRange(range))
-}
-
-// MARK: - Bar
-
-/// Liquid-glass find & replace bar. Polymorphic: the replace row appears only
-/// in replace mode (and never for project scope); the results list appears only
-/// for project scope; the scope segmented control transforms the whole behavior.
-struct FindReplaceBar: View {
-    @ObservedObject var model: FindReplaceModel
-    @FocusState private var queryFocused: Bool
-    @FocusState private var replaceFocused: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
-
-                TextField("Find", text: $model.query)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 13))
-                    .focused($queryFocused)
-                    .onChange(of: model.query) { _, newValue in model.setQuery(newValue) }
-                    .onSubmit { model.next() }
-
-                Picker("Scope", selection: $model.scope) {
-                    ForEach(FindReplaceModel.Scope.allCases) { scope in
-                        Text(scope.rawValue).tag(scope)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 250)
-                .onChange(of: model.scope) { _, _ in model.search() }
-            }
-
-            if model.isReplaceMode && model.scope != .project {
-                HStack(spacing: 8) {
-                    TextField("Replace", text: $model.replacement)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 13))
-                        .focused($replaceFocused)
-                        .onSubmit { model.replaceCurrent() }
-
-                    Button("Replace") { model.replaceCurrent() }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(model.matches.isEmpty)
-
-                    Button("All") { model.replaceAll() }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(model.matches.isEmpty)
-                }
-            }
-
-            HStack(spacing: 12) {
-                optionToggle("Aa", value: $model.ignoreCase)
-                optionToggle(".*", value: $model.regularExpression)
-                optionToggle("W", value: $model.wholeWord)
-                optionToggle("↩︎", value: $model.wrapAround)
-
-                Spacer()
-
-                if model.scope != .project && !model.matches.isEmpty {
-                    Text("\(model.currentIndex + 1)/\(model.matches.count)")
-                        .font(.system(size: 11, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-
-                if model.isSearchingProject {
-                    ProgressView().controlSize(.small)
-                }
-
-                Text(model.resultSummary)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                if model.scope != .project {
-                    Button(action: { model.previous() }) {
-                        Image(systemName: "chevron.up")
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.matches.isEmpty)
-
-                    Button(action: { model.next() }) {
-                        Image(systemName: "chevron.down")
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.matches.isEmpty)
-                }
-
-                Button(action: { model.cancel() }) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-            }
-
-            if model.scope == .project && !model.projectMatches.isEmpty {
-                Divider()
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(model.projectMatches) { match in
-                            Button {
-                                model.openFile?(match.url, match.line)
-                            } label: {
-                                HStack(spacing: 8) {
-                                    Text(match.url.lastPathComponent)
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(.primary)
-                                    Text(":\(match.line)")
-                                        .font(.system(size: 11).monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                    Text(match.lineText)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.tail)
-                                    Spacer(minLength: 0)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-                .frame(maxHeight: 220)
-            }
-        }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(.white.opacity(0.10), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 18, y: 6)
-        .frame(width: 600)
-        .onChange(of: model.isVisible) { _, visible in
-            if visible {
-                DispatchQueue.main.async { queryFocused = true }
-            } else if let tv = model.textView {
-                tv.window?.makeFirstResponder(tv)
-            }
-        }
-    }
-
-    private func optionToggle(_ label: String, value: Binding<Bool>) -> some View {
-        Button {
-            value.wrappedValue.toggle()
-            model.search()
-        } label: {
-            Text(label)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(value.wrappedValue ? Color.accentColor : .secondary)
-        }
-        .buttonStyle(.plain)
-    }
-}
+// The find & replace UI now lives in its own TextMate-style window
+// (`FindReplaceWindow.swift`), not as an in-editor bar. The model above is all
+// that remains here: the polymorphic search engine and its reveal/selection
+// signals, which the window consumes and the editor surface scrolls into view.

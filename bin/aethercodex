@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+#
+# aethercodex — control the AetherCodex editor from the shell.
+#
+# TextMate `mate` / `tm` analogue: opens files & directories in the running
+# editor, positions the caret, and drives the app lifecycle.
+#
+# Channel:
+#   plain open   → `open -a AetherCodex <path>`          (zero dependencies)
+#   line/column  → `aethercodex://open?path=..&line=..`  (URL scheme, app-side)
+#   lifecycle    → AppleScript `osascript`               (always on macOS)
+#
+# Short forms (installed by install-aliases.sh): acx, ax, ae
+# The oracle CLI is the `aetheroracle` gem: ao, oracle, pythia
+
+set -euo pipefail
+
+APP_NAME="${AETHERCODEX_APP_NAME:-AetherCodex}"
+SCHEME="${AETHERCODEX_URL_SCHEME:-aethercodex}"
+PROG="$(basename "$0")"
+VERSION="0.1.0"
+
+urlencode() {
+  # URI::Escape ships with macOS Perl — correct UTF-8 percent-encoding.
+  perl -MURI::Escape -e 'print uri_escape($ARGV[0])' "$1" 2>/dev/null \
+    || printf '%s' "$1"
+}
+
+err() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+die() { err "$*"; exit 1; }
+
+activate() {
+  osascript -e "tell application \"$APP_NAME\" to activate" >/dev/null 2>&1 \
+    || open -a "$APP_NAME"
+}
+
+usage() { cat <<EOF
+${PROG} — control the AetherCodex editor from the shell.
+
+Usage:
+  ${PROG} [options] [file|dir ...]      open files/directories in the editor
+  ${PROG} --activate | --focus          bring the editor to the front
+  ${PROG} --recent                      open the recent-files panel
+  ${PROG} --quit                        quit the editor
+
+Options:
+  -l, --line LINE[:COL]     place caret at line (and optional column)
+  -c, --column COL          place caret at column (requires --line)
+  -n, --new-window          open in a new window
+  -b, --background          open without activating the app
+  -w, --wait                block until the editor exits after the open
+  -a, --app NAME            target app name (default: ${APP_NAME})
+  -h, --help                show this help
+  -v, --version             print version
+
+Shorthand:
+  ${PROG} file.txt:42       open file.txt at line 42
+  ${PROG} file.txt:42:8     open file.txt at line 42, column 8
+
+Aliases (see install-aliases.sh): acx (primary), ax, ae
+Oracle CLI (the \`aetheroracle\` gem): ao, oracle, pythia
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# parse args
+# ---------------------------------------------------------------------------
+
+paths=()
+LINE=""; COLUMN=""
+NEW_WINDOW=0; BACKGROUND=0; WAIT=0
+ACTION="open"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)       usage; exit 0 ;;
+    -v|--version)    echo "$PROG $VERSION"; exit 0 ;;
+    -l|--line)
+      [[ $# -ge 2 ]] || die "missing argument for $1"
+      LINE="${2%%:*}"; [[ "$2" == *:* ]] && COLUMN="${2##*:}"; shift ;;
+    -c|--column)
+      [[ $# -ge 2 ]] || die "missing argument for $1"
+      COLUMN="$2"; shift ;;
+    -n|--new-window) NEW_WINDOW=1 ;;
+    -b|--background) BACKGROUND=1 ;;
+    -w|--wait)       WAIT=1 ;;
+    -a|--app)
+      [[ $# -ge 2 ]] || die "missing argument for $1"
+      APP_NAME="$2"; shift ;;
+    --activate|--focus) ACTION="activate" ;;
+    --recent)        ACTION="recent" ;;
+    --quit)          ACTION="quit" ;;
+    --)              shift; paths+=("$@"); break ;;
+    -*)              die "unknown option: $1 (try --help)" ;;
+    *)               paths+=("$1") ;;
+  esac
+  shift
+done
+
+# ---------------------------------------------------------------------------
+# dispatch
+# ---------------------------------------------------------------------------
+
+case "$ACTION" in
+  activate)
+    activate ;;
+  quit)
+    osascript -e "tell application \"$APP_NAME\" to quit" >/dev/null 2>&1 \
+      || die "could not quit $APP_NAME" ;;
+  recent)
+    open "$SCHEME://recent" 2>/dev/null || activate ;;
+  open)
+    [[ ${#paths[@]} -gt 0 ]] || { activate; exit 0; }
+
+    OPEN_FLAGS=(-a "$APP_NAME")
+    [[ $NEW_WINDOW -eq 1 ]] && OPEN_FLAGS=(-n "${OPEN_FLAGS[@]}")
+    [[ $BACKGROUND -eq 1 ]] && OPEN_FLAGS=(-g "${OPEN_FLAGS[@]}")
+    [[ $WAIT -eq 1 ]]       && OPEN_FLAGS=(-W "${OPEN_FLAGS[@]}")
+
+    for raw in "${paths[@]}"; do
+      p="$raw"
+      case "$p" in
+        ~/*) p="$HOME/${p#\~/}" ;;
+        /*)  : ;;
+        *)   p="$PWD/$p" ;;
+      esac
+
+      # shorthand path:LINE[:COL]
+      if [[ "$p" =~ ^(.+):([0-9]+)(:([0-9]+))?$ && -e "${BASH_REMATCH[1]}" ]]; then
+        p="${BASH_REMATCH[1]}"
+        [[ -z "$LINE" ]]   && LINE="${BASH_REMATCH[2]}"
+        [[ -z "$COLUMN" && -n "${BASH_REMATCH[4]}" ]] && COLUMN="${BASH_REMATCH[4]}"
+      fi
+
+      [[ -e "$p" || -d "$p" ]] || { err "no such file or directory: $raw"; continue; }
+
+      if [[ -n "$LINE" ]]; then
+        q="path=$(urlencode "$p")&line=$LINE"
+        [[ -n "$COLUMN" ]] && q+="&column=$COLUMN"
+        if ! open "${OPEN_FLAGS[@]}" "$SCHEME://open?$q" 2>/dev/null; then
+          err "URL scheme '$SCHEME://' not handled — opening without line/column"
+          open "${OPEN_FLAGS[@]}" "$p"
+        fi
+      else
+        open "${OPEN_FLAGS[@]}" "$p"
+      fi
+    done
+    ;;
+esac

@@ -232,6 +232,26 @@ class EditorViewController: NSViewController {
     /// Debounced re-highlight when scrolling brings new text into viewport.
     private var scrollHighlightTimer: Timer?
 
+    // MARK: - Incremental Edit Pipeline (keystroke path)
+
+    /// Debounced full-document re-highlight — converges colors after the typing
+    /// pause; cancelled and re-armed on every keystroke.
+    private var highlightDebounce: Timer?
+    /// Edit context captured in `shouldChangeTextIn` (old text still live) and
+    /// consumed in `textDidChange` (new text already committed).
+    private var pendingEditRange = NSRange(location: NSNotFound, length: 0)
+    private var pendingReplacementText: NSString?
+    private var pendingReplacedText: NSString?
+    /// UTF-16 offsets of every line start, in document order. Maintained
+    /// incrementally (rebuilt only when the edit contains/removes a newline),
+    /// serving O(log n) line-index lookups for metrics and the highlight range.
+    private var lineStarts: [Int] = [0]
+    /// Incremental document metrics: line count, widest line (UTF-16 units) and
+    /// its 0-based index — kept exact across every edit without O(n) rescans.
+    private var cachedLineCount = 1
+    private var cachedMaxLineWidth = 0
+    private var cachedMaxLineIndex = 0
+
     // MARK: - Large File Handling
 
     /// Files larger than this (bytes) use viewport-only highlighting with background parse.
@@ -1220,15 +1240,128 @@ class EditorViewController: NSViewController {
         return NSAttributedString(attributedString: storage)
     }
 
-    /// Pushes cheap document-shape metrics on every edit. This avoids copying the
-    /// full attributed string (and forcing a layout) on each keystroke — the
-    /// editable TextKit 1 surface reads `textStorage` live, so it only needs the
-    /// line count / max width to size its scroll content.
+    /// Pushes the cached document shape. Called on every edit — the cache itself
+    /// is maintained incrementally in `updateMetricsIncrementally` so this is O(1).
+    private func pushDocumentMetrics() {
+        onDocumentMetricsChange?(cachedLineCount, cachedMaxLineWidth)
+    }
+
+    /// Full-scan metric + line-index rebuild — used on document replace and theme
+    /// re-highlight paths where an O(n) pass is already in flight.
     private func notifyDocumentChange() {
         guard let storage = textStorage else { return }
         let text = storage.string as NSString
         let metrics = Self.documentMetrics(for: text)
-        onDocumentMetricsChange?(metrics.lineCount, metrics.maxLineWidth)
+        cachedLineCount = metrics.lineCount
+        cachedMaxLineWidth = metrics.maxLineWidth
+        cachedMaxLineIndex = metrics.maxLineIndex
+        lineStarts = metrics.lineStarts
+        pushDocumentMetrics()
+    }
+
+    /// O(edited lines) metric maintenance for the keystroke path. Rescans the
+    /// whole document only when the edit touches or shifts the current widest
+    /// line — the one case where the old maximum may have shrunk or moved.
+    private func updateMetricsIncrementally(changedRange: NSRange) {
+        guard let storage = textStorage else { return }
+        let ns = storage.string as NSString
+        let replacedText = pendingReplacedText ?? ""
+        let replacementText = pendingReplacementText ?? ""
+        let lengthDelta = replacementText.length - replacedText.length
+        let newlineDelta = Self.newlineCount(in: replacementText) - Self.newlineCount(in: replacedText)
+        let editPoint = min(changedRange.location, ns.length)
+
+        // ── Old-span bookkeeping (before the index mutates) ──
+        // `oldEditPoint` is an OLD-text coordinate: clamp it against the old
+        // length (new length − delta), never the new one, or a tail deletion
+        // would binary-search a stale offset in the old index.
+        let oldLength = max(0, ns.length - lengthDelta)
+        let oldEditPoint = min(pendingEditRange.location == NSNotFound ? editPoint : pendingEditRange.location,
+                               oldLength)
+        let oldFirst = Self.lineIndex(at: oldEditPoint, lineStarts: lineStarts)
+        let oldLast = oldFirst + Self.newlineCount(in: replacedText)
+
+        // ── Line-start index maintenance — O(edit), on EVERY edit ──
+        // Offsets shift by the length delta even when no newline is involved:
+        // typing on one line moves every later line's start. The rebuilt block
+        // keeps the edited line's ORIGINAL start (the line containing the edit
+        // point does not move) and appends the starts of lines born inside the
+        // inserted text; the tail shifts by the length delta.
+        let idx = Self.lineIndex(at: editPoint, lineStarts: lineStarts)
+        var rebuilt: [Int] = [lineStarts[idx]]
+        var cursor = editPoint
+        let editEnd = editPoint + replacementText.length
+        while cursor < editEnd {
+            if ns.character(at: cursor) == 0x0A { rebuilt.append(cursor + 1) }
+            cursor += 1
+        }
+        // The tail begins after the old span's LAST touched line — a multi-line
+        // replacement drops every intermediate line, not just the edited one.
+        lineStarts = Array(lineStarts[..<idx]) + rebuilt
+            + lineStarts[(oldLast + 1)...].map { $0 + lengthDelta }
+        cachedLineCount = lineStarts.count
+
+        // ── Widest-line maintenance ──
+        let editTouchesMaxLine = oldFirst <= cachedMaxLineIndex && cachedMaxLineIndex <= oldLast
+        let editAboveMaxLine = oldLast < cachedMaxLineIndex
+
+        if editTouchesMaxLine {
+            // The widest line was edited (or removed) — rescan to stay exact.
+            let metrics = Self.documentMetrics(for: ns)
+            cachedMaxLineWidth = metrics.maxLineWidth
+            cachedMaxLineIndex = metrics.maxLineIndex
+            lineStarts = metrics.lineStarts
+        } else {
+            if editAboveMaxLine { cachedMaxLineIndex += newlineDelta }
+            let touchedLines = ns.lineRange(for: changedRange)
+            let touchedFirst = Self.lineIndex(at: touchedLines.location, lineStarts: lineStarts)
+            var maxTouched = 0
+            var maxTouchedIndex = touchedFirst
+            var cursor = touchedLines.location
+            let touchedEnd = min(NSMaxRange(touchedLines), ns.length)
+            var lineIndex = touchedFirst
+            while cursor <= touchedEnd {
+                let start = cursor
+                while cursor < ns.length && ns.character(at: cursor) != 0x0A { cursor += 1 }
+                let width = cursor - start
+                if width > maxTouched {
+                    maxTouched = width
+                    maxTouchedIndex = lineIndex
+                }
+                if cursor >= touchedEnd { break }
+                cursor += 1
+                lineIndex += 1
+            }
+            if maxTouched > cachedMaxLineWidth {
+                cachedMaxLineWidth = maxTouched
+                cachedMaxLineIndex = maxTouchedIndex
+            }
+        }
+    }
+
+    /// 0-based line index for a UTF-16 offset via binary search over line starts.
+    private static func lineIndex(at offset: Int, lineStarts: [Int]) -> Int {
+        var low = 0
+        var high = lineStarts.count
+        while low < high {
+            let mid = (low + high) / 2
+            if lineStarts[mid] <= offset {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        return max(0, low - 1)
+    }
+
+    private static func newlineCount(in text: NSString) -> Int {
+        var count = 0
+        var i = 0
+        while i < text.length {
+            if text.character(at: i) == 0x0A { count += 1 }
+            i += 1
+        }
+        return count
     }
 
     /// Pushes the fully-highlighted snapshot — used only when the document is
@@ -1238,23 +1371,36 @@ class EditorViewController: NSViewController {
         onDocumentChange?(highlightedDocument())
     }
 
-    /// One-pass line count + widest line. O(n) char scan of the plain string —
-    /// no attributed copy, no attribute-run traversal, no layout.
-    private static func documentMetrics(for text: NSString) -> (lineCount: Int, maxLineWidth: Int) {
-        guard text.length > 0 else { return (1, 0) }
+    /// One-pass line count + widest line + line-start index. O(n) char scan of
+    /// the plain string — no attributed copy, no attribute-run traversal, no
+    /// layout. Used on document replace and the rare widest-line rescan.
+    private static func documentMetrics(for text: NSString)
+        -> (lineCount: Int, maxLineWidth: Int, maxLineIndex: Int, lineStarts: [Int]) {
+        guard text.length > 0 else { return (1, 0, 0, [0]) }
         var lineCount = 1
         var maxWidth = 0
+        var maxLineIndex = 0
+        var lineStarts: [Int] = [0]
+        var currentIndex = 0
         var lineStart = 0
         var i = 0
         while i <= text.length {
             if i == text.length || text.character(at: i) == 0x0A {
-                maxWidth = max(maxWidth, i - lineStart)
-                if i < text.length { lineCount += 1 }
+                let width = i - lineStart
+                if width > maxWidth {
+                    maxWidth = width
+                    maxLineIndex = currentIndex
+                }
+                if i < text.length {
+                    lineCount += 1
+                    lineStarts.append(i + 1)
+                    currentIndex += 1
+                }
                 lineStart = i + 1
             }
             i += 1
         }
-        return (lineCount, maxWidth)
+        return (lineCount, maxWidth, maxLineIndex, lineStarts)
     }
 
     /// `conjure` distinguishes a *fresh window* (⌘N, the first tab) from a
@@ -1593,8 +1739,10 @@ class EditorViewController: NSViewController {
 
     // MARK: - Status Bar
 
-    /// Post status bar info via callback so MainWindowController can update the glass bar.
-    private func updateStatusBar() {
+    /// Post status info via `onStatusChange` (line/col, indent, language, dirty)
+    /// so the chrome can mirror it. Also callable directly when the active tab
+    /// switch must re-publish immediately (see `TabsModel.refreshStatus`).
+    func updateStatusBar() {
         if imagePreview.isActive {
             let dims = imagePreview.pixelSize.map { "\(Int($0.width))×\(Int($0.height)) px" } ?? "—"
             let format = imagePreview.originalFormat.displayName
@@ -2491,26 +2639,47 @@ extension EditorViewController: NSTextViewDelegate {
         isDirty = true
         updateTitle()
 
-        let fullRange = NSRange(location: 0, length: textStorage.length)
+        // ── Keystroke path: O(edited lines), never O(document) ──
+        // The edit is confined to the line range below (plus one line of context
+        // on each side, so a block-comment opener on the previous line keeps its
+        // scope while typing). Tree-sitter, fence pairing and injection layers
+        // converge in the debounced full pass once the typing pauses.
+        let storage = textStorage!
+        let ns = storage.string as NSString
+        let editLocation = pendingEditRange.location == NSNotFound ? 0 : pendingEditRange.location
+        let replacementLen = min(pendingReplacementText?.length ?? 0, max(0, ns.length - editLocation))
+        let changedRange = NSRange(location: min(editLocation, ns.length), length: replacementLen)
+        let editLineRange = ns.lineRange(for: changedRange)
+        let contextRange = Self.extendedLineRange(editLineRange, byLines: 1, in: ns)
+
         isHighlighting = true
         (layoutManager as? HighlightingLayoutManager)?.isApplyingHighlighting = true
         defer {
             isHighlighting = false
             (layoutManager as? HighlightingLayoutManager)?.isApplyingHighlighting = false
         }
-        SyntaxOracle.shared.applyHighlighting(to: textStorage, range: fullRange, font: nil)
+        if contextRange.length > 0 {
+            SyntaxOracle.shared.applyEditingHighlight(to: storage, range: contextRange, font: nil)
+        }
+
+        // Arm the full-document convergence pass for the typing pause.
+        highlightDebounce?.invalidate()
+        highlightDebounce = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
+            self?.rehighlight()
+        }
 
         // Restore cursor to the position computed in shouldChangeTextIn.
         // Attribute changes (setAttributes/addAttributes) perturb the insertion
         // point's pixel position because bold/heading fonts have different glyph
         // widths in proportional text. The character index should be stable, but
         // processEditing can drift it by ±1. Pin it back.
-        if let pos = expectedPostEditCursor, pos <= textStorage.length {
+        if let pos = expectedPostEditCursor, pos <= storage.length {
             textView.setSelectedRange(NSRange(location: pos, length: 0))
         }
         expectedPostEditCursor = nil
 
-        notifyDocumentChange()
+        updateMetricsIncrementally(changedRange: changedRange)
+        pushDocumentMetrics()
 
         clearGhostSuggestion()
 
@@ -2518,6 +2687,25 @@ extension EditorViewController: NSTextViewDelegate {
         foldDetectionDebounce = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
             self?.detectFolds()
         }
+    }
+
+    /// Line range extended outward by `byLines` lines on both sides, clamped to
+    /// the document bounds. Used by the keystroke highlight so an edit near a
+    /// construct boundary (block comment, fence) keeps its opening line colored.
+    private static func extendedLineRange(_ lineRange: NSRange, byLines: Int, in ns: NSString) -> NSRange {
+        var start = lineRange.location
+        var end = NSMaxRange(lineRange)
+        var extended = byLines
+        while start > 0 && extended > 0 {
+            start -= 1
+            if ns.character(at: start) == 0x0A { extended -= 1 }
+        }
+        extended = byLines
+        while end < ns.length && extended > 0 {
+            if ns.character(at: end) == 0x0A { extended -= 1 }
+            end += 1
+        }
+        return NSRange(location: start, length: end - start)
     }
 
     /// Strip rich formatting on paste — we manage all attributes ourselves.
@@ -2530,6 +2718,11 @@ extension EditorViewController: NSTextViewDelegate {
         if !isMultiCaret {
             let len = (replacementString as NSString?)?.length ?? 0
             expectedPostEditCursor = affectedCharRange.location + len
+            // Capture the edit context while the OLD text is still live — the
+            // incremental keystroke path in `textDidChange` needs both sides.
+            pendingEditRange = affectedCharRange
+            pendingReplacementText = replacementString as NSString?
+            pendingReplacedText = (textView.string as NSString).substring(with: affectedCharRange) as NSString
         }
 
         guard !isHandlingPaste, !isMultiCaret,

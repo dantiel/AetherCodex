@@ -305,6 +305,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
                 }
             }
         }
+        // Both titlebar toggle buttons walk the same guarded paths as their
+        // menu counterparts (⌘1/⌘2) — one source of truth for pane state, so the
+        // AppKit pane container never drifts out of sync with the SwiftUI bands.
+        chromeState.onToggleSidebar = { [weak self] in
+            self?.toggleFileBrowser(nil)
+        }
+        chromeState.onTogglePythia = { [weak self] in
+            self?.togglePythia(nil)
+        }
 
         // Breadcrumb navigation: a folder peek drives the sidebar file browser;
         // a file selection opens it in a tab.
@@ -341,6 +350,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
         )
         // SwiftUI's `Window` scene renders this view directly: no NSHostingView,
         // no content view controller, no frame re-assertion battle.
+        //
+        // The window silhouette is NOT declared here: clipping the root view's
+        // SwiftUI layer cuts off the material that must extend behind the traffic
+        // lights (the transparent titlebar) and fights the `safeAreaBar` tiling.
+        // Rounding lives on the content layer in `applyWindowRounding`, where the
+        // native window shadow still follows the window-server arc.
         rootView = AnyView(containerView)
 
         themeObserver = NotificationCenter.default.addObserver(
@@ -457,11 +472,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
         guard let window, let contentView = window.contentView else { return }
 
         contentView.wantsLayer = true
-        contentView.layer?.cornerRadius = 24
+        // The fill is rounded on the content layer — NOT via a SwiftUI
+        // `.clipShape` on the root view. A root clip cuts off the material that
+        // must extend behind the transparent titlebar (traffic-light background)
+        // and fights the `safeAreaBar` bands, which is what made the top go
+        // transparent and the sidebars/content clip. `masksToBounds` rounds the
+        // visible fill while the native window shadow keeps following the
+        // window-server arc — one coherent silhouette, no double border.
+        contentView.layer?.cornerRadius = EditorChromeMetrics.windowCornerRadius
         contentView.layer?.cornerCurve = .continuous
         contentView.layer?.masksToBounds = true
         contentView.layer?.backgroundColor = NSColor.clear.cgColor
         window.backgroundColor = .clear
+        window.hasShadow = true
 
         // AppKit performs one more titlebar layout pass after installing the
         // content controller. Position against the actual content bounds after
@@ -988,9 +1011,9 @@ extension MainWindowController {
     @objc func goToFile(_ sender: Any?) {
         guard let root = fileBrowser?.rootItem?.url else { return }
         let openPaths = Set((tabsModel?.tabs ?? []).compactMap { $0.controller.currentFile?.path })
-        GoToFilePanel.show(projectRoot: root,
-                           currentURL: editorViewController?.currentFile,
-                           openPaths: openPaths) { [weak self] url in
+        AppScene.shared.showGoToFile(projectRoot: root,
+                                     currentURL: editorViewController?.currentFile,
+                                     openPaths: openPaths) { [weak self] url in
             self?.openFileInTab(url)
         }
     }

@@ -23,7 +23,7 @@ enum ExternalEditorResolver {
         }
         if let editor = gitConfigEditor(repoRoot: repoRoot) { return editor }
         for key in ["GIT_EDITOR", "VISUAL", "EDITOR"] {
-            if let v = ProcessInfo.processInfo.environment[key], !v.isEmpty { return v }
+            if let v = EnvironmentSettings.shared.value(forKey: key), !v.isEmpty { return v }
         }
         return ""
     }
@@ -150,7 +150,7 @@ enum ExternalEditorResolver {
         if executable.hasPrefix("/") {
             return FileManager.default.isExecutableFile(atPath: executable) ? executable : nil
         }
-        let pathEnv = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        let pathEnv = EnvironmentSettings.shared.value(forKey: "PATH") ?? "/usr/bin:/bin:/usr/sbin:/sbin"
         for dir in pathEnv.split(separator: ":") {
             let candidate = (dir as NSString).appendingPathComponent(executable)
             if FileManager.default.isExecutableFile(atPath: candidate) {

@@ -37,6 +37,32 @@ enum EditorChromeMetrics {
     /// Applied on top of `tabStripBottom`; the no-tabbar case is flush to the top.
     static let pythiaBelowTabClearance: CGFloat = 20
 
+    /// The window silhouette: the ONE radius every window-level surface shares —
+    /// the AppKit content clip, the SwiftUI glass fills, the desktop backdrop,
+    /// and the floating sidebar sheet.
+    ///
+    /// macOS rounds a window's frame inside the window server and exposes no
+    /// public value for it (`NSWindow` has no `cornerRadius`; `NSThemeFrame`
+    /// reports 0 because the rounding never reaches its layer). The app therefore
+    /// declares the silhouette itself, and it MUST match the server's native arc
+    /// (Tahoe's standard window corner) — otherwise the material's corner and the
+    /// glass border + shadow round at two different curvatures and the seam
+    /// doubles (the classic radius mismatch).
+    ///
+    /// Every fill shares this ONE number, so the outer glass, the material
+    /// background, and the floating sheet all describe the same arc — matched,
+    /// never doubled, never cut off at the corners.
+    static let windowCornerRadius: CGFloat = 16
+
+    /// Utility windows (`UtilityWindow` → `AppKitPanel`) round one point tighter.
+    static let utilityWindowCornerRadius: CGFloat = 15
+
+    /// Height of the bottom status strip — one row of 11pt secondary text.
+    static let statusBarHeight: CGFloat = 24
+    /// Row reserved for the docked quick-search bar while it is open. The bar
+    /// itself is slightly shorter; the slack is the gap its shadow breathes in.
+    static let quickSearchBarHeight: CGFloat = 36
+
     /// Extra scroll-content height for chrome rows (the tab strip) that sit above
     /// the surface. Zero when the strip is hidden.
     static func chromeInset(showsTabBar: Bool) -> CGFloat {

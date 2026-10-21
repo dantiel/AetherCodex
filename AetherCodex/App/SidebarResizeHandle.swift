@@ -56,8 +56,20 @@ struct SidebarResizeHandle: View {
 enum SidebarSheetGeometry {
     static let leading: CGFloat = 8
     static let trailing: CGFloat = 8
-    static let vertical: CGFloat = 8
+    /// The sheet floats inside the window on all four edges — a symmetric 8pt
+    /// margin so its left and bottom arcs sit clear of the window's rounded
+    /// silhouette instead of being clipped off at the corners.
+    static let top: CGFloat = 8
+    static let bottom: CGFloat = 8
     static var horizontalInsets: CGFloat { leading + trailing }
+
+    /// Corner radius of the floating sheet — the SAME radius as the window
+    /// silhouette (`EditorChromeMetrics.windowCornerRadius`). The sheet floats
+    /// 8pt inside the frame, so its corners describe the same arc as the glass
+    /// border + material background; matching curvatures read as one coherent
+    /// corner rather than two competing arcs. All four corners round — the sheet
+    /// is a complete floating card, never docked square on its right edge.
+    static let sheetCornerRadius: CGFloat = EditorChromeMetrics.windowCornerRadius
 
     /// `sidebarWidth` denotes the usable sheet width. The safe-area column is
     /// wider because it also owns the requested outer window margins.
@@ -66,9 +78,9 @@ enum SidebarSheetGeometry {
     }
 
     static func frame(in size: CGSize) -> CGRect {
-        CGRect(x: leading, y: vertical,
+        CGRect(x: leading, y: top,
                width: max(0, size.width - leading - trailing),
-               height: max(0, size.height - 2 * vertical))
+               height: max(0, size.height - top - bottom))
     }
 
     /// Height of the floating tab-bar band docked to the sheet's lower edge. The

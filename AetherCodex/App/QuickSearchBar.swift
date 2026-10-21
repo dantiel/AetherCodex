@@ -31,6 +31,11 @@ final class QuickSearchModel: ObservableObject {
     @Published var pendingRevealLine: Int? = nil
     @Published var revealToken: Int = 0
 
+    /// Bumped whenever a non-empty query finds nothing — the bar shakes. An
+    /// integer token, not a flag: every new failure is a fresh increment, so the
+    /// shake replays even while the previous one is still settling.
+    @Published private(set) var notFoundToken: Int = 0
+
     weak var textView: NSTextView?
 
     /// Captured selection when the bar opened — Esc restores it.
@@ -133,6 +138,7 @@ final class QuickSearchModel: ObservableObject {
         guard !matches.isEmpty else {
             currentIndex = 0
             pendingRevealLine = nil
+            notFoundToken += 1          // typed query, nothing in the code → shake
             return
         }
 
@@ -356,6 +362,17 @@ struct QuickSearchBar: View {
         )
         .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
         .frame(width: 480)
+        // Reveal / fold: the bar does not slide in from an edge, it *condenses*
+        // out of blur — materializing where the eye already looks. The dock row
+        // above animates the height; these three animate the substance.
+        .blur(radius: model.isVisible ? 0 : 20)
+        .opacity(model.isVisible ? 1 : 0)
+        .scaleEffect(model.isVisible ? 1.0 : 1.4)
+        // Negative feedback: a query that matches nothing shakes the bar. Driven
+        // by the token, so consecutive misses each replay the same 3 half-cycles.
+        .modifier(ShakeEffect(animatableData: CGFloat(model.notFoundToken)))
+        .animation(.spring(response: 0.30, dampingFraction: 0.80), value: model.isVisible)
+        .animation(.linear(duration: 0.40), value: model.notFoundToken)
         .onChange(of: model.isVisible) { _, visible in
             if visible {
                 // Delay one runloop so the TextField is committed to the hierarchy
@@ -365,5 +382,22 @@ struct QuickSearchBar: View {
                 tv.window?.makeFirstResponder(tv)
             }
         }
+    }
+}
+
+// MARK: - Shake
+
+/// Horizontal shake used as negative feedback when an incremental-search query
+/// matches nothing. Driven by an integer token: each increment animates the
+/// transform through `shakesPerUnit` half-cycles and settles back at zero.
+struct ShakeEffect: GeometryEffect {
+    var amount: CGFloat = 7
+    var shakesPerUnit: CGFloat = 3
+    var animatableData: CGFloat
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        ProjectionTransform(
+            CGAffineTransform(translationX: amount * sin(animatableData * .pi * shakesPerUnit), y: 0)
+        )
     }
 }

@@ -252,17 +252,42 @@ class RubyBridge: ObservableObject {
         return "/usr/bin/ruby"
     }()
 
+    /// Directory holding the Ruby brain (`standalone_daemon.rb`, `Gemfile`,
+    /// `.vendor_bundle`, …). Resolution order:
+    ///   1. `AETHERORACLE_PATH` env var — point the app at a live checkout.
+    ///   2. `AETHERORACLE_PATH` in UserDefaults
+    ///      (`defaults write com.aethercodex.editor AETHERORACLE_PATH /path`).
+    ///   3. the bundled `Contents/Resources/Ruby` 1:1 mirror (shipped default).
+    private static func resolveRubyDir() -> String {
+        let candidates = [
+            ProcessInfo.processInfo.environment["AETHERORACLE_PATH"],
+            UserDefaults.standard.string(forKey: "AETHERORACLE_PATH")
+        ].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        for dir in candidates where !dir.isEmpty {
+            let script = URL(fileURLWithPath: dir).appendingPathComponent("standalone_daemon.rb").path
+            if FileManager.default.fileExists(atPath: script) {
+                return dir
+            }
+        }
+
+        return (Bundle.main.resourcePath ?? Bundle.main.bundlePath) + "/Ruby"
+    }
+
     private let daemonScript: String
+    private let rubyDir: String
     private let requestTimeout: TimeInterval = 600.0
 
     private init() {
-        let resourcesPath = Bundle.main.resourcePath ?? Bundle.main.bundlePath
-        daemonScript = "\(resourcesPath)/Ruby/standalone_daemon.rb"
+        rubyDir = RubyBridge.resolveRubyDir()
+        daemonScript = "\(rubyDir)/standalone_daemon.rb"
     }
 
     /// Project root passed to the daemon (resolves .aethercodex + data dirs).
+    /// `AETHER_PROJECT_ROOT` may be set via the inherited environment *or* the
+    /// Settings → Environment surface (which `EnvironmentSettings` folds together).
     var projectRoot: String {
-        if let env = ProcessInfo.processInfo.environment["AETHER_PROJECT_ROOT"], !env.isEmpty {
+        if let env = EnvironmentSettings.shared.value(forKey: "AETHER_PROJECT_ROOT"), !env.isEmpty {
             return env
         }
         // The .app bundle lives at the project root in development.
@@ -339,9 +364,11 @@ class RubyBridge: ObservableObject {
         proc.standardOutput = stdoutPipe
         proc.standardError = stderrPipe
 
-        var env = ProcessInfo.processInfo.environment
-        env["AETHER_RUBY_PATH"] = (Bundle.main.resourcePath ?? Bundle.main.bundlePath) + "/Ruby"
-        env["BUNDLE_GEMFILE"] = URL(fileURLWithPath: daemonScript).deletingLastPathComponent().appendingPathComponent("Gemfile").path
+        // Start from the merged environment (inherited process env overlaid with
+        // the Settings → Environment variables), then pin the daemon's own seams.
+        var env = EnvironmentSettings.shared.mergedEnvironment
+        env["AETHER_RUBY_PATH"] = rubyDir
+        env["BUNDLE_GEMFILE"] = "\(rubyDir)/Gemfile"
         env["AETHER_DAEMON"] = "1"
         env["AETHER_PROJECT_ROOT"] = projectRoot
         proc.environment = env

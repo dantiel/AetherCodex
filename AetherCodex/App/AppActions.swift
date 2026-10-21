@@ -5,6 +5,10 @@ import Cocoa
 /// This is what remains of the old `AppDelegate` once SwiftUI took over the
 /// application lifecycle: the action methods the menu invokes, nothing more.
 /// It is deliberately *not* an `NSApplicationDelegate`.
+///
+/// Main-actor isolated because that is where it runs and where the scene router
+/// it drives lives — the menu is main-thread by construction.
+@MainActor
 final class AppActions {
 
     // MARK: - File
@@ -23,15 +27,15 @@ final class AppActions {
     // MARK: - Settings
 
     func openSettings() {
-        SettingsViewController.open(section: .newFile)
+        AppScene.shared.openSettings(section: .newFile)
     }
 
     func openThemeSettings() {
-        SettingsViewController.open(section: .appearance)
+        AppScene.shared.openSettings(section: .appearance)
     }
 
     func openProjectSettings() {
-        ProjectSettingsViewController.open()
+        AppScene.shared.openProjectSettings()
     }
 
     // MARK: - Theme
@@ -146,7 +150,7 @@ final class AppActions {
     }
 
     func toggleAetherDebug() {
-        AetherDebugWindowController.shared.toggle()
+        AppScene.shared.toggleDebugLog()
     }
 
     func daemonStatus() {

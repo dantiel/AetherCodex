@@ -19,6 +19,11 @@ final class EditorTab: Identifiable, ObservableObject {
     /// Live dirty flag, published from `onStatusChange` (fires on edit + save).
     @Published var isDirty: Bool = false
 
+    /// Forwarded from `controller.onStatusChange`; `TabsModel` wires it on the
+    /// active tab only, so the bottom status strip mirrors the visible document
+    /// (a background tab must never write it).
+    var onStatusChange: ((String, String, String, Bool) -> Void)?
+
     /// Forwarded from `controller.onTitleChange` so `TabsModel` can push the
     /// active tab's title to the window chrome. Kept separate from `title` so the
     /// tab bar and the window title never fight over the same closure.
@@ -47,8 +52,12 @@ final class EditorTab: Identifiable, ObservableObject {
             self?.title = title
             self?.onTitleChange?(title)
         }
-        controller.onStatusChange = { [weak self] _, _, _, dirty in
-            self?.isDirty = dirty
+        controller.onStatusChange = { [weak self] lineCol, tabInfo, language, dirty in
+            guard let self else { return }
+            // @Published emits objectWillChange even on an equal write; the
+            // editor posts status on every caret move, so guard the flag.
+            if self.isDirty != dirty { self.isDirty = dirty }
+            self.onStatusChange?(lineCol, tabInfo, language, dirty)
         }
     }
 
@@ -74,6 +83,9 @@ final class EditorTab: Identifiable, ObservableObject {
 final class TabsModel: ObservableObject {
     @Published var tabs: [EditorTab] = []
     @Published var activeTabId: UUID?
+
+    /// Aggregated status of the active document — observed by the bottom strip.
+    let status = EditorStatusModel()
 
     /// Pushed whenever the active tab's title changes or the active tab switches.
     var onActiveTitleChange: ((String) -> Void)?
@@ -119,6 +131,7 @@ final class TabsModel: ObservableObject {
         tabs = [first]
         activeTabId = first.id
         attachTitleHook(first)
+        refreshStatus()
     }
 
     @discardableResult
@@ -138,6 +151,7 @@ final class TabsModel: ObservableObject {
         activeDiffTabId = nil
         onActiveTitleChange?(tab.title)
         onActiveTabChange?()
+        refreshStatus()
     }
 
     func selectNext() {
@@ -161,6 +175,7 @@ final class TabsModel: ObservableObject {
             onActiveTitleChange?(next.title)
             onActiveTabChange?()
         }
+        refreshStatus()
     }
 
     /// Open an entity (task or seal) as a tab. Reuses an existing tab for the
@@ -183,6 +198,7 @@ final class TabsModel: ObservableObject {
         activeDiffTabId = nil
         onActiveTitleChange?(tab.title)
         onActiveTabChange?()
+        refreshStatus()
     }
 
     // MARK: Diff tab management
@@ -204,6 +220,7 @@ final class TabsModel: ObservableObject {
         activeEntityTabId = nil
         onActiveTitleChange?(tab.title)
         onActiveTabChange?()
+        refreshStatus()
     }
 
     func closeDiff(_ id: UUID) {
@@ -214,6 +231,7 @@ final class TabsModel: ObservableObject {
             onActiveTitleChange?(activeTab?.title ?? "Untitled")
             onActiveTabChange?()
         }
+        refreshStatus()
     }
 
     func closeEntity(_ id: UUID) {
@@ -224,6 +242,7 @@ final class TabsModel: ObservableObject {
             onActiveTitleChange?(activeTab?.title ?? "Untitled")
             onActiveTabChange?()
         }
+        refreshStatus()
     }
 
     /// Reuse the active tab when it is a clean, untitled document (the first file
@@ -246,5 +265,32 @@ final class TabsModel: ObservableObject {
             guard let self, self.activeTabId == tab.id else { return }
             self.onActiveTitleChange?(title)
         }
+    }
+
+    /// Mirror the *visible* document into the bottom status strip. Only the
+    /// active tab forwards: entity/diff tabs own no caret, so they speak a
+    /// language and nothing else, and a hidden file tab keeps its hook unwired
+    /// (its own `isDirty` still tracks, the strip simply does not listen).
+    private func refreshStatus() {
+        if activeDiffTab != nil {
+            status.set(language: "Diff")
+            return
+        }
+        if activeEntityTab != nil {
+            status.set(language: "Æther")
+            return
+        }
+        guard let tab = activeTab else {
+            status.set(language: "Plain Text")
+            return
+        }
+        tab.onStatusChange = { [weak self] lineCol, tabInfo, language, dirty in
+            self?.status.update(position: lineCol, tabInfo: tabInfo,
+                                language: language, isDirty: dirty)
+        }
+        // Re-publish the freshly wired tab's current state at once — the editor
+        // only posts on the next caret move otherwise, and the strip would show
+        // the previous tab's language while the new one is already on screen.
+        tab.controller.updateStatusBar()
     }
 }

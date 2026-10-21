@@ -1,27 +1,6 @@
 import Cocoa
 import SwiftUI
 
-final class ThemeSettingsViewController: NSHostingController<ThemePreferencesView> {
-    init() { super.init(rootView: ThemePreferencesView()) }
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    static func open() {
-        if let window = NSApp.windows.first(where: { $0.contentViewController is ThemeSettingsViewController }) {
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
-        let window = NSWindow(contentViewController: ThemeSettingsViewController())
-        window.title = "Appearance · AetherCodex"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 640, height: 650))
-        window.contentMinSize = NSSize(width: 560, height: 540)
-        window.isReleasedWhenClosed = false
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-    }
-}
-
 struct ThemePreferencesView: View {
     @State private var revision = 0
     @State private var search = ""

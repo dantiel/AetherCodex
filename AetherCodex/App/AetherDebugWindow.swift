@@ -11,60 +11,16 @@ import SwiftUI
 // The daemon-stderr drain (`daemonLog` + `startErrorReader`) is NOT duplicated
 // here; this window only consumes what RubyBridge already publishes.
 
-final class AetherDebugWindowController: NSWindowController, NSWindowDelegate {
-
-    static let shared = AetherDebugWindowController()
-
-    private var panel: NSPanel?
-
-    private init() {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 440, height: 480),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        panel.title = "Æther Debug"
-        // The native titlebar dissolves: the Æther Debug header (green lamp)
-        // replaces it as the window's identity — content extends to the top edge.
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.isMovableByWindowBackground = true
-        panel.isFloatingPanel = true
-        panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.level = .floating
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.contentView = NSHostingView(rootView: AetherDebugView())
-        panel.center()
-        self.panel = panel
-        super.init(window: panel)
-        // Delegate wiring must happen after super.init — referencing the
-        // singleton inside its own initializer would recurse forever.
-        panel.delegate = self
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-    /// Show or hide the panel. `orderOut` (instead of close) keeps the
-    /// controller's state warm for an instant re-show.
-    func toggle() {
-        guard let panel else { return }
-        if panel.isVisible {
-            panel.orderOut(nil)
-        } else {
-            panel.orderFrontRegardless()
-        }
-    }
-
-    /// Closing hides instead of destroying the panel — the window is a
-    /// familiar, not a visitor.
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
-        return false
-    }
+/// The Æther Debug scene.
+///
+/// The `NSPanel` this replaced shaped itself by hand — `.utilityWindow`,
+/// `.nonactivatingPanel`, `.fullSizeContentView`, `level = .floating`,
+/// `becomesKeyOnlyIfNeeded`, and an `NSHostingView` handed in as `contentView`.
+/// A `UtilityWindow` is SwiftUI's name for that surface: secondary, transient,
+/// not the app's main window. Floating level, hidden titlebar and background
+/// dragging are declared on the scene in `AetherCodexApp.body`.
+struct AetherDebugScene: View {
+    var body: some View { AetherDebugView() }
 }
 
 // MARK: - Debug view
@@ -244,6 +200,10 @@ private struct AetherDebugView: View {
                 .fill(Color(nsColor: ThemeRegistry.shared.current.editorBackground).opacity(0.45))
         }
         .ignoresSafeArea()
+        // Same silhouette as the panel frame — a `UtilityWindow` scene, so the
+        // utility radius. See EditorChromeMetrics.
+        .clipShape(RoundedRectangle(cornerRadius: EditorChromeMetrics.utilityWindowCornerRadius,
+                                    style: .continuous))
     }
 
     private func updateProximity() {

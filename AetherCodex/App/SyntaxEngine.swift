@@ -200,21 +200,18 @@ final class SyntaxOracle {
         return tokens.sorted { $0.range.location < $1.range.location }
     }
 
-    func applyHighlighting(to storage: NSTextStorage, range: NSRange, font: NSFont? = nil) {
-        let text = storage.string
-        var tokens = tokenize(text, range: range)
+    /// Base attributes for plain text — the neutral state every highlight pass
+    /// resets to before applying scoped tokens. Line spacing lives in the text's
+    /// own paragraph style: NSTextView ignores `defaultParagraphStyle.lineSpacing`
+    /// for text that carries no explicit .paragraphStyle (it is typing-only), and
+    /// the gutter measures line height from this same spacing — omitting it here
+    /// makes the number column drift progressively down the file.
+    func baseAttributes(for font: NSFont?) -> [NSAttributedString.Key: Any] {
         let theme = ThemeRegistry.shared.current
         let baseFont = font ?? self.baseFont
-        // Line spacing must live in the text's own paragraph style: NSTextView
-        // ignores `defaultParagraphStyle.lineSpacing` for text that carries no
-        // explicit .paragraphStyle attribute (it is typing-only). The gutter
-        // measures line height from this same spacing, so omitting it here makes
-        // every line render ~Npt shorter than the number column and the two drift
-        // progressively apart down the file.
         let baseParagraphStyle = NSMutableParagraphStyle()
         baseParagraphStyle.lineSpacing = ThemeSettings.shared.resolvedLineSpacing(for: theme)
-
-        let baseAttrs: [NSAttributedString.Key: Any] = [
+        return [
             .foregroundColor: theme.editorForeground,
             .font: baseFont,
             .paragraphStyle: baseParagraphStyle,
@@ -222,6 +219,41 @@ final class SyntaxOracle {
             .strikethroughStyle: 0,
             .obliqueness: 0,
         ]
+    }
+
+    /// Keystroke-path highlight: reset the edited line range to base attributes,
+    /// then apply only *range-local* engines (heuristic regex / templates).
+    /// Tree-sitter, injection layers and fence pairing run in the debounced full
+    /// pass (`applyHighlighting`), so a keystroke costs O(edited lines), never
+    /// O(document). The range must be line-aligned by the caller.
+    func applyEditingHighlight(to storage: NSTextStorage, range: NSRange, font: NSFont? = nil) {
+        guard range.length > 0 else { return }
+        let text = storage.string
+        let baseFont = font ?? self.baseFont
+        storage.setAttributes(baseAttributes(for: font), range: range)
+
+        let r = range
+        let tokens: [Token]
+        if TemplateSyntaxEngine.extensions.contains(currentExtension) {
+            tokens = TemplateSyntaxEngine.tokenize(text, extension: currentExtension, range: r)
+        } else if isProse {
+            tokens = heuristicEngine.tokenize(text, in: r, proseMode: true)
+        } else {
+            tokens = heuristicEngine.tokenize(text, in: r, proseMode: false)
+        }
+
+        for token in tokens {
+            let style = ThemeRegistry.shared.current.style(for: token.scope)
+            let attrs = self.attributes(for: token, style: style, range: token.range,
+                                        storage: storage, baseFont: baseFont)
+            storage.addAttributes(attrs, range: token.range)
+        }
+    }
+
+    func applyHighlighting(to storage: NSTextStorage, range: NSRange, font: NSFont? = nil) {
+        let text = storage.string
+        var tokens = tokenize(text, range: range)
+        let baseAttrs = baseAttributes(for: font)
 
         storage.setAttributes(baseAttrs, range: range)
 
@@ -363,9 +395,9 @@ final class SyntaxOracle {
         }
 
         for token in tokens {
-            let style = theme.style(for: token.scope)
+            let style = ThemeRegistry.shared.current.style(for: token.scope)
             let attrs = self.attributes(for: token, style: style, range: token.range,
-                                        storage: storage, baseFont: baseFont)
+                                        storage: storage, baseFont: font ?? self.baseFont)
             storage.addAttributes(attrs, range: token.range)
         }
     }

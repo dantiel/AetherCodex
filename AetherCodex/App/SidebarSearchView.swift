@@ -45,7 +45,7 @@ final class SidebarSearchModel: ObservableObject {
     func openPanel() {
         guard let root else { return }
         let opener = open
-        GoToFilePanel.show(projectRoot: root, onSelect: opener)
+        AppScene.shared.showGoToFile(projectRoot: root, onSelect: opener)
     }
 }
 

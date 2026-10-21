@@ -11,6 +11,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case newFile = "New File"
     case editor = "Editor"
     case appearance = "Appearance"
+    case environment = "Environment"
     case git = "Git"
 
     var id: String { rawValue }
@@ -19,6 +20,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .newFile: return "doc.badge.plus"
         case .editor: return "text.cursor"
         case .appearance: return "paintpalette"
+        case .environment: return "terminal"
         case .git: return "arrow.triangle.branch"
         }
     }
@@ -27,42 +29,21 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .newFile: return "What a fresh window conjures into being."
         case .editor: return "Text behavior and current-line emphasis."
         case .appearance: return "Themes, typography and translucent glass."
+        case .environment: return "Variables breathed into the editor and Pythia."
         case .git: return "Diff handoff to your external Git editor."
         }
     }
 }
 
-final class SettingsViewController: NSHostingController<SettingsView> {
-    init(section: SettingsSection? = nil) {
-        super.init(rootView: SettingsView(initialSection: section))
-    }
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    static func open(section: SettingsSection? = nil) {
-        if let window = NSApp.windows.first(where: { $0.contentViewController is SettingsViewController }) {
-            window.makeKeyAndOrderFront(nil)
-            return
-        }
-        let window = NSWindow(contentViewController: SettingsViewController(section: section))
-        window.title = "Settings · AetherCodex"
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 720, height: 560))
-        window.contentMinSize = NSSize(width: 620, height: 480)
-        window.isReleasedWhenClosed = false
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-    }
-}
-
+/// The app's single settings surface, hosted by the `Settings` scene.
+///
+/// The scene is created once and *steered* afterwards: ⌘, asks for New File, the
+/// Appearance item asks for Appearance. That request reaches an already-open
+/// window through `AppScene`, which an initializer could never do.
+@MainActor
 struct SettingsView: View {
-    let initialSection: SettingsSection?
-    @State private var selection: SettingsSection?
-
-    init(initialSection: SettingsSection? = nil) {
-        self.initialSection = initialSection
-        _selection = State(initialValue: initialSection ?? .newFile)
-    }
+    @ObservedObject private var scene = AppScene.shared
+    @State private var selection: SettingsSection? = .newFile
 
     var body: some View {
         NavigationSplitView {
@@ -76,6 +57,9 @@ struct SettingsView: View {
             detail(for: selection ?? .newFile)
         }
         .frame(minWidth: 620, minHeight: 480)
+        // ⌘, and the Appearance item steer a surface that already exists, so
+        // the request has to arrive here rather than at an initializer.
+        .onReceive(scene.$settingsSection) { selection = $0 }
     }
 
     @ViewBuilder
@@ -87,6 +71,7 @@ struct SettingsView: View {
                 case .newFile: NewFileSettingsView()
                 case .editor: EditorSettingsView()
                 case .appearance: ThemePreferencesView()
+                case .environment: EnvironmentSettingsView()
                 case .git: GitSettingsView()
                 }
             }
@@ -268,5 +253,89 @@ struct GitSettingsView: View {
         .onChange(of: settings.gitExternalEditor) { _, _ in
             resolved = ExternalEditorResolver.detectedCommand(repoRoot: nil)
         }
+    }
+}
+
+// MARK: - Environment section
+
+struct EnvironmentSettingsView: View {
+    @ObservedObject private var settings = EnvironmentSettings.shared
+    @State private var restartNote = ""
+
+    var body: some View {
+        Form {
+            Section("AetherCodex") {
+                LabeledContent("AETHERORACLE_PATH") {
+                    TextField("bundled Ruby", text: $settings.aetherOraclePath)
+                        .textFieldStyle(.roundedBorder)
+                        .monospaced()
+                }
+                LabeledContent("AETHER_PROJECT_ROOT") {
+                    TextField("app bundle location", text: $settings.aetherProjectRoot)
+                        .textFieldStyle(.roundedBorder)
+                        .monospaced()
+                }
+                Text("AETHERORACLE_PATH points the app at a live Ruby checkout instead of the bundled mirror (the key RubyBridge already honours). AETHER_PROJECT_ROOT overrides the project root the daemon resolves.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Custom variables") {
+                ForEach($settings.customVariables) { $variable in
+                    HStack(spacing: 8) {
+                        TextField("KEY", text: $variable.key)
+                            .textFieldStyle(.roundedBorder)
+                            .monospaced()
+                            .autocorrectionDisabled()
+                        TextField("value", text: $variable.value)
+                            .textFieldStyle(.roundedBorder)
+                            .monospaced()
+                        Button {
+                            settings.customVariables.removeAll { $0.id == variable.id }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove this variable")
+                    }
+                }
+                .onDelete(perform: settings.removeVariable)
+
+                Button {
+                    settings.addVariable()
+                } label: {
+                    Label("Add variable", systemImage: "plus.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+
+                Text("These key/value pairs are injected into both the editor process and the Ruby daemon (Pythia) context — visible to scripts, grammars, external tools, and the Oracle.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                HStack(spacing: 12) {
+                    Button("Restart daemon") {
+                        restartNote = "Restarting…"
+                        Task {
+                            try? await RubyBridge.shared.restart()
+                            restartNote = "Daemon restarted."
+                        }
+                    }
+                    if !restartNote.isEmpty {
+                        Text(restartNote)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text("The daemon (Pythia) reads its environment at boot — restart it to breathe in changed variables. The editor picks them up immediately.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .padding(.bottom, 8)
     }
 }
