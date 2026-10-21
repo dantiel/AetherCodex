@@ -455,18 +455,19 @@ struct EditorContainerView: View {
                 // position, focus, draft) and force the whole message list to rebuild
                 // on every open; collapsing preserves that state instantly.
                 ZStack(alignment: .leading) {
-                    // Explicit opaque surface: the inspector's glass + tint background,
-                    // and a full-rect hit target for empty regions.
-                    Rectangle()
-                        .fill(chrome.theme.sidebarMaterial)
-                        .overlay(Color(nsColor: chrome.theme.pythia.background)
-                            .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme)))
-                        // The bottom strip belongs to the code column, so it no
-                        // longer paints under the inspector — the inspector's own
-                        // glass must therefore carry its column to the window's
-                        // bottom edge, or a bare band would show where the strip
-                        // used to be.
-                        .ignoresSafeArea(.container, edges: .bottom)
+                    // Glass above, status surface below — the bottom strip now
+                    // runs continuously under Pythia too, mirroring the leading
+                    // sidebar. The inspector's glass therefore stops one strip
+                    // above the window's bottom edge instead of reaching it.
+                    VStack(spacing: 0) {
+                        Rectangle()
+                            .fill(chrome.theme.sidebarMaterial)
+                            .overlay(Color(nsColor: chrome.theme.pythia.background)
+                                .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme)))
+                        EditorStatusSurface(theme: chrome.theme)
+                            .frame(height: EditorChromeMetrics.statusBarHeight)
+                    }
+                    .allowsHitTesting(false)
                     HostedView {
                         ZStack(alignment: .leading) {
                             PythiaPanel(model: pythiaModel,
@@ -488,6 +489,10 @@ struct EditorContainerView: View {
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
+                        // Stop the inspector content one strip above the bottom
+                        // edge, so the status surface painted beneath it stays
+                        // visible instead of being covered by the input bar.
+                        .padding(.bottom, EditorChromeMetrics.statusBarHeight)
                     }
                     // Definite width — an `NSHostingView` inside a `safeAreaBar`
                     // band must never be laid out from an ambiguous proposal.
