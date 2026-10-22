@@ -1019,11 +1019,12 @@ private func scheduleLogFlush() {
     /// Multi-turn chat that also surfaces the model's `reasoning_content`, so
     /// the Swift history can pass it back on the next turn (DeepSeek's thinking
     /// mode requires the field to round-trip).
-    func chatDetailed(messages: [[String: String]], system: String? = nil, model: String? = nil, activeCompanions: [String] = []) async throws -> OracleReply {
+    func chatDetailed(messages: [[String: String]], system: String? = nil, model: String? = nil, activeCompanions: [String] = [], hydra: String? = nil) async throws -> OracleReply {
         var args: [String: Any] = ["messages": messages, "history": false]
         if let system { args["system"] = system }
         if let model { args["model"] = model }
         if !activeCompanions.isEmpty { args["active_companions"] = activeCompanions }
+        if let hydra, !hydra.isEmpty { args["hydra"] = hydra }
         let response = try await send(command: "oracle", arguments: args)
         return try extractReply(from: response)
     }
@@ -1043,12 +1044,14 @@ private func scheduleLogFlush() {
     /// `askCompanion` (single-turn pure voice), this routes through the oracle
     /// channel with the companion veiled, so it can actually act (seal_create,
     /// task tools, …) while remembering the whole conversation.
-    func chatCompanion(name: String, messages: [[String: String]]) async throws -> OracleReply {
-        let response = try await send(command: "oracle", arguments: [
+    func chatCompanion(name: String, messages: [[String: String]], hydra: String? = nil) async throws -> OracleReply {
+        var args: [String: Any] = [
             "companion": name,
             "messages": messages,
             "history": false
-        ])
+        ]
+        if let hydra, !hydra.isEmpty { args["hydra"] = hydra }
+        let response = try await send(command: "oracle", arguments: args)
         return try extractReply(from: response)
     }
 
@@ -1193,6 +1196,15 @@ private func scheduleLogFlush() {
         let response = try await send(command: "ping", arguments: [:])
         if let error = response.error { throw RubyBridgeError.rubyError(error) }
         return response.resultDict?["cwd"] as? String
+    }
+
+    /// Hermetic accounting snapshot: active model/thinking level, the session
+    /// token + cost ledger, and all-time totals. `usage` is a control command —
+    /// pure reads, so it answers immediately even mid-computation.
+    func fetchUsage() async throws -> [String: Any]? {
+        let response = try await send(command: "usage", arguments: [:])
+        if let error = response.error { throw RubyBridgeError.rubyError(error) }
+        return response.resultDict
     }
 
     /// Update the Aegis context. Returns a confirmation string. Any of the
