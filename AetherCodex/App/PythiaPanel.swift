@@ -445,6 +445,40 @@ extension ChatMessage {
 
 // MARK: - Chat model
 
+/// Live hermetic accounting for the Pythia status band: which model is active,
+/// the session's token + cost ledger, and all-time totals. A *separate*
+/// observable from `PythiaChatModel` so the chrome's status bar can observe it
+/// without re-evaluating the whole chat panel on every keystroke (the macOS 26
+/// bar-drop guard that forbids observing the chat model itself from the chrome).
+@MainActor
+final class PythiaUsageModel: ObservableObject {
+    @Published var model: String = "—"
+    @Published var thinking: String = "normal"
+    @Published var projectRoot: String = ""
+    @Published var contextTurns: Int = 0
+    @Published var sessionTokens: Int = 0
+    @Published var sessionCost: Double = 0
+    @Published var allTimeCost: Double = 0
+
+    func apply(_ snapshot: [String: Any]?, contextTurns: Int) {
+        guard let snapshot else { return }
+        if let v = snapshot["model"] as? String { self.model = v }
+        if let v = snapshot["thinking"] as? String { self.thinking = v }
+        if let v = snapshot["project_root"] as? String { self.projectRoot = v }
+        if let s = snapshot["session"] as? [String: Any] {
+            let prompt = s["prompt_tokens"] as? Int ?? 0
+            let completion = s["completion_tokens"] as? Int ?? 0
+            self.sessionTokens = prompt + completion
+            if let c = s["cost"] as? Double { self.sessionCost = c }
+        }
+        if let p = snapshot["persisted"] as? [String: Any],
+           let c = p["cost"] as? Double {
+            self.allTimeCost = c
+        }
+        self.contextTurns = contextTurns
+    }
+}
+
 /// Pure SwiftUI replacement for the WKWebView chamber.
 /// Streams RubyBridge events into published state consumed by PythiaPanel.
 @MainActor
@@ -471,6 +505,13 @@ final class PythiaChatModel: ObservableObject {
     @Published var streamingText = ""
     @Published var streamingVisible = false
     @Published var cliCwd: String = ""
+    /// Hermetic accounting surfaced in the status band under Pythia. Separate
+    /// observable so the chrome can watch it without watching the chat model.
+    let usage = PythiaUsageModel()
+    /// Stable per-window identity — each window is its own hydra (own prompt and
+    /// own history-session) sharing the one Ægis and the one project context.
+    /// Persisted so a relaunched window resumes its *own* thread, not a sibling's.
+    let hydraID: String
         /// One-click Riss macro offered when the daemon tears the thread — transient
         /// UI state, never persisted into the flow ledger.
         @Published var recoverCard: RecoverSuggestion?
@@ -532,12 +573,16 @@ final class PythiaChatModel: ObservableObject {
     private var turnGeneration = 0
     /// Watch for a freshly drafted Ægis course, woven into the flow as a veil.
     private var courseObserver: NSObjectProtocol?
+    /// Slow heartbeat that keeps the status-band accounting fresh even while the
+    /// user is idle (the ledger also accrues from sibling windows/contexts).
+    private var usageTimer: Timer?
 
     var currentGlyph: String {
         pythiaCompanions.first { $0.id == companionID }?.glyph ?? "🐍"
     }
 
     init() {
+        hydraID = Self.persistedHydraID()
         // Restore hermetic activation — which companions answer alongside Pythia.
         let saved = UserDefaults.standard.stringArray(forKey: "pythia.activeCompanions") ?? []
         activeCompanions = Set(saved)
@@ -565,6 +610,50 @@ final class PythiaChatModel: ObservableObject {
             guard let plan = note.userInfo?["plan"] as? String, !plan.isEmpty else { return }
             MainActor.assumeIsolated { self?.coursePlanDidLand(plan) }
         }
+        // Prime the status-band accounting, then refresh it on a slow heartbeat.
+        refreshUsage()
+        usageTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshUsage() }
+        }
+    }
+
+    /// The window's stable hydra identity — persisted across launches so the
+    /// main window resumes its own thread. A sibling window would mint its own
+    /// id in its own `PythiaChatModel`.
+    private static func persistedHydraID() -> String {
+        let key = "pythia.hydraID"
+        if let id = UserDefaults.standard.string(forKey: key), !id.isEmpty { return id }
+        let id = "hydra-" + UUID().uuidString.prefix(8).lowercased()
+        UserDefaults.standard.set(id, forKey: key)
+        return id
+    }
+
+    /// Pull the daemon's hermetic accounting (model, thinking level, token
+    /// ledger, cost) into `usage` so the status band under Pythia mirrors the
+    /// oracle's breath. Best-effort — accounting must never interrupt a turn.
+    func refreshUsage() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                if !RubyBridge.shared.isRunning {
+                    try await RubyBridge.shared.start()
+                }
+                let snapshot = try await RubyBridge.shared.fetchUsage()
+                self.usage.apply(snapshot, contextTurns: self.history.count / 2)
+            } catch {
+                // Best-effort — a silent ledger beats a noisy editor.
+            }
+        }
+    }
+
+    /// Load this hydra's own flow snapshot; on first run under the hydra
+    /// identity, fall back to the legacy shared `pythia_flow.db` so existing
+    /// history is not orphaned by the per-window migration.
+    private func loadHydraSnapshot(forContext root: String?) -> PythiaFlowStore.Snapshot? {
+        if let snapshot = PythiaFlowStore.shared.load(forContext: root, limit: initialPageSize, stream: hydraID) {
+            return snapshot
+        }
+        return PythiaFlowStore.shared.load(forContext: root, limit: initialPageSize, stream: nil)
     }
 
     /// Restore the previous session's full flow timeline (messages, tool groups,
@@ -577,7 +666,7 @@ final class PythiaChatModel: ObservableObject {
         observeFlowChanges()
 
         // 1. Restore the persisted flow timeline (fast, local, per-context).
-        if let snapshot = PythiaFlowStore.shared.load(forContext: boundContextRoot, limit: initialPageSize) {
+        if let snapshot = loadHydraSnapshot(forContext: boundContextRoot) {
             apply(snapshot: snapshot)
             statusText = Self.resumeStatus(snapshot)
         }
@@ -620,7 +709,8 @@ final class PythiaChatModel: ObservableObject {
             cwd: cliCwd,
             flow: flow,
             history: history,
-            forContext: boundContextRoot
+            forContext: boundContextRoot,
+            stream: hydraID
         )
     }
 
@@ -636,10 +726,10 @@ final class PythiaChatModel: ObservableObject {
         guard boundContextRoot != newRoot else { return }
         _ = PythiaFlowStore.shared.save(
             cwd: cliCwd, flow: flow, history: history,
-            forContext: boundContextRoot ?? oldRoot
+            forContext: boundContextRoot ?? oldRoot, stream: hydraID
         )
         boundContextRoot = newRoot
-        if let snapshot = PythiaFlowStore.shared.load(forContext: newRoot, limit: initialPageSize) {
+        if let snapshot = loadHydraSnapshot(forContext: newRoot) {
             apply(snapshot: snapshot)
             statusText = Self.resumeStatus(snapshot)
         } else {
@@ -661,8 +751,8 @@ final class PythiaChatModel: ObservableObject {
               let incoming = PythiaFlowStore.shared.load(forContext: otherContext)
         else { return false }
 
-        let merged = PythiaFlowStore.shared.merge(incoming, intoContext: boundContextRoot)
-        if merged, let snapshot = PythiaFlowStore.shared.load(forContext: boundContextRoot) {
+        let merged = PythiaFlowStore.shared.merge(incoming, intoContext: boundContextRoot, stream: hydraID)
+        if merged, let snapshot = PythiaFlowStore.shared.load(forContext: boundContextRoot, stream: hydraID) {
             apply(snapshot: snapshot)
             statusText = "🔗 Merged flow from \((otherContext as NSString).lastPathComponent)"
             return true
@@ -685,9 +775,14 @@ final class PythiaChatModel: ObservableObject {
         guard !isPersisting else { return }
         let contextRoot = note.userInfo?["contextRoot"] as? String ?? ""
         guard contextRoot == (boundContextRoot ?? "") else { return }
+        // Only a sibling hydra writing to *this* head's stream concerns us. The
+        // legacy shared ledger (stream == "") and foreign streams are ignored so
+        // windows no longer clobber each other's thread.
+        let stream = note.userInfo?["stream"] as? String ?? ""
+        guard stream == hydraID else { return }
         // Re-read the paged window from the ledger rather than applying the
         // sender's in-memory snapshot — the sibling may hold only its own page.
-        if let snapshot = PythiaFlowStore.shared.load(forContext: boundContextRoot, limit: initialPageSize) {
+        if let snapshot = PythiaFlowStore.shared.load(forContext: boundContextRoot, limit: initialPageSize, stream: hydraID) {
             apply(snapshot: snapshot)
         }
     }
@@ -710,10 +805,11 @@ final class PythiaChatModel: ObservableObject {
         let anchorID = flow.first?.id
         let beforeSeq = earliestLoadedSeq
         let limit = initialPageSize
+        let hydra = hydraID
         Task { [weak self] in
             guard let self else { return }
             let page = await Task.detached(priority: .userInitiated) {
-                PythiaFlowStore.shared.loadOlder(forContext: root, beforeSeq: beforeSeq, limit: limit)
+                PythiaFlowStore.shared.loadOlder(forContext: root, beforeSeq: beforeSeq, limit: limit, stream: hydra)
             }.value
             guard let page, !page.flow.isEmpty else {
                 self.isLoadingOlder = false
@@ -893,13 +989,14 @@ final class PythiaChatModel: ObservableObject {
                 if companion == "pythia" {
                     reply = try await RubyBridge.shared.chatDetailed(
                         messages: history,
-                        activeCompanions: Array(activeCompanions).sorted()
+                        activeCompanions: Array(activeCompanions).sorted(),
+                        hydra: hydraID
                     )
                 } else {
                     // Direct companion speech routes through the oracle channel with
                     // the companion veiled — full toolset + persistent history, so the
                     // companion can actually act (build, deploy, …) across turns.
-                    reply = try await RubyBridge.shared.chatCompanion(name: companion, messages: history)
+                    reply = try await RubyBridge.shared.chatCompanion(name: companion, messages: history, hydra: hydraID)
                 }
                 let rawAnswer = reply.text ?? ""
                 let finalText = rawAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -921,6 +1018,7 @@ final class PythiaChatModel: ObservableObject {
                         self.heldTurn = false
                         self.paused = false
                         self.collapseCompletedToolGroups()
+                        self.refreshUsage()
                         return
                     }
                     self.appendMessage(ChatMessage(role: "assistant", text: finalText, glyph: glyph, reasoning: reply.reasoningContent))
@@ -936,6 +1034,7 @@ final class PythiaChatModel: ObservableObject {
                     self.trimHistory()  // count even again after assistant
                     self.collapseCompletedToolGroups()
                     self.busy = false
+                    self.refreshUsage()
                 }
                 // Merge: interjections queued while this turn ran continue the flow.
                 // This turn appended exactly one assistant entry, so anything
@@ -950,6 +1049,7 @@ final class PythiaChatModel: ObservableObject {
                     self.streamingVisible = false
                     self.statusText = nil
                     self.busy = false
+                    self.refreshUsage()
                     self.appendMessage(ChatMessage(role: "assistant",
                                                     text: "⚠️ \(error.localizedDescription)",
                                                     glyph: glyph))
