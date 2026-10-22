@@ -80,7 +80,7 @@ final class PythiaFlowStore {
         NotificationCenter.default.post(
             name: Self.didChangeNotification,
             object: nil,
-            userInfo: ["contextRoot": root ?? "", "snapshot": snapshot]
+            userInfo: ["contextRoot": root ?? "", "stream": stream ?? "", "session": session, "snapshot": snapshot]
         )
         return true
     }
@@ -127,8 +127,8 @@ final class PythiaFlowStore {
     /// Load one page of older entries — the window immediately preceding
     /// `beforeSeq` (exclusive). Returns only `flow` + paging metadata; the caller
     /// folds it in front of the already-loaded window.
-    func loadOlder(forContext root: String?, beforeSeq: Int64, limit: Int = 200) -> Snapshot? {
-        guard let url = fileURL(forContext: root), beforeSeq > 0 else { return nil }
+    func loadOlder(forContext root: String?, beforeSeq: Int64, limit: Int = 200, stream: String? = nil) -> Snapshot? {
+        guard let url = fileURL(forContext: root, stream: stream), beforeSeq > 0 else { return nil }
         guard let db = open(url) else { return nil }
         defer { sqlite3_close(db) }
 
@@ -195,9 +195,9 @@ final class PythiaFlowStore {
     /// their (role, content) key is not already present. Writes delta-wise and
     /// broadcasts — sibling windows converge on the same one ledger.
     @discardableResult
-    func append(cwd: String, flow: [FlowEntry], history: [[String: String]], forContext root: String?, session: String = "default") -> Bool {
+    func append(cwd: String, flow: [FlowEntry], history: [[String: String]], forContext root: String?, session: String = "default", stream: String? = nil) -> Bool {
         guard let root, !root.isEmpty else { return false }
-        let existing = load(forContext: root)
+        let existing = load(forContext: root, stream: stream)
         let mergedFlow = existing.map { merge(flow, into: $0.flow) } ?? flow
 
         func historyKey(_ row: [String: String]) -> String {
@@ -215,15 +215,15 @@ final class PythiaFlowStore {
 
         let resolvedSession = session.isEmpty ? (existing?.session ?? "default") : session
         let resolvedCwd = cwd.isEmpty ? (existing?.cwd ?? "") : cwd
-        return save(cwd: resolvedCwd, flow: mergedFlow, history: mergedHistory, forContext: root, session: resolvedSession)
+        return save(cwd: resolvedCwd, flow: mergedFlow, history: mergedHistory, forContext: root, session: resolvedSession, stream: stream)
     }
 
     /// Merge an incoming snapshot into a context — the drag-and-drop binding.
     /// Delegates to `append`: a snapshot is just a cursor (or span) being folded
     /// into the ledger without duplication.
     @discardableResult
-    func merge(_ incoming: Snapshot, intoContext root: String?) -> Bool {
-        append(cwd: incoming.cwd, flow: incoming.flow, history: incoming.history, forContext: root, session: incoming.session)
+    func merge(_ incoming: Snapshot, intoContext root: String?, stream: String? = nil) -> Bool {
+        append(cwd: incoming.cwd, flow: incoming.flow, history: incoming.history, forContext: root, session: incoming.session, stream: stream)
     }
 
     // MARK: Database plumbing
