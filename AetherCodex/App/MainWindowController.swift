@@ -483,6 +483,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
         contentView.layer?.cornerCurve = .continuous
         contentView.layer?.masksToBounds = true
         contentView.layer?.backgroundColor = NSColor.clear.cgColor
+        // Outer glass rim: a hairline border tracing the rounded silhouette so
+        // the window reads against any desktop (light or dark). Neutral gray is
+        // theme-independent — no re-resolve needed when the appearance flips.
+        contentView.layer?.borderWidth = 1.0
+        contentView.layer?.borderColor = NSColor(calibratedWhite: 0.5, alpha: 0.45).cgColor
         window.backgroundColor = .clear
         window.hasShadow = true
 

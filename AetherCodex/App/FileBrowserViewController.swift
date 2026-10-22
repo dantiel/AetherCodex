@@ -124,7 +124,8 @@ private struct FileBrowserScrollContent: View {
                     }
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 4)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
                 Divider().opacity(0.4)
             }
         }
