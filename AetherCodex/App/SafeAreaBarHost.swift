@@ -66,6 +66,71 @@ final class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
     }
 }
 
+// MARK: - Pythia status band
+
+/// The bottom status band under Pythia: context (active model + thinking level),
+/// the session's token usage, and cost. Observes `PythiaUsageModel` — a separate
+/// observable from the chat model — so it re-renders only when the accounting
+/// changes, never on prompt keystrokes (the macOS 26 bar-drop guard).
+private struct PythiaStatusBar: View {
+    @ObservedObject var usage: PythiaUsageModel
+    let theme: SyntaxTheme
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(contextLabel)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 8)
+            Text(tokenLabel)
+            Text("·").foregroundStyle(.tertiary)
+            Text(costLabel)
+            if usage.allTimeCost > 0 {
+                Text("·").foregroundStyle(.tertiary)
+                Text("Σ \(Self.usd(usage.allTimeCost))")
+            }
+        }
+        .font(.system(size: 10).monospacedDigit())
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 10)
+        .frame(height: EditorChromeMetrics.statusBarHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { EditorStatusSurface(theme: theme) }
+        .allowsHitTesting(false)
+    }
+
+    private var contextLabel: String {
+        var parts = [usage.model]
+        if usage.thinking != "normal", !usage.thinking.isEmpty {
+            parts.append(usage.thinking)
+        }
+        if usage.contextTurns > 0 {
+            parts.append("\(usage.contextTurns)t")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var tokenLabel: String {
+        Self.compact(usage.sessionTokens) + " tok"
+    }
+
+    private var costLabel: String {
+        Self.usd(usage.sessionCost)
+    }
+
+    static func compact(_ n: Int) -> String {
+        switch n {
+        case ..<1000: return "\(n)"
+        case ..<1_000_000: return String(format: "%.1fk", Double(n) / 1000)
+        default: return String(format: "%.1fM", Double(n) / 1_000_000)
+        }
+    }
+
+    static func usd(_ v: Double) -> String {
+        String(format: "$%.4f", v)
+    }
+}
+
 // MARK: - Chrome state
 
 /// Observable state driving the `safeAreaBar` chrome (sidebar + Pythia).
@@ -352,6 +417,16 @@ struct EditorContainerView: View {
                         EditorChromeSurface(color: chrome.theme.rulerBackground)
                         EditorStatusSurface(theme: chrome.theme)
                             .frame(height: EditorChromeMetrics.statusBarHeight)
+                            // The strip behind the sheet docks only on its right
+                            // edge (where it meets the code column's status bar);
+                            // its far-left sliver is a pointless artifact at the
+                            // window corner, so fade it out toward the leading
+                            // edge instead of painting a full-width band.
+                            .mask {
+                                LinearGradient(colors: [.clear, .white],
+                                               startPoint: .leading,
+                                               endPoint: .trailing)
+                            }
                     }
                     .allowsHitTesting(false)
                     GeometryReader { bounds in
@@ -389,8 +464,10 @@ struct EditorContainerView: View {
                             .position(x: sheet.midX, y: sheet.midY)
                     }
 
-                    // Breadcrumb (address bar) + sidebar toggle, living inside
-                    // the sheet between the traffic lights and its trailing edge.
+                    // Breadcrumb (address bar) only — the sidebar toggle moved to
+                    // the top bar (a single button that slides in beside it). This
+                    // row lives inside the sheet, between the traffic lights and
+                    // its trailing edge.
                     VStack(spacing: 0) {
                         HStack(spacing: 6) {
                             // The breadcrumb trail is gone — the sidebar now
@@ -402,10 +479,12 @@ struct EditorContainerView: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                            SidebarToggleButton(chrome: chrome)
                         }
                         .padding(.leading, 100)
-                        .padding(.trailing, 16)
+                        // Leave room for the single sidebar toggle, which now
+                        // lives in the top bar and slides in beside the
+                        // breadcrumb when the sheet is open.
+                        .padding(.trailing, 56)
                         Spacer(minLength: 0)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -464,8 +543,7 @@ struct EditorContainerView: View {
                             .fill(chrome.theme.sidebarMaterial)
                             .overlay(Color(nsColor: chrome.theme.pythia.background)
                                 .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme)))
-                        EditorStatusSurface(theme: chrome.theme)
-                            .frame(height: EditorChromeMetrics.statusBarHeight)
+                        PythiaStatusBar(usage: pythiaModel.usage, theme: chrome.theme)
                     }
                     .allowsHitTesting(false)
                     HostedView {
@@ -979,29 +1057,43 @@ struct TopBar: View {
     var gutterInset: CGFloat = 0
 
     var body: some View {
-        HStack(spacing: 6) {
-            // The sidebar toggle lives in the sidebar header while it is open
-            // (next to the breadcrumb); only when collapsed does it appear here,
-            // right of the traffic lights, so it stays reachable.
-            if !chrome.sidebarVisible {
-                sidebarToggle
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: 6) {
+                titleGlyph
+                    .padding(.leading, gutterInset + 12)
+                titleLabel
+
+                Spacer(minLength: 0)
             }
+            .padding(.leading, leadingInset)
+            .padding(.trailing, 160)
+            .frame(height: 44)
+            .frame(maxWidth: .infinity)
 
-            titleGlyph
-                .padding(.leading, gutterInset + 12)
-            titleLabel
-
-            Spacer(minLength: 0)
+            // One toggle, one truth. The button never mounts or unmounts — it
+            // only slides between "right of the traffic lights" (collapsed) and
+            // "beside the breadcrumb, inside the sheet" (open). A single moving
+            // button keeps the transition a continuous motion; the previous
+            // two-button swap cross-faded (two visible while closing, none while
+            // opening) and read as a duplicated, then vanished, control.
+            sidebarToggle
+                .offset(x: toggleLeading, y: 4)
         }
-        .padding(.leading, leadingInset)
-        .padding(.trailing, 160)
-        .frame(height: 44)
         .frame(maxWidth: .infinity)
         .offset(y: -28)
         .overlay(alignment: .trailing) {
             trailingControls
                 .padding(.trailing, 12)
         }
+    }
+
+    /// Horizontal position of the single sidebar toggle. Collapsed it sits right
+    /// of the traffic lights (leadingInset is 76 then); open it rides the sheet's
+    /// trailing edge and lands beside the breadcrumb — 52pt shy of the edge, the
+    /// same spot the old sidebar-header toggle held (16pt trailing pad + 36pt
+    /// button width).
+    private var toggleLeading: CGFloat {
+        chrome.sidebarVisible ? leadingInset - 52 : leadingInset
     }
 
     private var sidebarToggle: some View {
