@@ -38,8 +38,6 @@ enum FileLinkResolver {
         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
 
         var path: String?
-        var line: Int?
-        var column: Int?
         var lineRaw: String?
         var columnRaw: String?
 
@@ -61,39 +59,52 @@ enum FileLinkResolver {
             }
         }
 
+        // Zeile/Spalte mit expliziter, zentraler Präzedenz:
+        // Fragment (#L482C10) > Query (line=/column=) > Pfad-Suffix (:482:10).
+        // Jede spätere Quelle trägt nur ein, was noch nicht gesetzt ist.
+        var line: Int?
+        var column: Int?
+
         // Fragment: #L482 bzw. #L482C10
-        if let frag = comps.fragment?.uppercased(), frag.hasPrefix("L") {
-            let parts = String(frag.dropFirst()).split(separator: "C", maxSplits: 1)
-            if let n = Int(parts.first ?? "") { line = n }
-            if parts.count > 1, let c = Int(parts[1]) { column = c }
+        if let frag = comps.fragment?.uppercased(), frag.hasPrefix("L"),
+           let lc = parseLineColumn(String(frag.dropFirst()), separator: "C") {
+            line = lc.line
+            column = lc.column
         }
 
         // "line=482:10" — die Spalte hängt am Zeilenwert.
-        if let lr = lineRaw, line == nil {
-            let parts = lr.split(separator: ":", maxSplits: 1)
-            line = Int(parts.first ?? "")
-            if parts.count > 1, column == nil { column = Int(parts[1]) }
+        if line == nil, let lr = lineRaw, let lc = parseLineColumn(lr, separator: ":") {
+            line = lc.line
+            if column == nil { column = lc.column }
         }
         if column == nil, let cr = columnRaw { column = Int(cr) }
 
         // "path=A/B.swift:482:10" — VSCode-/git-Stil mit angehängter Zeile[:Spalte].
-        if var p = path, line == nil {
-            if let m = trailingLocationMatch(p) {
-                p = m.path
-                line = m.line
-                column = m.column
-            }
-            path = p
+        if line == nil, let p = path, let m = trailingLocationMatch(p) {
+            path = m.path
+            line = m.line
+            if column == nil { column = m.column }
         }
 
         guard let rawPath = path?.trimmingCharacters(in: .whitespaces), !rawPath.isEmpty else { return nil }
         return FileLink(path: rawPath, line: line, column: column)
     }
 
+    /// Zerlegt "482", "482:10" oder "482C10" in Zeile + optionale Spalte —
+    /// die gemeinsame Form der drei tolerant-parse-Schichten (Fragment-`C`,
+    /// Query-Doppelpunkt und Pfad-Suffix-Zahlen).
+    private static func parseLineColumn(_ text: String, separator: Character) -> (line: Int, column: Int?)? {
+        let parts = text.split(separator: separator, maxSplits: 1)
+        guard let line = Int(parts.first ?? "") else { return nil }
+        var column: Int?
+        if parts.count > 1, let c = Int(parts[1]) { column = c }
+        return (line, column)
+    }
+
     /// Erkennt ein angehängtes `:Zeile[:Spalte]` am Pfadende — ohne einen
     /// gewöhnlichen Doppelpunkt im Dateinamen zu treffen.
     private static func trailingLocationMatch(_ path: String) -> (path: String, line: Int, column: Int?)? {
-        guard let regex = try? NSRegularExpression(pattern: #"^(.*):(\d+)(?::(\d+))?$"#) else { return nil }
+        guard let regex = try? NSRegularExpression(pattern: #"^(.*?):(\d+)(?::(\d+))?$"#) else { return nil }
         let ns = path as NSString
         guard let m = regex.firstMatch(in: path, range: NSRange(location: 0, length: ns.length)),
               m.numberOfRanges >= 3 else { return nil }
