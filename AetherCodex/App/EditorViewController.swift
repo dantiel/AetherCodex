@@ -2593,15 +2593,24 @@ extension EditorViewController {
     }
 
     /// Selects and reveals the given 1-based line without an alert — used by
-    /// project-scope find results to jump straight to a match.
-    func revealLine(_ lineNumber: Int) {
+    /// project-scope find results to jump straight to a match. When `column`
+    /// (1-based) is given, the caret lands on that column instead of the line
+    /// start — this is the CLI's `file:42:8` / `--line 42:8` entry point.
+    func revealLine(_ lineNumber: Int, column: Int? = nil) {
         guard let textView else { return }
         let ns = textView.string as NSString
         guard lineNumber > 0, ns.length > 0 else { return }
         let target = min(lineNumber - 1, lineCount(ns) - 1)
-        let idx = lineIndex(ns, lineNumber: target)
-        textView.setSelectedRange(NSRange(location: idx, length: 0))
-        textView.scrollRangeToVisible(NSRange(location: idx, length: 0))
+        let lineStart = lineIndex(ns, lineNumber: target)
+        var caret = lineStart
+        if let column, column > 0 {
+            var contentsEnd = 0
+            ns.getLineStart(nil, end: nil, contentsEnd: &contentsEnd,
+                            for: NSRange(location: lineStart, length: 0))
+            caret = min(lineStart + column - 1, contentsEnd)
+        }
+        textView.setSelectedRange(NSRange(location: caret, length: 0))
+        textView.scrollRangeToVisible(NSRange(location: caret, length: 0))
     }
 
     // MARK: Invisibles

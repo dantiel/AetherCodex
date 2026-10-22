@@ -380,7 +380,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
             forName: .openFileInEditor, object: nil, queue: .main
         ) { [weak self] note in
             if let request = note.object as? FileLinkRequest {
-                self?.openFileInTab(request.url, revealLine: request.line)
+                self?.openFileInTab(request.url, revealLine: request.line,
+                                    revealColumn: request.column)
             } else if let url = note.object as? URL {
                 self?.openFileInTab(url)
             }
@@ -797,13 +798,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
     /// Open a file into a tab: fills the active untitled tab, otherwise a new one.
     /// When `line` is given, the caret is placed there once the document has been
     /// loaded — this is the CLI's `file:42` / `--line` entry point.
-    func openFileInTab(_ url: URL, revealLine line: Int? = nil) {
+    func openFileInTab(_ url: URL, revealLine line: Int? = nil,
+                       revealColumn column: Int? = nil) {
         guard let tabs = tabsModel else { return }
         let tab = tabs.tabForOpening(url)
         tab.controller.openFile(url)
         if let line {
             let controller = tab.controller
-            DispatchQueue.main.async { controller.revealLine(line) }
+            DispatchQueue.main.async { controller.revealLine(line, column: column) }
         }
     }
 
