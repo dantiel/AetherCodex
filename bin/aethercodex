@@ -10,8 +10,10 @@
 #   line/column  → `aethercodex://open?path=..&line=..`  (URL scheme, app-side)
 #   lifecycle    → AppleScript `osascript`               (always on macOS)
 #
-# Short forms (installed by install-aliases.sh): acx, ax, ae
-# The oracle CLI is the `aetheroracle` gem: ao, oracle, pythia
+# Short forms (installed by install-aliases.sh): acx (primary), ax, ac
+# The oracle CLI is the `aetheroracle` gem — it installs its own commands on
+# `gem install` (aetheroracle, aether, oracle, oracleaether, ae, aero, orae),
+# so the editor CLI deliberately owns no overlapping alias.
 
 set -euo pipefail
 
@@ -57,8 +59,8 @@ Shorthand:
   ${PROG} file.txt:42       open file.txt at line 42
   ${PROG} file.txt:42:8     open file.txt at line 42, column 8
 
-Aliases (see install-aliases.sh): acx (primary), ax, ae
-Oracle CLI (the \`aetheroracle\` gem): ao, oracle, pythia
+Aliases (see install-aliases.sh): acx (primary), ax, ac
+Oracle CLI (the \`aetheroracle\` gem): aetheroracle, aether, oracle, oracleaether, ae, aero, orae
 EOF
 }
 

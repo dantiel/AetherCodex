@@ -795,10 +795,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
     }
 
     /// Open a file into a tab: fills the active untitled tab, otherwise a new one.
+    /// When `line` is given, the caret is placed there once the document has been
+    /// loaded — this is the CLI's `file:42` / `--line` entry point.
     func openFileInTab(_ url: URL, revealLine line: Int? = nil) {
         guard let tabs = tabsModel else { return }
         let tab = tabs.tabForOpening(url)
         tab.controller.openFile(url)
+        if let line {
+            let controller = tab.controller
+            DispatchQueue.main.async { controller.revealLine(line) }
+        }
     }
 
     /// Follow the active document *inside* the current sidebar root. Opening a file

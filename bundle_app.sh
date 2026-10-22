@@ -125,6 +125,17 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
     <true/>
     <key>CFBundleIconFile</key>
     <string>AetherCodex.icns</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.aethercodex.editor.open</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>aethercodex</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST

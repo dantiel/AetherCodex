@@ -22,5 +22,16 @@
     <string>13.0</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.aethercodex.editor.open</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>aethercodex</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

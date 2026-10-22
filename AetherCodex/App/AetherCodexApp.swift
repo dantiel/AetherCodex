@@ -19,6 +19,7 @@ import AppKit
 struct AetherCodexApp: App {
     @StateObject private var shell = MainWindowController()
     private let actions = AppActions()
+    private let externalEvents = AetherExternalEvents()
 
     init() {
         // Never let a broken daemon pipe (SIGPIPE) kill the whole app: the raw
@@ -48,6 +49,7 @@ struct AetherCodexApp: App {
                 .frame(minWidth: 800, minHeight: 600)
                 .appScene(AppWindowID.main)
                 .onAppear { shell.adoptHostWindow() }
+                .onOpenURL { url in _ = FileLinkResolver.open(url) }
         }
         .defaultSize(width: 1400, height: 900)
         .windowStyle(.hiddenTitleBar)
