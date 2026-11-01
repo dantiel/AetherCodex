@@ -12,6 +12,15 @@ import XCTest
 /// pinned by `testResizeStripNeverReachesBeneathTheHostedSidebar`.
 @MainActor
 final class SidebarLayoutTests: XCTestCase {
+    func testScrollEdgeBandCountsTheTitleOnlyOnce() {
+        XCTAssertEqual(EditorChromeMetrics.scrollEdgeBarHeight(topInset: 0), 44)
+        XCTAssertEqual(EditorChromeMetrics.scrollEdgeBarHeight(topInset: 32), 76)
+        XCTAssertEqual(EditorChromeMetrics.scrollEdgeBarHeight(topInset: -20), 44)
+    }
+    func testSidebarKeepsItsIndependentInteriorRadius() {
+        XCTAssertEqual(SidebarSheetGeometry.sheetCornerRadius, 18)
+    }
+
     func testRestoredPanelWidthsLeaveRoomForEditor() {
         for width in [800.0, 1024, 1640] {
             let layout = EditorPanelWidths(available: width, sidebar: 900, inspector: 900)

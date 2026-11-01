@@ -63,13 +63,9 @@ enum SidebarSheetGeometry {
     static let bottom: CGFloat = 8
     static var horizontalInsets: CGFloat { leading + trailing }
 
-    /// Corner radius of the floating sheet — the SAME radius as the window
-    /// silhouette (`EditorChromeMetrics.windowCornerRadius`). The sheet floats
-    /// 8pt inside the frame, so its corners describe the same arc as the glass
-    /// border + material background; matching curvatures read as one coherent
-    /// corner rather than two competing arcs. All four corners round — the sheet
-    /// is a complete floating card, never docked square on its right edge.
-    static let sheetCornerRadius: CGFloat = EditorChromeMetrics.windowCornerRadius
+    /// Interior card radius, independent of the system-owned window silhouette.
+    /// The sheet's clip and stroke both use this value.
+    static let sheetCornerRadius: CGFloat = 18
 
     /// `sidebarWidth` denotes the usable sheet width. The safe-area column is
     /// wider because it also owns the requested outer window margins.

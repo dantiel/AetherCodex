@@ -14,17 +14,17 @@ enum EditorChromeMetrics {
     static let titleBarBand: CGFloat = 44
     /// Height of the editor tab strip row.
     static let tabBarBand: CGFloat = 32
-    /// How far the title row overhangs upward into the window's title bar (it is
-    /// drawn `.offset(y: -titleBarOverhang)` so its glyphs sit in the traffic-light
-    /// row, but its interactive row still occupies the full `titleBarBand`).
-    static let titleBarOverhang: CGFloat = 28
+    /// The main window is borderless (its outer corner + shadow are self-drawn),
+    /// so there is no titlebar to overhang into. The title band sits flush at the
+    /// window's top edge and the tab strip begins directly beneath it.
+    static let titleBarOverhang: CGFloat = 0
 
-    /// Top edge of the floating tab strip, measured from the window's top edge.
-    /// The strip overhangs the lower half of the title band.
-    static let tabStripTop: CGFloat = titleBarBand - titleBarOverhang   // 16
+    /// Top edge of the floating tab strip, measured from the window's top edge —
+    /// flush below the title band, since a borderless window owns no titlebar.
+    static let tabStripTop: CGFloat = titleBarBand                     // 44
     /// Lower edge of the tab strip — anything that must sit *under* the strip
     /// (the Pythia inspector, the vertical scroller) tiles from here.
-    static let tabStripBottom: CGFloat = tabStripTop + tabBarBand       // 48
+    static let tabStripBottom: CGFloat = tabStripTop + tabBarBand       // 76
 
     /// Breathing room above the first code line (two visual lines). This is part
     /// of the scroll content, so it scrolls away rather than becoming chrome.
@@ -37,24 +37,19 @@ enum EditorChromeMetrics {
     /// Applied on top of `tabStripBottom`; the no-tabbar case is flush to the top.
     static let pythiaBelowTabClearance: CGFloat = 20
 
-    /// The window silhouette: the ONE radius every window-level surface shares —
-    /// the AppKit content clip, the SwiftUI glass fills, the desktop backdrop,
-    /// and the floating sidebar sheet.
-    ///
-    /// macOS rounds a window's frame inside the window server and exposes no
-    /// public value for it (`NSWindow` has no `cornerRadius`; `NSThemeFrame`
-    /// reports 0 because the rounding never reaches its layer). The app therefore
-    /// declares the silhouette itself, and it MUST match the server's native arc
-    /// (Tahoe's standard window corner) — otherwise the material's corner and the
-    /// glass border + shadow round at two different curvatures and the seam
-    /// doubles (the classic radius mismatch).
-    ///
-    /// Every fill shares this ONE number, so the outer glass, the material
-    /// background, and the floating sheet all describe the same arc — matched,
-    /// never doubled, never cut off at the corners.
-    static let windowCornerRadius: CGFloat = 16
+    /// Visible outer silhouette. NativeWindowChrome clips the enclosing frame
+    /// while retaining its real titlebar controls. This is not an NSWindow
+    /// corner-radius property; keep it separate from interior sheet rounding.
+    static let windowCornerRadius: CGFloat = 22
+    /// Transparent rim around the content where the custom shadow has room to draw
+    /// (a shadow cannot extend past its own window's bounds).
+    static let windowShadowMargin: CGFloat = 26
+    static let windowShadowRadius: CGFloat = 16
+    static let windowShadowOpacity: Float = 0.4
+    static let windowShadowOffsetY: CGFloat = 5
 
     /// Utility windows (`UtilityWindow` → `AppKitPanel`) round one point tighter.
+    /// These stay titled; the value clips the *content* to match the native arc.
     static let utilityWindowCornerRadius: CGFloat = 15
 
     /// Height of the bottom status strip — one row of 11pt secondary text.
@@ -69,6 +64,13 @@ enum EditorChromeMetrics {
         showsTabBar ? tabBarBand : 0
     }
 
+    /// Height owned by a scroll view's top safe-area bar. The tab strip is
+    /// additional height, not its absolute bottom coordinate (which includes
+    /// the title band already).
+    static func scrollEdgeBarHeight(topInset: CGFloat) -> CGFloat {
+        titleBarBand + max(0, topInset)
+    }
+
     /// Top padding applied to the scroll content — the first line of the editor
     /// clears the title band plus any chrome row above it.
     static func contentTopInset(showsTabBar: Bool) -> CGFloat {
@@ -78,6 +80,6 @@ enum EditorChromeMetrics {
     /// Top margin for the vertical scroll indicator so it stops below the floating
     /// chrome instead of running up behind the transparent title/tab bar.
     static func scrollIndicatorTopInset(showsTabBar: Bool) -> CGFloat {
-        showsTabBar ? tabStripBottom : titleBarOverhang
+        showsTabBar ? tabStripBottom : titleBarBand
     }
 }
