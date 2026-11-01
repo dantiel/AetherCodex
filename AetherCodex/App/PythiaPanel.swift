@@ -544,6 +544,15 @@ final class PythiaChatModel: ObservableObject {
         /// the message list always jumps to the newest chapter — even if the reader
         /// had scrolled up into older flow.
         @Published var scrollAnchor = 0
+        /// Bumped by `focusInput()` (⌘T) — the `InputBar` observes it and drops
+        /// focus onto the prompt `TextField`. A token, not a `Bool`, so repeated
+        /// ⌘T presses always re-trigger even if focus never left.
+        @Published var focusInputToken = 0
+        /// Route focus to the prompt from anywhere outside the view graph — the
+        /// menu, the responder chain. Revealing the panel is the caller's job.
+        func focusInput() {
+            focusInputToken += 1
+        }
         /// Paged loading: the flow ledger grows unbounded, so only the newest
         /// `initialPageSize` entries are restored at startup; older chapters are
         /// pulled in lazily when the reader scrolls to the top.
@@ -1840,8 +1849,10 @@ struct PythiaPanel: View {
               PanelModePicker(mode: $mode)
               if mode == .pythia {
                   CompanionPicker(model: model)
+                      .frame(maxWidth: .infinity, alignment: .leading)
+              } else {
+                  Spacer(minLength: 0)
               }
-              Spacer(minLength: 0)
               inspectorControls
             }
             .padding(.horizontal, 10)
@@ -3735,6 +3746,10 @@ struct InstrumentaSemantics {
             return InstrumentaSemantics(glyph: "🗣️", label: "Spricht", tint: .teal, system: true)
         case "run_command":
             return InstrumentaSemantics(glyph: "🐚", label: "Shell", tint: .mint)
+        case "web_search":
+            return InstrumentaSemantics(glyph: "🌐", label: "Sucht", tint: .blue)
+        case "web_fetch":
+            return InstrumentaSemantics(glyph: "📄", label: "Liest Web", tint: .teal)
         default:
             if name.hasSuffix("_suggest") || name.hasSuffix("_say")
                 || name.hasSuffix("_commit") || name.hasSuffix("_ask") {
@@ -3860,6 +3875,8 @@ struct ToolChipRow: View {
             RenameFileView(chip: chip)
         } else if FileInstrumentTool.isUndoPatch(chip.name) {
             UndoPatchView(chip: chip)
+        } else if chip.name == "web_search" || chip.name == "web_fetch" {
+            WebResultChipView(chip: chip)
         } else if sem.system {
             SystemInstrumentChipView(chip: chip)
         } else {
@@ -3948,6 +3965,43 @@ private struct SystemInstrumentChipView: View {
                 .strokeBorder(sem.tint.opacity(chip.done ? 0.18 : 0.40), lineWidth: 0.5)
         )
         .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+}
+
+/// Web grounding — a search hit list or a fetched page — rendered as readable
+/// markdown instead of a raw JSON dump.
+private struct WebResultChipView: View {
+    let chip: ToolChip
+    private var sem: InstrumentaSemantics { InstrumentaSemantics.forTool(chip.name) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Text(sem.glyph)
+                    .font(.system(size: 10))
+                Text(sem.label)
+                    .font(.system(size: 9, weight: .semibold))
+                Spacer(minLength: 0)
+                if chip.done {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(sem.tint)
+                } else {
+                    ProgressView().controlSize(.mini)
+                }
+            }
+            if !chip.output.isEmpty {
+                MarkdownBody(text: chip.output)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(sem.tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(sem.tint.opacity(chip.done ? 0.18 : 0.40), lineWidth: 0.5)
+        )
     }
 }
 
@@ -4586,6 +4640,9 @@ private struct InputBar: View {
                             .textFieldStyle(.plain)
                             .font(.system(size: 12, design: .monospaced))
                             .focused($inputFocused)
+                            .onChange(of: model.focusInputToken) { _, _ in
+                                inputFocused = true
+                            }
                             .lineLimit(1...6)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(4)
