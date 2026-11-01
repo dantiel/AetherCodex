@@ -31,6 +31,14 @@ final class QuickSearchModel: ObservableObject {
     @Published var pendingRevealLine: Int? = nil
     @Published var revealToken: Int = 0
 
+    /// True while the search TextField owns focus. Drives Ctrl+S re-focus: when
+    /// the bar is open but the editor (or chrome) regained the responder, Ctrl+S
+    /// yanks focus back into the field instead of advancing to the next match.
+    @Published var isFieldFocused = false
+    /// Bumped to pull focus into the search field (Ctrl+S while the bar is open
+    /// but unfocused). A token so repeated re-focus requests replay cleanly.
+    @Published var refocusToken = 0
+
     /// Bumped whenever a non-empty query finds nothing — the bar shakes. An
     /// integer token, not a flag: every new failure is a fresh increment, so the
     /// shake replays even while the previous one is still settling.
@@ -48,9 +56,30 @@ final class QuickSearchModel: ObservableObject {
     /// True when the editor is in multi-caret/multi-selection mode.
     var isMultiCaret: Bool { (textView?.selectedRanges.count ?? 0) > 1 }
 
-    /// Ctrl+S: open the bar, or navigate to the next match when already open.
+    /// True while the editor's own text view owns the responder chain — the user
+    /// clicked back into the code. `@FocusState` is unreliable across the
+    /// AppKit/SwiftUI boundary (a click into the NSTextView does not always flip
+    /// the SwiftUI field's focus state), so Ctrl+S reads the AppKit truth here.
+    var editorHasFocus: Bool {
+        guard let tv = textView, let window = tv.window else { return false }
+        return window.firstResponder === tv
+    }
+
+    /// Ctrl+S: open the bar; when already open, navigate next — unless the
+    /// editor regained focus (user clicked the code), in which case Ctrl+S yanks
+    /// focus back into the search field first.
     func toggle() {
-        if isVisible { next() } else { show() }
+        if isVisible {
+            editorHasFocus ? refocus() : next()
+        } else {
+            show()
+        }
+    }
+
+    /// Yank focus back into the search field without touching the current match.
+    func refocus() {
+        guard isVisible else { return }
+        refocusToken += 1
     }
 
     func show() {
@@ -109,6 +138,7 @@ final class QuickSearchModel: ObservableObject {
         matches = []
         currentIndex = 0
         pendingRevealLine = nil
+        isFieldFocused = false
         originRange = nil
         originRanges = nil
         if let tv = textView {
@@ -244,24 +274,25 @@ final class QuickSearchModel: ObservableObject {
         tv.scrollRangeToVisible(ordered[0].range)
     }
 
-    /// Exact vertical center of the current match's line, in the adopted text
-    /// view's top-down coordinate space (Y = 0 at the top of the document).
-    /// Measured from the live layout manager, so it is immune to line-height
-    /// drift and soft-wrap folding that a `(line - 1) * lineHeight` estimate
-    /// cannot see. Nil while the layout is not ready — callers fall back to the
-    /// arithmetic estimate.
-    var currentMatchCenterY: CGFloat? {
+    /// Center of the current match, in the adopted text view's coordinate space
+    /// (origin top-leading; X = 0 at the text container's leading edge). Measured
+    /// from the live layout manager so both axes are immune to line-height drift,
+    /// soft-wrap folding, and font/size overrides. Nil while the layout is not
+    /// ready — callers fall back to arithmetic estimates.
+    var currentMatchCenter: CGPoint? {
         guard !matches.isEmpty, currentIndex < matches.count,
               let tv = textView, let lm = tv.layoutManager,
               let tc = lm.textContainers.first else { return nil }
         let m = matches[currentIndex]
-        let charIndex = min(m.range.location, tv.string.count)
+        guard NSMaxRange(m.range) <= tv.string.count else { return nil }
         if lm.numberOfGlyphs == 0 { lm.ensureLayout(for: tc) }
-        let glyphIndex = lm.glyphIndexForCharacter(at: charIndex)
-        guard glyphIndex != NSNotFound, glyphIndex < lm.numberOfGlyphs else { return nil }
-        let rect = lm.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        let glyphRange = lm.glyphRange(forCharacterRange: m.range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else { return nil }
+        let rect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
         guard rect.height > 0 else { return nil }
-        return rect.midY
+        // The glyph rect is in text-container space; `textContainerOrigin` adds
+        // the code-leading padding so the sum lands in text-view space.
+        return CGPoint(x: tv.textContainerOrigin.x + rect.midX, y: rect.midY)
     }
 
     /// Scans all matches and tracks 1-based line numbers in a single pass —
@@ -291,10 +322,12 @@ final class QuickSearchModel: ObservableObject {
 
 // MARK: - Bar
 
-/// Liquid-glass incremental search bar, centered near the editor bottom —
-/// TextMate's Ctrl+S surface, re-woven in SwiftUI.
+/// Incremental-search bar — a floating glass pill that hovers above the status
+/// strip (TextMate's Ctrl+S surface, re-woven in SwiftUI). It dissolves in and
+/// out with a scale + fade rather than reading as a full-width chrome band.
 struct QuickSearchBar: View {
     @ObservedObject var model: QuickSearchModel
+    let theme: SyntaxTheme
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -354,20 +387,18 @@ struct QuickSearchBar: View {
             .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.white.opacity(0.10), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
-        .frame(width: 480)
-        // Reveal / fold: the bar does not slide in from an edge, it *condenses*
-        // out of blur — materializing where the eye already looks. The dock row
-        // above animates the height; these three animate the substance.
-        .blur(radius: model.isVisible ? 0 : 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Floating pill: its own glass, rounded corners, and a soft shadow — the
+        // bar hovers above the status strip instead of continuing its chrome.
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(.white.opacity(0.14), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.14), radius: 4, y: 1)
+        .blur(radius: model.isVisible ? 0 : 8)
         .opacity(model.isVisible ? 1 : 0)
-        .scaleEffect(model.isVisible ? 1.0 : 1.4)
+        .scaleEffect(model.isVisible ? 1 : 0.92, anchor: .bottom)
         // Negative feedback: a query that matches nothing shakes the bar. Driven
         // by the token, so consecutive misses each replay the same 3 half-cycles.
         .modifier(ShakeEffect(animatableData: CGFloat(model.notFoundToken)))
@@ -381,6 +412,14 @@ struct QuickSearchBar: View {
             } else if let tv = model.textView {
                 tv.window?.makeFirstResponder(tv)
             }
+        }
+        .onChange(of: focused) { _, nowFocused in
+            model.isFieldFocused = nowFocused
+        }
+        .onChange(of: model.refocusToken) { _, _ in
+            // Ctrl+S arrived while the bar was open but the editor/chrome owned
+            // the responder chain — pull focus back into the field.
+            DispatchQueue.main.async { focused = true }
         }
     }
 }

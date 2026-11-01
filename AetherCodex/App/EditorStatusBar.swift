@@ -87,41 +87,38 @@ struct EditorStatusBar: View {
 
 // MARK: - Bottom band
 
-/// The window's bottom safe-area band: the docked quick-search bar (it grows in
-/// above the status line when Ctrl+S opens it) over the always-present strip.
+/// The window's bottom safe-area band: only the always-present status strip.
+/// The quick-search pill floats above it as an overlay (see `QuickSearchDock`),
+/// so opening search never pushes the editor — the pill hovers, it doesn't dock.
 struct EditorBottomBar: View {
-    /// Reference only — `QuickSearchDock` observes the model itself. Observing it
-    /// here would re-evaluate `EditorContainerView`'s body per keystroke in the
-    /// search field and tear the hosted inspector band down (see its header).
-    let quickSearch: QuickSearchModel?
     @ObservedObject var status: EditorStatusModel
     let theme: SyntaxTheme
+    /// Gates the status strip — View → Status Bar can hide it.
+    var showStatusBar: Bool = true
 
     var body: some View {
-        VStack(spacing: 0) {
-            if let quickSearch {
-                QuickSearchDock(model: quickSearch)
-            }
+        if showStatusBar {
             EditorStatusBar(status: status, theme: theme)
         }
     }
 }
 
-/// The docked quick-search row. The row height animates 0 ⇄ its band while the
-/// bar itself blurs/scales/fades — opening and folding are one motion. The bar
-/// stays mounted for the whole life of a code tab (only its row collapses), so
-/// the reveal can play in *and* out; folded, it takes no clicks.
-private struct QuickSearchDock: View {
+/// The floating quick-search pill. It hovers over the code column (an overlay on
+/// the editor surface, never a reserved band) and dissolves in/out with the
+/// scale + fade + blur baked into `QuickSearchBar` itself. It stays mounted for
+/// the whole life of a code tab so the reveal can play in *and* out; folded, it
+/// takes no clicks.
+struct QuickSearchDock: View {
     @ObservedObject var model: QuickSearchModel
+    let theme: SyntaxTheme
 
     var body: some View {
-        HStack {
-            Spacer(minLength: 0)
-            QuickSearchBar(model: model)
-            Spacer(minLength: 0)
-        }
-        .frame(height: model.isVisible ? EditorChromeMetrics.quickSearchBarHeight : 0)
-        .allowsHitTesting(model.isVisible)
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: model.isVisible)
+        QuickSearchBar(model: model, theme: theme)
+            .frame(maxWidth: 560)
+            .frame(height: EditorChromeMetrics.quickSearchBarHeight)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity)
+            .allowsHitTesting(model.isVisible)
     }
 }
