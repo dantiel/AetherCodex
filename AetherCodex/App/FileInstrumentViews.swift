@@ -322,6 +322,81 @@ struct ReadFileView: View {
 
 // MARK: - patch_file · Schnitt
 
+// MARK: - Zeichen-Diff (TextMate-Stil)
+
+/// One run of a character-level diff between two lines: shared, removed, or
+/// newly added text. Consecutive runs of the same kind are merged, so the list
+/// stays short even for long common prefixes/suffixes.
+struct DiffRun: Equatable {
+    enum Kind { case equal, delete, insert }
+    let kind: Kind
+    var text: String
+}
+
+/// Longest-common-subsequence diff of two lines, run by run. Patch hunks are
+/// small enough to pay the O(n·m) DP; pathological (minified) lines fall back
+/// to a single prefix/suffix split instead of allocating a huge table.
+func diffChars(_ a: String, _ b: String) -> [DiffRun] {
+    let x = Array(a), y = Array(b)
+    let n = x.count, m = y.count
+    guard n * m <= 262_144 else { return coarseDiff(x, y) }
+
+    var dp = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
+    for i in stride(from: n - 1, through: 0, by: -1) {
+        for j in stride(from: m - 1, through: 0, by: -1) {
+            dp[i][j] = x[i] == y[j] ? dp[i + 1][j + 1] + 1 : max(dp[i + 1][j], dp[i][j + 1])
+        }
+    }
+
+    var runs: [DiffRun] = []
+    func emit(_ kind: DiffRun.Kind, _ ch: Character) {
+        if runs.last?.kind == kind {
+            runs[runs.count - 1].text.append(ch)
+        } else {
+            runs.append(DiffRun(kind: kind, text: String(ch)))
+        }
+    }
+
+    var i = 0, j = 0
+    while i < n || j < m {
+        if i < n, j < m, x[i] == y[j] {
+            emit(.equal, x[i]); i += 1; j += 1
+        } else if j < m, (i >= n || dp[i][j + 1] >= dp[i + 1][j]) {
+            emit(.insert, y[j]); j += 1
+        } else {
+            emit(.delete, x[i]); i += 1
+        }
+    }
+    return runs
+}
+
+/// Cheap prefix/suffix fallback for lines too large for the O(n·m) table.
+private func coarseDiff(_ x: [Character], _ y: [Character]) -> [DiffRun] {
+    var p = 0
+    while p < x.count, p < y.count, x[p] == y[p] { p += 1 }
+    var s = 0
+    while s < x.count - p, s < y.count - p,
+          x[x.count - 1 - s] == y[y.count - 1 - s] { s += 1 }
+
+    var runs: [DiffRun] = []
+    if p > 0 { runs.append(DiffRun(kind: .equal, text: String(x[..<p]))) }
+    let midX = x.count - p - s, midY = y.count - p - s
+    if midX > 0 { runs.append(DiffRun(kind: .delete, text: String(x[p..<(p + midX)]))) }
+    if midY > 0 { runs.append(DiffRun(kind: .insert, text: String(y[p..<(p + midY)]))) }
+    if s > 0 { runs.append(DiffRun(kind: .equal, text: String(x[(x.count - s)...]))) }
+    return runs
+}
+
+/// One aligned line of a Schnitt. A `.modify` row carries both the before and
+/// after text so the view can tint only the actually changed characters.
+private struct DiffRow {
+    enum Kind { case context, delete, insert, modify }
+    let kind: Kind
+    var text: String = ""
+    var removed: String?
+    var added: String?
+}
+
 struct PatchFileView: View {
     let chip: ToolChip
     @Environment(\.pythiaPalette) private var palette
@@ -378,98 +453,110 @@ struct PatchFileView: View {
         }
     }
 
-    /// Unified diff — one code pane, the same `LineNumberedCodeView` that
-    /// `read_file` and `create_file` share. Removed lines carry `-`, added
-    /// lines carry `+`, unchanged edge lines appear once. The split view below
-    /// (`splitDiffPane`) is retained for a later configurable choice.
+    /// Per-hunk diff: each Schnitt is a section whose header stays pinned while
+    /// its lines scroll, and a modified line is a pair whose changed characters
+    /// are tinted inline (red strikethrough / green fill) — TextMate's patch
+    /// view, re-woven in SwiftUI.
     private var diffPane: some View {
-        LineNumberedCodeView(code: unifiedDiffText, language: lang,
-                             startLine: 1, maxHeight: 220,
-                             background: palette.codeBackgroundColor.opacity(0.55))
-    }
-
-    /// Builds a single unified diff stream from the parsed SEARCH/REPLACE
-    /// blocks. Common leading/trailing lines are emitted once (context), so a
-    /// changed line no longer shows twice as removed *and* added.
-    private var unifiedDiffText: String {
-        var out: [String] = []
-        for (idx, block) in blocks.enumerated() {
-            var header = "@@ Schnitt \(idx + 1)"
-            if !block.startLine.isEmpty { header += " · Zeile \(block.startLine)" }
-            header += " @@"
-            out.append(header)
-
-            var removed = block.removed
-            var added = block.added
-
-            var prefix = 0
-            while prefix < removed.count, prefix < added.count,
-                  removed[prefix] == added[prefix] {
-                out.append(" \(removed[prefix])")
-                prefix += 1
-            }
-            removed.removeFirst(prefix)
-            added.removeFirst(prefix)
-
-            var suffix = 0
-            while suffix < removed.count, suffix < added.count,
-                  removed[removed.count - 1 - suffix] == added[added.count - 1 - suffix] {
-                suffix += 1
-            }
-            let midRemoved = removed.dropLast(suffix)
-            let midAdded = added.dropLast(suffix)
-            let tail = removed.suffix(suffix)
-
-            for line in midRemoved { out.append("-\(line)") }
-            for line in midAdded { out.append("+\(line)") }
-            for line in tail { out.append(" \(line)") }
-        }
-        return out.joined(separator: "\n")
-    }
-
-    /// Split diff — the earlier rendering (removed block, then added block).
-    /// Kept in the codebase; a future preference toggle may switch between
-    /// `diffPane` and this view.
-    private var splitDiffPane: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 6) {
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { idx, block in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 5) {
-                            Text("Schnitt \(idx + 1)")
-                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(palette.accentColor)
-                            if !block.startLine.isEmpty {
-                                Text("· Zeile \(block.startLine)")
-                                    .font(.system(size: 8, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 0)
+                    Section {
+                        ForEach(Array(diffRows(for: block).enumerated()), id: \.offset) { _, row in
+                            rowView(row)
                         }
-                        ForEach(Array(block.removed.enumerated()), id: \.offset) { _, line in
-                            diffLine(line, sign: "-", tint: .red)
-                        }
-                        ForEach(Array(block.added.enumerated()), id: \.offset) { _, line in
-                            diffLine(line, sign: "+", tint: .green)
-                        }
+                    } header: {
+                        hunkHeader(idx, block)
                     }
-                    .padding(6)
-                    .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 6))
                 }
             }
-            .padding(6)
+            .padding(.vertical, 4)
         }
-        .frame(maxHeight: 220)
-        .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
+        .frame(maxHeight: 240)
+        .scrollEdgeEffectStyle(.soft, for: [.bottom])
         .background(palette.codeBackgroundColor.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(palette.shineColor.opacity(0.22), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
-    private func diffLine(_ line: String, sign: String, tint: Color) -> some View {
+    /// Align a Schnitt's SEARCH and REPLACE lines. Shared leading/trailing lines
+    /// become context; the changed middle is paired index-by-index into `.modify`
+    /// rows (or a lone `.delete`/`.insert` when one side has extra lines).
+    private func diffRows(for block: PatchBlock) -> [DiffRow] {
+        let removed = block.removed, added = block.added
+
+        var prefix = 0
+        while prefix < removed.count, prefix < added.count, removed[prefix] == added[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < removed.count - prefix, suffix < added.count - prefix,
+              removed[removed.count - 1 - suffix] == added[added.count - 1 - suffix] { suffix += 1 }
+
+        let midRemoved = removed[prefix..<(removed.count - suffix)]
+        let midAdded = added[prefix..<(added.count - suffix)]
+
+        var rows: [DiffRow] = []
+        for line in removed.prefix(prefix) { rows.append(DiffRow(kind: .context, text: line)) }
+        for k in 0..<max(midRemoved.count, midAdded.count) {
+            if k < midRemoved.count, k < midAdded.count {
+                rows.append(DiffRow(kind: .modify, removed: midRemoved[k], added: midAdded[k]))
+            } else if k < midRemoved.count {
+                rows.append(DiffRow(kind: .delete, text: midRemoved[k]))
+            } else {
+                rows.append(DiffRow(kind: .insert, text: midAdded[k]))
+            }
+        }
+        for line in removed.suffix(suffix) { rows.append(DiffRow(kind: .context, text: line)) }
+        return rows
+    }
+
+    private func hunkHeader(_ idx: Int, _ block: PatchBlock) -> some View {
+        HStack(spacing: 5) {
+            Text("Schnitt \(idx + 1)")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(palette.accentColor)
+            if !block.startLine.isEmpty {
+                Text("· Zeile \(block.startLine)")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Text("\(block.removed.count) - \(block.added.count)")
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.codeBackgroundColor)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(palette.shineColor.opacity(0.14)).frame(height: 0.5)
+        }
+    }
+
+    @ViewBuilder private func rowView(_ row: DiffRow) -> some View {
+        switch row.kind {
+        case .context:
+            plainLine(row.text, sign: " ", tint: nil)
+        case .delete:
+            plainLine(row.text, sign: "-", tint: .red)
+        case .insert:
+            plainLine(row.text, sign: "+", tint: .green)
+        case .modify:
+            let runs = diffChars(row.removed ?? "", row.added ?? "")
+            if let removed = row.removed {
+                inlineLine(removed, runs: runs, sign: "-", mark: .delete, tint: .red)
+            }
+            if let added = row.added {
+                inlineLine(added, runs: runs, sign: "+", mark: .insert, tint: .green)
+            }
+        }
+    }
+
+    private func plainLine(_ line: String, sign: String, tint: Color?) -> some View {
         HStack(alignment: .top, spacing: 5) {
             Text(sign)
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(tint.opacity(0.85))
+                .foregroundStyle(tint?.opacity(0.85) ?? Color.secondary)
                 .frame(width: 8, alignment: .leading)
             Text(highlightCode(line, language: lang))
                 .font(.system(size: 9, design: .monospaced))
@@ -478,7 +565,43 @@ struct PatchFileView: View {
         }
         .padding(.vertical, 1.5)
         .padding(.horizontal, 3)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 3))
+        .background(RoundedRectangle(cornerRadius: 3).fill(tint.map { $0.opacity(0.08) } ?? Color.clear))
+    }
+
+    private func inlineLine(_ line: String, runs: [DiffRun], sign: String, mark: DiffRun.Kind, tint: Color) -> some View {
+        HStack(alignment: .top, spacing: 5) {
+            Text(sign)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(tint.opacity(0.85))
+                .frame(width: 8, alignment: .leading)
+            Text(inlineAttributed(runs: runs, mark: mark, tint: tint))
+                .font(.system(size: 9, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 1.5)
+        .padding(.horizontal, 3)
+        .background(RoundedRectangle(cornerRadius: 3).fill(tint.opacity(0.08)))
+    }
+
+    /// Syntax-highlights each run and tints the changed characters of the given
+    /// side (`.delete` → red strikethrough, `.insert` → green fill). Runs from
+    /// the opposite side are skipped — they belong to the other line.
+    private func inlineAttributed(runs: [DiffRun], mark: DiffRun.Kind, tint: Color) -> AttributedString {
+        var out = AttributedString()
+        for run in runs {
+            if (mark == .delete && run.kind == .insert) || (mark == .insert && run.kind == .delete) { continue }
+            let seg = highlightCode(run.text, language: lang)
+            let start = out.endIndex
+            out.append(seg)
+            let end = out.endIndex
+            guard run.kind == mark else { continue }
+            out[start..<end].backgroundColor = tint.opacity(0.20)
+            if mark == .delete {
+                out[start..<end].strikethroughStyle = Text.LineStyle(pattern: .solid, color: tint.opacity(0.85))
+            }
+        }
+        return out
     }
 
     private var doneCard: some View {
