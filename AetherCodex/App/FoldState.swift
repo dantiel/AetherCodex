@@ -1,11 +1,16 @@
 import Cocoa
+import Combine
 
 // MARK: - Fold State Manager
 
-/// Manages which fold regions are currently collapsed.
-/// Stores the original text of folded regions so they can be restored.
-final class FoldState {
-    private(set) var foldedRegions: Set<FoldRegion> = []
+/// Manages which fold regions are currently collapsed, plus the current set of
+/// foldable regions for the document. `ObservableObject` so the live gutter can
+/// repaint when the detected regions change or a region is toggled.
+final class FoldState: ObservableObject {
+    @Published private(set) var foldedRegions: Set<FoldRegion> = []
+    /// Detected foldable regions for the current document (0-based lines),
+    /// rebuilt by `FoldDetector` whenever the document changes shape.
+    @Published var regions: [FoldRegion] = []
     /// Cached original text for each folded region (by startLine).
     private var foldCache: [Int: String] = [:]
 
@@ -36,7 +41,9 @@ final class FoldState {
         let marker = "…\n"
         textStorage.replaceCharacters(in: foldRange, with: marker)
 
-        foldedRegions.insert(region)
+        var updated = foldedRegions
+        updated.insert(region)
+        foldedRegions = updated
     }
 
     func unfold(_ region: FoldRegion, in textStorage: NSTextStorage) {
@@ -62,7 +69,9 @@ final class FoldState {
         textStorage.replaceCharacters(in: markerRange, with: original)
 
         foldCache.removeValue(forKey: region.startLine)
-        foldedRegions.remove(region)
+        var updated = foldedRegions
+        updated.remove(region)
+        foldedRegions = updated
     }
 
     func toggle(_ region: FoldRegion, in textStorage: NSTextStorage) {
@@ -74,7 +83,7 @@ final class FoldState {
     }
 
     func clear() {
-        foldedRegions.removeAll()
+        foldedRegions = []
         foldCache.removeAll()
     }
 }

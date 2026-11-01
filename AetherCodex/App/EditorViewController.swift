@@ -121,6 +121,22 @@ class EditorViewController: NSViewController {
     /// Lets source→preview→source round-trips preserve unsaved edits.
     private var htmlSourceLoadedFor: URL?
 
+    // MARK: - File Watching (TextMate-style external change detection)
+
+    /// Vnode watcher for `currentFile`. Dumb: reports *that* the node changed;
+    /// `handleExternalChange` decides whether it was our own write or external.
+    private let fileWatcher = FileWatcher()
+    /// Baseline (mtime + size) the watcher compares against to debounce level-
+    /// triggered events and to ignore our own writes.
+    private var watchedModificationDate: Date?
+    private var watchedFileSize: Int?
+    /// Guard flag around our own disk writes so a save never trips the reload
+    /// path (belt-and-suspenders on top of the baseline comparison).
+    private var isSaving = false
+    /// Suppresses `confirmReplacingRichDocument` during a disk reload — the user
+    /// already chose "Reload from Disk", so the open path must not double-prompt.
+    private var suppressReplaceConfirmation = false
+
     var supportsRichText: Bool {
         ["md", "markdown", "mdown", "rtf"].contains(currentFile?.pathExtension.lowercased() ?? "")
     }
@@ -216,7 +232,6 @@ class EditorViewController: NSViewController {
     // MARK: - Folding
 
     let foldState = FoldState()
-    private var foldRegions: [FoldRegion] = []
     private var foldDetectionDebounce: Timer?
     /// Suppress textDidChange during programmatic loads (openFile/newDocument).
     private var suppressTextDidChange = false
@@ -273,19 +288,6 @@ class EditorViewController: NSViewController {
     /// Callback to status bar for showing parse progress.
     var onBackgroundParseProgress: ((Double) -> Void)?
     private var dragHandle: TitlebarDragHandle?
-
-    /// Standalone line-number gutter — fixed position, text scrolls behind it.
-    private var lineNumberGutter: LineNumberRulerView?
-    /// Blur backdrop behind the line-number gutter — text scrolling behind it blurs natively.
-    private var gutterBlurView: NSVisualEffectView?
-    private var _lastGutterWidth: CGFloat?
-    private var _lastGutterChangeTime: CFTimeInterval = 0
-
-    /// Total width from sidebar right edge to first character of text:
-    /// gutter width (the text container sits flush — inset 0).
-    var effectiveGutterWidth: CGFloat {
-        (lineNumberGutter?.gutterWidth ?? 52)
-    }
 
     // MARK: - Incremental Search (Ctrl+S)
 
@@ -502,7 +504,7 @@ class EditorViewController: NSViewController {
     private func updateOverlayInsets() {
         guard let sv = scrollView else { return }
 
-        let gutterW = lineNumberGutter?.gutterWidth ?? 52
+        let gutterW: CGFloat = 52
 
         // Content insets: gutter only. Text scrolls behind sidebar/pythia glass.
         // Equality-guarded: assigning insets unconditionally re-invalidates layout,
@@ -539,7 +541,7 @@ class EditorViewController: NSViewController {
     override func viewDidLayout() {
         super.viewDidLayout()
 
-        let gutterW = lineNumberGutter?.gutterWidth ?? 24
+        let gutterW: CGFloat = 24
         let oldOffset = scrollView.contentView.bounds.origin
 
         // Delegate to updateOverlayInsets for contentInsets + safeAreaBar zones.
@@ -550,14 +552,6 @@ class EditorViewController: NSViewController {
             scrollView.contentView.scroll(to: oldOffset)
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
-
-        // Gutter blur backdrop and ruler at x=0 within the contentInset gutter zone.
-        // Sidebar glass overlays them when visible; text starts at gutterW.
-        // Equality-guarded so we don't re-invalidate layout on every pass.
-        let gutterFrame = NSRect(x: 0, y: 0, width: gutterW,
-                                  height: scrollView.bounds.height)
-        if gutterBlurView?.frame != gutterFrame { gutterBlurView?.frame = gutterFrame }
-        if lineNumberGutter?.frame != gutterFrame { lineNumberGutter?.frame = gutterFrame }
 
         // Reflow text on window resize when word wrap is enabled.
         if effectiveWordWrap, let tv = textView, let tc = tv.textContainer,
@@ -769,6 +763,7 @@ class EditorViewController: NSViewController {
             currentFile = newURL
             isDirty = false
             updateTitle()
+            beginWatching(newURL)
         } catch {
             print("Rename failed: \(error)")
             NSSound.beep()
@@ -904,39 +899,6 @@ class EditorViewController: NSViewController {
         // MainWindowController, not by auto content insets.
         scrollView.automaticallyAdjustsContentInsets = false
 
-        // Standalone line-number gutter — fixed, text scrolls behind it
-        let ruler = LineNumberRulerView(textView: textView, scrollView: scrollView)
-        ruler.foldState = foldState
-        ruler.onFoldToggle = { [weak self] region in
-            self?.toggleFold(region)
-        }
-        ruler.onWidthChanged = { [weak self, weak ruler] in
-            guard let self, let ruler else { return }
-            let newWidth = ruler.gutterWidth
-            let now = CACurrentMediaTime()
-            if let last = self._lastGutterWidth, abs(last - newWidth) < 0.5 { return }
-            // Aggressive debounce: skip if called more than once per 0.5s
-            if now - self._lastGutterChangeTime < 0.5 { return }
-            self._lastGutterWidth = newWidth
-            self._lastGutterChangeTime = now
-            self.view.needsLayout = true
-        }
-        lineNumberGutter = ruler
-
-        // Blur backdrop behind the gutter — text scrolling under it blurs.
-        // Uses .fullScreenUI for the modern glass material (.withinWindow so it
-        // reads through only the window content, not the desktop).
-        let blur = NSVisualEffectView()
-        blur.material = .fullScreenUI
-        blur.blendingMode = .withinWindow
-        blur.state = .active
-        blur.wantsLayer = true
-        blur.layer?.cornerCurve = .continuous
-        gutterBlurView = blur
-        // Sits behind the ruler, so line numbers float on top of the blur.
-        scrollView.addSubview(blur)
-        scrollView.addSubview(ruler)
-
         scrollView.tile()
 
         // Glyph padding is inside NSTextView. The layout manager extends
@@ -1036,23 +998,16 @@ class EditorViewController: NSViewController {
 
     private func detectFolds() {
         guard textStorage.length > 0 else {
-            foldRegions = []
-            updateRulerFolds()
+            foldState.regions = []
             return
         }
-        foldRegions = FoldDetector.detect(in: textStorage.string)
-        updateRulerFolds()
+        foldState.regions = FoldDetector.detect(in: textStorage.string)
     }
 
-    private func updateRulerFolds() {
-        guard let ruler = lineNumberGutter else { return }
-        ruler.foldRegions = foldRegions
-        ruler.needsDisplay = true
-    }
-
-    private func toggleFold(_ region: FoldRegion) {
+    /// Toggles a fold region from the live gutter. `FoldState` mutates the shared
+    /// text storage, so this is the single entry point the SwiftUI gutter calls.
+    func toggleFold(_ region: FoldRegion) {
         foldState.toggle(region, in: textStorage)
-        updateRulerFolds()
         detectFolds()
         let fullRange = NSRange(location: 0, length: textStorage.length)
         SyntaxOracle.shared.applyHighlighting(to: textStorage, range: fullRange, font: nil)
@@ -1079,7 +1034,6 @@ class EditorViewController: NSViewController {
 
     @objc private func selectionDidChange(_ notification: Notification) {
         updateCurrentLineHighlight()
-        lineNumberGutter?.needsDisplay = true
         updateStatusBar()
 
         // A normal (non-programmatic) collapse back to a single selection means
@@ -1171,20 +1125,6 @@ class EditorViewController: NSViewController {
         // DIAGNOSTIC: Top inset 0 — let text underlap the toolbar for scroll-edge test.
         // Preserve glyph padding on theme changes; background painting extends to x=0.
         textView.textContainerInset = NSSize(width: EditorChromeMetrics.codeLeadingPadding, height: 0)
-        if let ruler = lineNumberGutter {
-            ruler.textColor = theme.editorForeground.withAlphaComponent(0.50)
-            ruler.font = EditorGutterStyle.rulerFont(for: font)
-            ruler.lineHighlightColor = settings.highlightCurrentLine ? settings.lineHighlightColor : nil
-            ruler.separatorColor = theme.rulerSeparator
-            // No solid background — gutterBlurView provides the blur material behind.
-            ruler.rulerBackgroundColor = nil
-            ruler.layer?.backgroundColor = nil
-            ruler.layer?.isOpaque = false
-            ruler.selectionBackground = theme.gutterSelectionBackground
-            ruler.selectionForeground = theme.gutterSelectionForeground
-            ruler.selectionBorder = theme.gutterSelectionBorder
-            ruler.invalidateWidthCache()
-        }
         if let hlm = layoutManager as? HighlightingLayoutManager {
             hlm.lineHighlightBorderColor = settings.highlightCurrentLine ? theme.lineHighlightBorder : nil
         }
@@ -1429,6 +1369,7 @@ class EditorViewController: NSViewController {
         // suppressTextDidChange managed by caller
         tv.string = mode == .blank ? "" : exampleCode
         currentFile = nil
+        stopWatching()
         isDirty = false
         layoutManager?.ghostSuggestion = nil
         layoutManager?.removeAllInlineBoxes()
@@ -1521,6 +1462,7 @@ class EditorViewController: NSViewController {
                     isDirty = false
                     updateTitle()
                     notifyDocumentChange()
+                    beginWatching(url)
                 } catch { NSApp.presentError(error) }
                 return
             }
@@ -1555,12 +1497,11 @@ class EditorViewController: NSViewController {
                 richDocument.active = false
                 tv.string = source
                 suppressTextDidChange = false
-                // Force ruler to recalculate line count + redraw after content swap
-                lineNumberGutter?.needsDisplay = true
                 currentFile = url
                 isDirty = false
                 updateTitle()
                 applyThemeChrome()
+                beginWatching(url)
 
                 // ── Large file: viewport-only highlight + background parse ──
                 let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
@@ -1612,6 +1553,7 @@ class EditorViewController: NSViewController {
         isDirty = false
         updateTitle()
         updateStatusBar()
+        beginWatching(url)
     }
 
     /// Routes an HTML file into the WebKit preview, leaving text/rich-text
@@ -1628,6 +1570,7 @@ class EditorViewController: NSViewController {
         isDirty = false
         updateTitle()
         updateStatusBar()
+        beginWatching(url)
     }
 
     /// Leaves the WebKit preview and shows the raw HTML source in the code editor.
@@ -1654,7 +1597,6 @@ class EditorViewController: NSViewController {
             suppressTextDidChange = true
             tv.string = source
             suppressTextDidChange = false
-            lineNumberGutter?.needsDisplay = true
             currentFile = url
             isDirty = false
             updateTitle()
@@ -1697,6 +1639,8 @@ class EditorViewController: NSViewController {
         }
         if htmlPreview.isActive { return }
         guard let url = currentFile else { return }
+        isSaving = true
+        defer { isSaving = false }
         do {
             if richDocument.active {
                 try richDocument.encoded().write(to: url, options: .atomic)
@@ -1705,13 +1649,174 @@ class EditorViewController: NSViewController {
             }
             isDirty = false
             updateTitle()
+            // Atomic writes replace the inode, orphaning the old vnode fd and
+            // moving the mtime — re-watch so subsequent external edits are seen.
+            beginWatching(url)
         } catch {
             NSApp.presentError(error)
         }
     }
 
+    /// "Save As…" — retarget the document at a new URL and write it there.
+    /// Reuses `saveDocument()` so the RTF/text codec and dirty-title bookkeeping
+    /// stay one source of truth.
+    func saveDocumentAs() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = currentFile?.lastPathComponent ?? "Untitled"
+        if let dir = currentFile?.deletingLastPathComponent() {
+            panel.directoryURL = dir
+        }
+        guard let host = view.window else { return }
+        panel.beginSheetModal(for: host) { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            self.currentFile = url
+            self.saveDocument()
+        }
+    }
+
+    // MARK: - File Watching
+
+    /// Begin (or re-begin) watching `url`: record a fresh baseline and attach the
+    /// vnode source. Safe to call repeatedly — saves and reloads re-watch because
+    /// atomic writes orphan the old descriptor.
+    private func beginWatching(_ url: URL) {
+        refreshWatcherBaseline()
+        fileWatcher.onChange = { [weak self] in self?.handleExternalChange() }
+        fileWatcher.watch(url)
+    }
+
+    private func stopWatching() {
+        fileWatcher.stop()
+        watchedModificationDate = nil
+        watchedFileSize = nil
+    }
+
+    /// Re-record the baseline to the current on-disk state of `currentFile`.
+    private func refreshWatcherBaseline() {
+        guard let url = currentFile, let (mtime, size) = Self.stat(url) else {
+            watchedModificationDate = nil
+            watchedFileSize = nil
+            return
+        }
+        watchedModificationDate = mtime
+        watchedFileSize = size
+    }
+
+    /// The vnode source fired. Debounce + classify: our own write (or a no-op
+    /// event) is ignored via the baseline; a real external change reloads a clean
+    /// buffer immediately and asks before discarding unsaved edits.
+    private func handleExternalChange() {
+        guard let url = currentFile, !isSaving else { return }
+        guard let (mtime, size) = Self.stat(url) else {
+            // Deleted on disk — keep the buffer; a later save recreates the file.
+            return
+        }
+        if mtime == watchedModificationDate && size == watchedFileSize {
+            return // level-triggered duplicate or our own write
+        }
+        // A real change: adopt the new baseline now so we never re-ask.
+        watchedModificationDate = mtime
+        watchedFileSize = size
+
+        if isDirty {
+            presentExternalChangeAlert(url: url)
+        } else {
+            reloadFromDisk()
+        }
+    }
+
+    /// Ask what to do when the on-disk file changed while the buffer has unsaved
+    /// edits — the TextMate contract. "Keep Mine" leaves the buffer untouched;
+    /// the baseline was already advanced so we will not nag again for this change.
+    private func presentExternalChangeAlert(url: URL) {
+        let alert = NSAlert()
+        alert.messageText = "\"\(url.lastPathComponent)\" changed on disk"
+        alert.informativeText = "Another application modified this file while you had unsaved changes."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Reload from Disk")
+        alert.addButton(withTitle: "Keep Mine")
+        alert.addButton(withTitle: "Save Mine Over Disk")
+        guard let host = view.window else { return }
+        alert.beginSheetModal(for: host) { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn:
+                self.reloadFromDisk()
+            case .alertThirdButtonReturn:
+                self.saveDocument()
+            default:
+                // Keep Mine — re-watch so a future external edit is still seen
+                // (the triggering change may have been an atomic replace).
+                self.fileWatcher.watch(url)
+            }
+        }
+    }
+
+    /// Re-read the current file from disk. Plain-text documents preserve
+    /// selection + scroll; image/HTML/rich-text delegate to the full open path
+    /// (they have no in-place text buffer to transplant a caret into).
+    func reloadFromDisk() {
+        guard let url = currentFile else { return }
+        if ImageFileType.isImage(url) || HTMLFileType.isHTML(url) ||
+           ["rtf", "md", "markdown", "mdown"].contains(url.pathExtension.lowercased()) {
+            suppressReplaceConfirmation = true
+            defer { suppressReplaceConfirmation = false }
+            openFile(url)
+            return
+        }
+        guard let tv = textView else { return }
+        do {
+            let source = try String(contentsOf: url, encoding: .utf8)
+            let oldSelection = tv.selectedRange()
+            let oldOrigin = scrollView.contentView.bounds.origin
+
+            let hlm = layoutManager as? HighlightingLayoutManager
+            hlm?.lineHighlightColor = nil
+            foldState.clear()
+            suppressTextDidChange = true
+            richDocument.active = false
+            tv.string = source
+            suppressTextDidChange = false
+
+            let clamped = NSRange(location: min(oldSelection.location, (source as NSString).length),
+                                  length: 0)
+            tv.setSelectedRange(clamped)
+            currentFile = url
+            isDirty = false
+            updateTitle()
+            applyThemeChrome()
+
+            let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            isLargeFile = fileSize > Self.largeFileThreshold
+            if isLargeFile {
+                backgroundParseWork?.cancel()
+                backgroundParseProgress = 0.0
+                highlightVisibleRange()
+                scheduleBackgroundParse(for: tv.string)
+            } else {
+                highlightFullDocument()
+            }
+            detectFolds()
+            notifyDocumentReplaced()
+
+            scrollView.contentView.scroll(to: oldOrigin)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            beginWatching(url)
+        } catch {
+            NSApp.presentError(error)
+        }
+    }
+
+    /// (modification date, size) of a file, or nil if it cannot be stat'd.
+    private static func stat(_ url: URL) -> (mtime: Date, size: Int)? {
+        guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+              let mtime = values.contentModificationDate else { return nil }
+        return (mtime, values.fileSize ?? 0)
+    }
+
     private func confirmReplacingRichDocument() -> Bool {
         let imageDirty = imagePreview.isActive && imagePreview.isDirty
+        guard !suppressReplaceConfirmation else { return true }
         guard isDirty, richDocument.active || supportsRichText || imageDirty else { return true }
         let alert = NSAlert()
         alert.messageText = "Save changes to \(currentFile?.lastPathComponent ?? "this document")?"

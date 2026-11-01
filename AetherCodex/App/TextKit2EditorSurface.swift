@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 import CSafeLayout
 
 // MARK: - Document model
@@ -55,7 +56,7 @@ struct EditorGutterStyle {
     var lineHighlightBorder: NSColor = NSColor(white: 0.30, alpha: 0.5)
     /// Extra width on the left edge — extends the gutter toward the floating
     /// sidebar sheet so the active-line highlight connects to the file browser.
-    var leftOverhang: CGFloat = 8
+    var leftOverhang: CGFloat = SidebarSheetGeometry.trailing
 }
 
 extension EditorGutterStyle {
@@ -415,8 +416,25 @@ final class GutterRenderView: NSView {
         }
     }
 
+    /// Shared fold state + detected regions. `ObservableObject`: the gutter
+    /// repaints whenever regions are re-detected or a region toggles.
+    weak var foldState: FoldState? {
+        didSet {
+            guard foldState !== oldValue else { return }
+            foldCancellable = foldState?.objectWillChange.sink { [weak self] _ in
+                DispatchQueue.main.async { self?.needsDisplay = true }
+            }
+            needsDisplay = true
+        }
+    }
+    /// Invoked when a fold triangle is clicked; the owner toggles the region.
+    var onFoldToggle: ((FoldRegion) -> Void)?
+    private var foldCancellable: AnyCancellable?
+
     private let foldGutterWidth: CGFloat = 14
     private let numberGap: CGFloat = 12
+    private let triangleSize: CGFloat = 5
+    private var foldToggleColor: NSColor { gutter.textColor.withAlphaComponent(0.5) }
     /// Observer for the adopted text view's selection changes (see
     /// `rewireSelectionObserver()`). Held so it can be removed on deinit.
     private var selectionObserver: NSObjectProtocol? = nil
@@ -573,10 +591,11 @@ final class GutterRenderView: NSView {
         }
     }
 
-    /// Uniform per-line pitch. Every visual row in this editor shares it — the
-    /// text carries one uniform font + paragraph style and never soft-wraps
-    /// (the container width is unbounded), and attachment bounds never change
-    /// fragment height — so the arithmetic grid below is exact, not approximate.
+    /// Uniform per-line pitch — the seed/fallback only. The primary gutter path
+    /// reads exact fragment rects from the live layout manager; this value backs
+    /// the arithmetic fallback (passive render without an adopted editor) and the
+    /// scroll-extent estimate, so it stays a coarse average even when an emoji or
+    /// larger inline face makes individual lines taller than their neighbours.
     private var liveLineHeight: CGFloat {
         if let lm = sourceLayoutManager, lm.numberOfGlyphs > 0 {
             let height = lm.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil).height
@@ -585,11 +604,8 @@ final class GutterRenderView: NSView {
         return gutter.lineHeight
     }
 
-    /// Line rect for a 1-based line number, computed on the arithmetic grid.
-    /// Deliberately NOT read from the live layout manager: fragment rects are
-    /// stale for the entire document while a mid-edit layout is pending, which
-    /// made numbers drift relative to the code until the next display pass.
-    /// Grid positions are immune — line index × uniform pitch.
+    /// Line rect for a 1-based line number on the arithmetic grid — fallback only,
+    /// used when there is no adopted layout manager to measure against.
     private func rect(forLine number: Int) -> CGRect {
         let lineHeight = liveLineHeight
         return CGRect(x: 0, y: CGFloat(number - 1) * lineHeight,
@@ -623,20 +639,18 @@ final class GutterRenderView: NSView {
         }
         let glyphRange = lm.glyphRange(forBoundingRect: dirtyRect, in: tc)
         guard glyphRange.length > 0 else { return [] }
-        let lineHeight = liveLineHeight
         var lines: [(Int, CGRect, Bool)] = []
-        lm.enumerateLineFragments(forGlyphRange: glyphRange) { _, _, _, fragGlyphRange, _ in
+        lm.enumerateLineFragments(forGlyphRange: glyphRange) { rect, _, _, fragGlyphRange, _ in
             let charRange = lm.characterRange(forGlyphRange: fragGlyphRange, actualGlyphRange: nil)
             let lineIndex = self.lineNumber(forUTF16Offset: charRange.location)
             // A fragment that does not begin at its logical line's first character
             // is a soft-wrapped continuation — same line number, extra visual row.
             let isContinuation = lineIndex < self.lineStartOffsets.count
                 && charRange.location != self.lineStartOffsets[lineIndex]
-            // Arithmetic placement: the line index IS the visual row (uniform
-            // pitch, no soft wrap), so the y coordinate stays grid-locked even
-            // while the layout manager's fragment rects are stale mid-edit.
-            let frame = CGRect(x: 0, y: CGFloat(lineIndex) * lineHeight,
-                               width: self.bounds.width, height: lineHeight)
+            // Measured placement: the layout manager's own fragment rect is the
+            // source of truth. A taller line (emoji, larger inline face) keeps its
+            // number locked to its glyphs instead of drifting on a uniform grid.
+            let frame = CGRect(x: 0, y: rect.minY, width: self.bounds.width, height: rect.height)
             lines.append((lineIndex + 1, frame, isContinuation))
         }
         return lines
@@ -710,9 +724,9 @@ final class GutterRenderView: NSView {
         if hasSelection, let selectedLines {
             let bandFirst = max(selectedLines.lowerBound, firstVisible)
             let bandLast = min(selectedLines.upperBound, lastVisible)
-            if bandFirst <= bandLast {
-                let top = rect(forLine: bandFirst).minY
-                let bottom = rect(forLine: bandLast).maxY
+            if bandFirst <= bandLast,
+               let top = visibleLines.first(where: { $0.0 == bandFirst })?.1.minY,
+               let bottom = visibleLines.last(where: { $0.0 == bandLast })?.1.maxY {
                 gutter.selectionBackground.setFill()
                 NSRect(x: 0, y: top, width: contentWidth, height: bottom - top).fill()
                 // Edge borders only where the run meets an unselected line.
@@ -760,6 +774,24 @@ final class GutterRenderView: NSView {
             text.draw(at: NSPoint(x: x, y: y), withAttributes: numberAttributes)
         }
 
+        // ── Pass 3: fold toggles ──
+        // Collapsed markers come from `foldedRegions` (so a folded block keeps its
+        // triangle for unfolding even after its body is hidden), expanded ones from
+        // the re-detected `regions`. Each lands on its own line's measured origin.
+        let foldRegions = foldRegionsToDraw()
+        if !foldRegions.isEmpty {
+            var frameByLine: [Int: CGRect] = [:]
+            for (number, frame, isContinuation) in visibleLines where !isContinuation {
+                frameByLine[number] = frame
+            }
+            for (region, collapsed) in foldRegions {
+                guard let frame = frameByLine[region.startLine + 1] else { continue }
+                drawFoldTriangle(centerX: foldGutterWidth / 2,
+                                 centerY: frame.midY,
+                                 collapsed: collapsed)
+            }
+        }
+
         // ── Vertical divider: 1px rule between the number column and code ──
         // Drawn here (not in the material surface) because this view is the one
         // guaranteed to render; a trailing `Color.frame(width: 1)` inside the
@@ -767,6 +799,68 @@ final class GutterRenderView: NSView {
         if let divider = gutter.separatorColor {
             divider.setFill()
             NSRect(x: contentWidth - 1, y: 0, width: 1, height: bounds.height).fill()
+        }
+    }
+
+    // MARK: - Fold interaction
+
+    /// Fold regions to render, deduplicated by start line. Folded regions win
+    /// over re-detected ones so a collapsed block keeps a single, collapsed marker.
+    private func foldRegionsToDraw() -> [(region: FoldRegion, collapsed: Bool)] {
+        guard let foldState else { return [] }
+        var byStartLine: [Int: FoldRegion] = [:]
+        var collapsedStarts = Set<Int>()
+        for region in foldState.foldedRegions {
+            byStartLine[region.startLine] = region
+            collapsedStarts.insert(region.startLine)
+        }
+        for region in foldState.regions where byStartLine[region.startLine] == nil {
+            byStartLine[region.startLine] = region
+        }
+        return byStartLine.values
+            .sorted { $0.startLine < $1.startLine }
+            .map { (region: $0, collapsed: collapsedStarts.contains($0.startLine)) }
+    }
+
+    private func drawFoldTriangle(centerX: CGFloat, centerY: CGFloat, collapsed: Bool) {
+        let s = triangleSize * 0.5
+        let path = NSBezierPath()
+        if collapsed {
+            // Right-pointing triangle: collapsed.
+            path.move(to: NSPoint(x: centerX - s * 0.4, y: centerY - s))
+            path.line(to: NSPoint(x: centerX + s * 0.8, y: centerY))
+            path.line(to: NSPoint(x: centerX - s * 0.4, y: centerY + s))
+        } else {
+            // Down-pointing triangle: expanded.
+            path.move(to: NSPoint(x: centerX - s, y: centerY + s * 0.5))
+            path.line(to: NSPoint(x: centerX,     y: centerY - s * 0.8))
+            path.line(to: NSPoint(x: centerX + s, y: centerY + s * 0.5))
+        }
+        path.close()
+        foldToggleColor.setFill()
+        path.fill()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // Only the fold gutter is interactive; the number column passes clicks
+        // through to the document underneath.
+        return point.x < foldGutterWidth + 4 ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard point.x < foldGutterWidth + 4, foldState != nil else { return }
+        // Resolve the clicked line from its measured fragment rect, then match a
+        // fold region whose start line is that line.
+        let probeRect = NSRect(x: 0, y: point.y - 8, width: bounds.width, height: 16)
+        let regions = foldRegionsToDraw()
+        for (number, frame, isContinuation) in visibleNumberLines(in: probeRect) {
+            guard !isContinuation, point.y >= frame.minY, point.y < frame.maxY else { continue }
+            let startLine = number - 1
+            if let match = regions.first(where: { $0.region.startLine == startLine }) {
+                onFoldToggle?(match.region)
+            }
+            return
         }
     }
 }
@@ -838,11 +932,15 @@ struct GutterRenderRepresentable: NSViewRepresentable {
     let attributedString: NSAttributedString
     let gutter: EditorGutterStyle
     var sourceLayoutManager: NSLayoutManager? = nil
+    var foldState: FoldState? = nil
+    var onFoldToggle: ((FoldRegion) -> Void)? = nil
 
     func makeNSView(context: Context) -> GutterRenderView {
         let view = GutterRenderView(frame: .zero)
         view.gutter = gutter
         view.sourceLayoutManager = sourceLayoutManager
+        view.foldState = foldState
+        view.onFoldToggle = onFoldToggle
         view.setAttributedString(attributedString)
         return view
     }
@@ -850,6 +948,8 @@ struct GutterRenderRepresentable: NSViewRepresentable {
     func updateNSView(_ nsView: GutterRenderView, context: Context) {
         nsView.gutter = gutter
         nsView.sourceLayoutManager = sourceLayoutManager
+        nsView.foldState = foldState
+        nsView.onFoldToggle = onFoldToggle
         nsView.setAttributedString(attributedString)
     }
 }
@@ -872,6 +972,10 @@ struct TextKit2ScrollSurface: View {
     /// Shared text storage from EditorViewController — when provided, editor becomes editable
     var sharedTextStorage: NSTextStorage? = nil
     var existingEditor: NSTextView? = nil
+    /// Fold state + detected regions, owned by `EditorViewController`. The gutter
+    /// observes it and reports fold-triangle clicks through `onFoldToggle`.
+    var foldState: FoldState? = nil
+    var onFoldToggle: ((FoldRegion) -> Void)? = nil
     /// Incremental-search state owned by `EditorViewController`, rendered + scrolled here.
     @ObservedObject var searchModel: QuickSearchModel
     /// TextMate-style find & replace state, rendered + scrolled here too.
@@ -897,6 +1001,8 @@ struct TextKit2ScrollSurface: View {
          topChromeInset: CGFloat = 0,
          sharedTextStorage: NSTextStorage? = nil,
          existingEditor: NSTextView? = nil,
+         foldState: FoldState? = nil,
+         onFoldToggle: ((FoldRegion) -> Void)? = nil,
          searchModel: QuickSearchModel,
          findReplace: FindReplaceModel,
          showWrapColumn: Bool = false,
@@ -911,6 +1017,8 @@ struct TextKit2ScrollSurface: View {
         self.topChromeInset = topChromeInset
         self.sharedTextStorage = sharedTextStorage
         self.existingEditor = existingEditor
+        self.foldState = foldState
+        self.onFoldToggle = onFoldToggle
         self.searchModel = searchModel
         self.findReplace = findReplace
         self.showWrapColumn = showWrapColumn
@@ -944,11 +1052,12 @@ struct TextKit2ScrollSurface: View {
     var body: some View {
         GeometryReader { proxy in
             // Two visual code lines of breathing room below the floating title,
-            // plus whatever chrome rows (the tab strip) sit above the surface.
+            // The safe-area bar itself reserves the title and tab-strip rows.
             // This is part of the scroll content, so it naturally disappears as
             // the user scrolls down instead of becoming another fixed toolbar.
-            let topContentInset: CGFloat = EditorChromeMetrics.baseContentInset + topChromeInset
+            let topContentInset: CGFloat = EditorChromeMetrics.baseContentInset
                 + (topChromeInset > 0 ? EditorChromeMetrics.tabBarContentClearance : 0)
+            let topEdgeHeight = EditorChromeMetrics.scrollEdgeBarHeight(topInset: topChromeInset)
             let visibleEditorWidth = max(proxy.size.width - leadingChromeWidth - trailingChromeWidth, 1)
             let viewportTextWidth = max(visibleEditorWidth - gutter.width, 1)
             // Live pitch from the adopted editor — keeps the scroll extent locked
@@ -961,7 +1070,7 @@ struct TextKit2ScrollSurface: View {
             let docWidth = CGFloat(max(maxLineWidth, 1)) * charWidth
             let docHeight = CGFloat(max(lineCount, 1)) * effectiveLineHeight
             let textContentWidth = max(docWidth + 24, viewportTextWidth)
-            let renderedHeight = max(docHeight, proxy.size.height - topContentInset)
+            let renderedHeight = max(docHeight, proxy.size.height - topContentInset - topEdgeHeight)
             // Reach toward the floating sidebar sheet only when it is present.
             let leftOverhang: CGFloat = leadingChromeWidth > 0 ? gutter.leftOverhang : 0
             let numbersOnlyGutter = EditorGutterStyle(
@@ -986,7 +1095,18 @@ struct TextKit2ScrollSurface: View {
             // below is positioned here and scrolled into view on each match.
             // Exact layout-manager Y when available; arithmetic estimate as a
             // fallback while the adopted editor's layout is still warming up.
-            let revealY = searchModel.currentMatchCenterY
+            // Content-space center of the current match. X is measured from the
+            // live layout manager (so a hit on a long line centres the *match*,
+            // not the viewport) and offset past the sidebar+gutter spacer; Y is
+            // the line's measured mid-point. Arithmetic estimates only while the
+            // adopted editor's layout is still warming up.
+            let matchCenter = searchModel.currentMatchCenter
+            // Reveal centres the match *vertically* only. Horizontally the anchor
+            // sits at the viewport's current centre, so `scrollTo(.center)` never
+            // drifts the scroll sideways — a hit on a long line no longer shoves
+            // the view to the right. Mirrors the find/replace anchor below.
+            let revealX = scrollOffset.x + proxy.size.width / 2
+            let revealY = matchCenter?.y
                 ?? CGFloat((searchModel.pendingRevealLine ?? 1) - 1) * effectiveLineHeight
                     + effectiveLineHeight / 2
             let findReplaceRevealY = CGFloat((findReplace.pendingRevealLine ?? 1) - 1) * effectiveLineHeight
@@ -1033,16 +1153,13 @@ struct TextKit2ScrollSurface: View {
                                    height: renderedHeight)
                     }
                     .overlay(alignment: .topLeading) {
-                        // The reveal anchors sit at the *viewport's* horizontal
-                        // centre in content space, so centring one vertically
-                        // (`scrollTo(anchor: .center)`) leaves the horizontal
-                        // offset exactly where the reader left it. An anchor
-                        // pinned to x = 0 would snap a long line back to its
-                        // first column on every single match.
+                        // Both reveal anchors centre the target vertically only:
+                        // their X sits at the viewport's current horizontal centre
+                        // so the scroll never drifts sideways.
                         Color.clear
                             .frame(width: 1, height: 1)
                             .id("quick-search-reveal")
-                            .position(x: scrollOffset.x + proxy.size.width / 2, y: revealY)
+                            .position(x: revealX, y: revealY)
                         Color.clear
                             .frame(width: 1, height: 1)
                             .id("find-replace-reveal")
@@ -1050,20 +1167,31 @@ struct TextKit2ScrollSurface: View {
                     }
                     .padding(.top, topContentInset)
                     .frame(minWidth: visibleEditorWidth,
-                           minHeight: proxy.size.height,
+                           minHeight: max(0, proxy.size.height - topEdgeHeight),
                            alignment: .topLeading)
                 }
-                // Document-height overlays must not enlarge the scroll viewport.
-                .frame(width: proxy.size.width, height: proxy.size.height)
                 // Progressive blur lives on the *scroll content only* — the
                 // background color must stay solid to the very top of the window.
                 .scrollEdgeEffectStyle(.soft, for: [.top, .leading, .trailing])
+                .scrollEdgeEffectHidden(false, for: .top)
+                // Keep the native edge-effect owner adjacent to its scroll
+                // view. The outer full-bleed container ignores safe areas;
+                // relying on its bar made this relationship layout-dependent.
+                // Never change the editor's identity to refresh an effect.
+                .safeAreaBar(edge: .top, spacing: 0) {
+                    Color.clear.frame(height: topEdgeHeight)
+                        .allowsHitTesting(false)
+                }
+                // Constrain the bar + viewport together, not the document.
+                .frame(width: proxy.size.width, height: proxy.size.height)
                 .scrollIndicators(.visible)
                 // The vertical scroller stops below the floating chrome (tab strip
                 // when visible, the title row otherwise) so it never runs up behind
                 // the transparent top bars; the code itself keeps scrolling past
                 // them into the progressive blur.
-                .contentMargins(.top, EditorChromeMetrics.scrollIndicatorTopInset(showsTabBar: topChromeInset > 0),
+                // The local safe-area bar already reserves the top band; don't
+                // apply that height a second time to the scroll indicator.
+                .contentMargins(.top, 0,
                                 for: .scrollIndicators)
                 // Keep the bottom scroller out of the fixed line-number column.
                 // The trailing safe-area bar independently keeps its end clear
@@ -1130,11 +1258,12 @@ struct TextKit2ScrollSurface: View {
                 ProgressiveGutterNumbers(attributedString: attributedString,
                                          gutter: numbersOnlyGutter,
                                          contentHeight: renderedHeight,
-                                         verticalOffset: topContentInset - scrollOffset.y,
-                                         sourceLayoutManager: existingEditor?.layoutManager)
+                                         verticalOffset: topEdgeHeight + topContentInset - scrollOffset.y,
+                                         sourceLayoutManager: existingEditor?.layoutManager,
+                                         foldState: foldState,
+                                         onFoldToggle: onFoldToggle)
                     .frame(width: gutter.width + leftOverhang, height: proxy.size.height, alignment: .top)
                     .offset(x: leadingChromeWidth - leftOverhang)
-                    .allowsHitTesting(false)
 
                 // The incremental quick-search bar (Ctrl+S) docks in the window's
                 // bottom safe-area band beside the status strip, and find & replace
@@ -1184,6 +1313,8 @@ private struct ProgressiveGutterNumbers: View {
     let contentHeight: CGFloat
     let verticalOffset: CGFloat
     var sourceLayoutManager: NSLayoutManager? = nil
+    var foldState: FoldState? = nil
+    var onFoldToggle: ((FoldRegion) -> Void)? = nil
 
     private let transitionHeight: CGFloat = 72
 
@@ -1226,7 +1357,9 @@ private struct ProgressiveGutterNumbers: View {
     private var numberLayer: some View {
         GutterRenderRepresentable(attributedString: attributedString,
                                   gutter: gutter,
-                                  sourceLayoutManager: sourceLayoutManager)
+                                  sourceLayoutManager: sourceLayoutManager,
+                                  foldState: foldState,
+                                  onFoldToggle: onFoldToggle)
             .frame(width: gutter.width + gutter.leftOverhang, height: contentHeight)
             .offset(y: verticalOffset)
     }
