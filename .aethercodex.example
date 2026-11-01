@@ -21,6 +21,11 @@ model:            deepseek-chat
 fast-model:       deepseek-chat
 reasoning-model:  yes
 
+# Web grounding: DeepSeek exposes web_search/web_fetch natively. For any other
+# provider, opt in explicitly:
+# web-search:
+#   enabled: true
+
 # ---------------------------------------------------------------------------
 # Daemon
 # ---------------------------------------------------------------------------
