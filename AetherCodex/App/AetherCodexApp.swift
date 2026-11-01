@@ -17,7 +17,6 @@ import AppKit
 /// `NSWindow` for exactly that (plus parenting the file-browser overlay panel).
 @main
 struct AetherCodexApp: App {
-    @StateObject private var shell = MainWindowController()
     private let actions = AppActions()
     private let externalEvents = AetherExternalEvents()
 
@@ -44,17 +43,18 @@ struct AetherCodexApp: App {
     }
 
     var body: some Scene {
-        Window("ÆtherCodex", id: AppWindowID.main) {
-            shell.rootView
+        WindowGroup("ÆtherCodex", id: AppWindowID.main) {
+            MainWindowScene()
                 .frame(minWidth: 800, minHeight: 600)
                 .appScene(AppWindowID.main)
-                .onAppear { shell.adoptHostWindow() }
                 .onOpenURL { url in _ = FileLinkResolver.open(url) }
         }
         .defaultSize(width: 1400, height: 900)
-        .windowStyle(.hiddenTitleBar)
+        .windowStyle(.titleBar)
+        .windowToolbarStyle(.unified)
         .windowResizability(.contentMinSize)
-        .commands { AetherCommands(shell: shell, actions: actions) }
+        .restorationBehavior(.disabled)
+        .commands { AetherCommands(actions: actions) }
 
         // ── Secondary surfaces ──
         //
@@ -132,5 +132,21 @@ struct AetherCodexApp: App {
         }
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
+    }
+}
+
+/// One main-window *scene instance*: a fresh `MainWindowController` per window.
+///
+/// Before the hydra split the app held a single `@StateObject shell` at the App
+/// level — that made every window the same shell (one shared prompt, one shared
+/// history). Each `WindowGroup` child now owns its own controller, so `⌘N`
+/// yields an independent hydra (own tabs, own prompt, own history-session) that
+/// still shares the one Ægis and the one project context.
+private struct MainWindowScene: View {
+    @StateObject private var shell = MainWindowController()
+
+    var body: some View {
+        shell.rootView
+            .onAppear { shell.adoptHostWindow() }
     }
 }

@@ -160,6 +160,30 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
     /// Window title mirrored into the SwiftUI scene, which owns the window.
     @Published var windowTitle: String = "Untitled – ÆtherCodex"
 
+    // MARK: - Multi-window registry (hydra)
+
+    /// Every live window controller, strongly held while its window is open and
+    /// dropped in `windowWillClose`. The menu drives the *key* window through
+    /// `active`, never a single fixed shell — each window is its own hydra.
+    private static var liveControllers: [MainWindowController] = []
+    /// Set once the first window has adopted its host. Everything after that is
+    /// a *fresh* window: it must not re-run session restore or re-consume the
+    /// launch CLI args (that would clone the whole session into every window).
+    private static var firstWindowAdopted = false
+
+    /// The window the menu should act on: the key window's controller first,
+    /// then the main window's, then the most recently adopted one. `⌘N` never
+    /// routes here — it opens a fresh window through the scene router.
+    static var active: MainWindowController? {
+        if let key = NSApp.keyWindow, let c = liveControllers.first(where: { $0.window === key }) {
+            return c
+        }
+        if let main = NSApp.mainWindow, let c = liveControllers.first(where: { $0.window === main }) {
+            return c
+        }
+        return liveControllers.last
+    }
+
     /// The SwiftUI root. SwiftUI's `Window` scene renders this directly; SwiftUI
     /// owns the window's creation, size, and lifecycle.
     private(set) var rootView = AnyView(EmptyView())
@@ -181,7 +205,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
     private var overlayPanel: OverlayFileBrowserPanel?
     private var themeObserver: Any?
     private var chromeState: EditorChromeState!
-    
+
     private var lastSidebarExpanded = false
     private var isAnimatingSidebar = false
     private var isAnimatingPythia = false
@@ -354,8 +378,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
         // The window silhouette is NOT declared here: clipping the root view's
         // SwiftUI layer cuts off the material that must extend behind the traffic
         // lights (the transparent titlebar) and fights the `safeAreaBar` tiling.
-        // Rounding lives on the content layer in `applyWindowRounding`, where the
-        // native window shadow still follows the window-server arc.
+        // The native window frame owns the outer rounding and shadow together.
         rootView = AnyView(containerView)
 
         themeObserver = NotificationCenter.default.addObserver(
@@ -379,18 +402,22 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
         NotificationCenter.default.addObserver(
             forName: .openFileInEditor, object: nil, queue: .main
         ) { [weak self] note in
+            // Only the key window consumes a global "open file" request — every
+            // hydra observing the same notification would otherwise clone it.
+            guard let self, self === MainWindowController.active else { return }
             if let request = note.object as? FileLinkRequest {
-                self?.openFileInTab(request.url, revealLine: request.line,
-                                    revealColumn: request.column)
+                self.openFileInTab(request.url, revealLine: request.line,
+                                   revealColumn: request.column)
             } else if let url = note.object as? URL {
-                self?.openFileInTab(url)
+                self.openFileInTab(url)
             }
         }
         NotificationCenter.default.addObserver(
             forName: .openEntityInTab, object: nil, queue: .main
         ) { [weak self] note in
+            guard let self, self === MainWindowController.active else { return }
             guard let request = note.object as? EntityTabRequest else { return }
-            self?.openEntityInTab(request)
+            self.openEntityInTab(request)
         }
         // Restore saved session state
         if let lastFolder = SessionState.shared.lastProjectFolder {
@@ -430,10 +457,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
             host.makeFirstResponder(textView)
         }
 
-        restoreSessionFromDisk()
-        for arg in CommandLine.arguments.dropFirst()
-        where FileManager.default.fileExists(atPath: arg) {
-            openFileInTab(URL(fileURLWithPath: arg))
+        MainWindowController.liveControllers.append(self)
+        if !MainWindowController.firstWindowAdopted {
+            MainWindowController.firstWindowAdopted = true
+            restoreSessionFromDisk()
+            for arg in CommandLine.arguments.dropFirst()
+            where FileManager.default.fileExists(atPath: arg) {
+                openFileInTab(URL(fileURLWithPath: arg))
+            }
+        } else {
+            // A fresh window opens clean: sidebars folded away, editor only.
+            chromeState?.sidebarVisible = false
         }
     }
 
@@ -465,75 +499,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
 
     // MARK: - Window rounding + nested traffic lights
 
-    /// Rounds the window content to a Tahoe-style radius and nests the traffic
-    /// lights inside the corner. The glass is a SwiftUI `Material` (not an AppKit
-    /// `NSVisualEffectView`), so `masksToBounds` on the content layer clips the
-    /// rounded silhouette without killing the material's backdrop blur.
     private func applyWindowRounding() {
-        guard let window, let contentView = window.contentView else { return }
-
-        contentView.wantsLayer = true
-        // The fill is rounded on the content layer — NOT via a SwiftUI
-        // `.clipShape` on the root view. A root clip cuts off the material that
-        // must extend behind the transparent titlebar (traffic-light background)
-        // and fights the `safeAreaBar` bands, which is what made the top go
-        // transparent and the sidebars/content clip. `masksToBounds` rounds the
-        // visible fill while the native window shadow keeps following the
-        // window-server arc — one coherent silhouette, no double border.
-        contentView.layer?.cornerRadius = EditorChromeMetrics.windowCornerRadius
-        contentView.layer?.cornerCurve = .continuous
-        contentView.layer?.masksToBounds = true
-        contentView.layer?.backgroundColor = NSColor.clear.cgColor
-        // Outer glass rim: a hairline border tracing the rounded silhouette so
-        // the window reads against any desktop (light or dark). Neutral gray is
-        // theme-independent — no re-resolve needed when the appearance flips.
-        contentView.layer?.borderWidth = 1.0
-        contentView.layer?.borderColor = NSColor(calibratedWhite: 0.5, alpha: 0.45).cgColor
-        window.backgroundColor = .clear
-        window.hasShadow = true
-
-        // AppKit performs one more titlebar layout pass after installing the
-        // content controller. Position against the actual content bounds after
-        // that pass so the controls remain nested in the inset sheet.
-        DispatchQueue.main.async { [weak self] in
-            self?.positionTrafficLights()
-        }
+        guard let window else { return }
+        NativeWindowChrome.configure(window)
+        positionTrafficLights()
+        DispatchQueue.main.async { [weak self] in self?.positionTrafficLights() }
     }
 
-    /// Places traffic-light centers in content-view coordinates, making the
-    /// result independent of AppKit's private titlebar coordinate orientation.
-    /// When sidebar is visible, buttons move into the sidebar area.
+    /// Native toolbar layout owns the traffic lights. Do not move individual
+    /// buttons underneath AppKit's tracking/layout regions on sidebar changes.
     private func positionTrafficLights(sidebarVisible: Bool? = nil, animated: Bool = false) {
-        guard let window, let contentView = window.contentView else { return }
-        let types: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
-        let centerFromTop: CGFloat = 24
-        
-        // When sidebar is visible, offset buttons to sit inside the sidebar
-        // The sidebar has 12px leading padding, so buttons move right by that amount
-        let visible = sidebarVisible ?? chromeState?.sidebarVisible ?? true
-        let xOffset: CGFloat = visible ? SidebarSheetGeometry.leading : 0
-
-        for (index, type) in types.enumerated() {
-            guard let button = window.standardWindowButton(type),
-                  let buttonParent = button.superview else { continue }
-
-            let centerInContent = NSPoint(
-                x: 20 + CGFloat(index) * 20 + xOffset,
-                y: contentView.isFlipped
-                    ? centerFromTop
-                    : contentView.bounds.maxY - centerFromTop
-            )
-            let centerInParent = contentView.convert(centerInContent, to: buttonParent)
-            let origin = NSPoint(
-                x: centerInParent.x - button.frame.width / 2,
-                y: centerInParent.y - button.frame.height / 2
-            )
-            if animated {
-                button.animator().setFrameOrigin(origin)
-            } else {
-                button.setFrameOrigin(origin)
-            }
-        }
+        if let window { NativeWindowChrome.updateSilhouette(window) }
     }
 
     // MARK: - Overlay File Browser
@@ -678,10 +654,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
     
     func windowWillClose(_ notification: Notification) {
         saveSessionState()
+        MainWindowController.liveControllers.removeAll { $0 === self }
     }
 
     /// Restore text view focus when the window becomes key — prevents
     /// the "click to type" friction after dismissing search or switching apps.
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        if let window { NativeWindowChrome.updateSilhouette(window) }
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        positionTrafficLights()
+    }
+
     func windowDidBecomeKey(_ notification: Notification) {
         // The startup pass in applyWindowRounding() runs before the window is
         // shown, while the traffic-light buttons aren't yet attached to the live
@@ -772,6 +757,33 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
         editor.saveDocument()
     }
 
+    @objc func saveDocumentAs(_ sender: Any?) {
+        guard let editor = editorViewController else {
+            print("[MainWindowController] editorViewController nil — cannot save as")
+            return
+        }
+        editor.saveDocumentAs()
+    }
+
+    /// ⌘T — focus the Pythia prompt. Reveals the panel first when it is folded
+    /// away (a prompt cannot take focus while it is not on screen).
+    @objc func focusPythiaInput(_ sender: Any?) {
+        guard let chrome = chromeState else { return }
+        let needsReveal = !chrome.pythiaVisible && !chrome.oracleOnly
+        if needsReveal {
+            withAnimation(.easeInOut(duration: 0.2)) { chrome.pythiaVisible = true }
+        }
+        let focus = { [pythiaModel] in pythiaModel.focusInput() }
+        // When the panel had to unfold, let the reveal animation finish before
+        // dropping focus, so the prompt lands focused instead of being eaten by
+        // the in-flight width animation.
+        if needsReveal {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: focus)
+        } else {
+            focus()
+        }
+    }
+
     @objc func newTab(_ sender: Any?) {
         tabsModel?.newTab()
     }
@@ -801,6 +813,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
     func openFileInTab(_ url: URL, revealLine line: Int? = nil,
                        revealColumn column: Int? = nil) {
         guard let tabs = tabsModel else { return }
+        // A file opens only once: re-selecting an existing tab must not reload
+        // it (which would discard unsaved edits through the replace guard), so
+        // the dedupe path only focuses the tab and honours any reveal request.
+        if let existing = tabs.tabForFile(url) {
+            tabs.select(existing.id)
+            if let line {
+                DispatchQueue.main.async { existing.controller.revealLine(line, column: column) }
+            }
+            return
+        }
         let tab = tabs.tabForOpening(url)
         tab.controller.openFile(url)
         if let line {
@@ -887,6 +909,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
             self?.isAnimatingPythia = false
         }
         saveSessionState()
+    }
+
+    /// Toggle the bottom status band. All three painted strips — the code
+    /// column's language/position line, the docked sidebar sliver, and the
+    /// Pythia accounting strip — fold together, keeping the band coherent.
+    @objc func toggleStatusBar(_ sender: Any?) {
+        guard let chrome = chromeState else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            chrome.statusBarVisible.toggle()
+        }
     }
 
     /// Toggle the Aegis mirror (⌘⇧A). Unfolding the mirror implies its pane:

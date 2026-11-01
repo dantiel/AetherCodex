@@ -7,9 +7,16 @@ import AppKit
 /// Edit-menu conventions (undo/redo/cut/copy/paste/select-all) are left to
 /// SwiftUI's standard groups — they route through the responder chain to the
 /// `NSTextView`, exactly as before.
+///
+/// Multi-window (hydra): every window is its own `MainWindowController`. The
+/// menu resolves the *key* window's controller through `MainWindowController.active`
+/// at call time, so `shell` is a computed lookup — never a single fixed shell.
 struct AetherCommands: Commands {
-    let shell: MainWindowController
     let actions: AppActions
+
+    /// The window this menu action should drive: the key window's controller.
+    /// `⌘N` does not route here — it opens a fresh window through the scene router.
+    private var shell: MainWindowController? { MainWindowController.active }
 
     var body: some Commands {
         CommandGroup(replacing: .appInfo) {
@@ -22,68 +29,72 @@ struct AetherCommands: Commands {
 
         // ── File ──
         CommandGroup(replacing: .newItem) {
-            Button("New Tab") { shell.newTab(nil) }
+            Button("New") { AppScene.shared.open(AppWindowID.main) }
                 .keyboardShortcut("n", modifiers: .command)
-            Button("Open…") { actions.openDocument() }
+            Button("New Tab") { shell?.newTab(nil) }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+            Button("Open File…") { actions.openDocument() }
                 .keyboardShortcut("o", modifiers: .command)
-            Button("Open Folder…") { shell.openFolder(nil) }
+            Button("Open Folder…") { shell?.openFolder(nil) }
                 .keyboardShortcut("O", modifiers: .command)
         }
         CommandGroup(replacing: .saveItem) {
-            Button("Save") { shell.saveDocument(nil) }
+            Button("Save") { shell?.saveDocument(nil) }
                 .keyboardShortcut("s", modifiers: .command)
+            Button("Save As…") { shell?.saveDocumentAs(nil) }
+                .keyboardShortcut("S", modifiers: .command)
         }
         CommandGroup(after: .saveItem) {
             Divider()
             Button("Project Settings…") { actions.openProjectSettings() }
             Divider()
-            Button("Close Tab") { shell.closeTab(nil) }
+            Button("Close Tab") { shell?.closeTab(nil) }
                 .keyboardShortcut("w", modifiers: .command)
         }
 
         // ── Edit ──
         CommandGroup(after: .pasteboard) {
             Divider()
-            Button("Indent") { shell.indentSelection(nil) }
+            Button("Indent") { shell?.indentSelection(nil) }
                 .keyboardShortcut("]", modifiers: .command)
-            Button("Outdent") { shell.outdentSelection(nil) }
+            Button("Outdent") { shell?.outdentSelection(nil) }
                 .keyboardShortcut("[", modifiers: .command)
             Divider()
-            Button("Comment / Uncomment") { shell.toggleComment(nil) }
+            Button("Comment / Uncomment") { shell?.toggleComment(nil) }
                 .keyboardShortcut("/", modifiers: .command)
-            Button("Block Comment") { shell.toggleBlockComment(nil) }
+            Button("Block Comment") { shell?.toggleBlockComment(nil) }
                 .keyboardShortcut("/", modifiers: [.command, .shift])
             Divider()
-            Button("Duplicate Line") { shell.duplicateLine(nil) }
+            Button("Duplicate Line") { shell?.duplicateLine(nil) }
                 .keyboardShortcut("d", modifiers: [.control, .shift])
-            Button("Move Line Up") { shell.moveLineUp(nil) }
+            Button("Move Line Up") { shell?.moveLineUp(nil) }
                 .keyboardShortcut(.upArrow, modifiers: [.command, .control])
-            Button("Move Line Down") { shell.moveLineDown(nil) }
+            Button("Move Line Down") { shell?.moveLineDown(nil) }
                 .keyboardShortcut(.downArrow, modifiers: [.command, .control])
-            Button("Join Lines") { shell.joinLines(nil) }
+            Button("Join Lines") { shell?.joinLines(nil) }
                 .keyboardShortcut("j", modifiers: .control)
-            Button("Select Line") { shell.selectCurrentLine(nil) }
+            Button("Select Line") { shell?.selectCurrentLine(nil) }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
-            Button("Edit Each Line in Selection") { shell.editEachLineInSelection(nil) }
+            Button("Edit Each Line in Selection") { shell?.editEachLineInSelection(nil) }
                 .keyboardShortcut("w", modifiers: [.control, .shift])
-            Button("Select Next Occurrence") { shell.selectNextOccurrence(nil) }
+            Button("Select Next Occurrence") { shell?.selectNextOccurrence(nil) }
                 .keyboardShortcut("d", modifiers: .command)
-            Button("Select All Occurrences") { shell.selectAllOccurrences(nil) }
+            Button("Select All Occurrences") { shell?.selectAllOccurrences(nil) }
                 .keyboardShortcut("g", modifiers: [.command, .control])
             Divider()
-            Button("Delete Line") { shell.deleteLine(nil) }
+            Button("Delete Line") { shell?.deleteLine(nil) }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
-            Button("Insert Line Below") { shell.insertLineBelow(nil) }
+            Button("Insert Line Below") { shell?.insertLineBelow(nil) }
                 .keyboardShortcut(.return, modifiers: .command)
-            Button("Insert Line Above") { shell.insertLineAbove(nil) }
+            Button("Insert Line Above") { shell?.insertLineAbove(nil) }
                 .keyboardShortcut(.return, modifiers: [.command, .shift])
             Divider()
-            Button("Uppercase") { shell.uppercaseSelection(nil) }
+            Button("Uppercase") { shell?.uppercaseSelection(nil) }
                 .keyboardShortcut("u", modifiers: [.control, .shift])
-            Button("Lowercase") { shell.lowercaseSelection(nil) }
+            Button("Lowercase") { shell?.lowercaseSelection(nil) }
                 .keyboardShortcut("l", modifiers: [.control, .shift])
             Divider()
-            Button("Go to Line…") { shell.goToLine(nil) }
+            Button("Go to Line…") { shell?.goToLine(nil) }
                 .keyboardShortcut("l", modifiers: .command)
         }
 
@@ -98,59 +109,62 @@ struct AetherCommands: Commands {
     private var appMenus: some Commands {
         // ── Find ──
         CommandMenu("Find") {
-            Button("Find…") { shell.showFindDialog(nil) }
+            Button("Find…") { shell?.showFindDialog(nil) }
                 .keyboardShortcut("f", modifiers: .command)
-            Button("Find and Replace…") { shell.showFindReplaceDialog(nil) }
+            Button("Find and Replace…") { shell?.showFindReplaceDialog(nil) }
                 .keyboardShortcut("f", modifiers: [.command, .option])
-            Button("Use Selection for Find") { shell.useSelectionForFind(nil) }
+            Button("Use Selection for Find") { shell?.useSelectionForFind(nil) }
                 .keyboardShortcut("e", modifiers: .command)
             Divider()
-            Button("Find Next") { shell.findReplaceNext(nil) }
+            Button("Find Next") { shell?.findReplaceNext(nil) }
                 .keyboardShortcut("g", modifiers: .command)
-            Button("Find Previous") { shell.findReplacePrevious(nil) }
+            Button("Find Previous") { shell?.findReplacePrevious(nil) }
                 .keyboardShortcut("G", modifiers: .command)
             Divider()
-            Button("Incremental Search") { shell.toggleQuickSearch(nil) }
+            Button("Incremental Search") { shell?.toggleQuickSearch(nil) }
                 .keyboardShortcut("s", modifiers: .control)
         }
 
         // ── Navigate ──
         CommandMenu("Navigate") {
-            Button("Go to File…") { shell.goToFile(nil) }
+            Button("Focus Pythia") { shell?.focusPythiaInput(nil) }
                 .keyboardShortcut("t", modifiers: .command)
-            Button("Search Æther…") { shell.searchAether(nil) }
+            Button("Go to File…") { shell?.goToFile(nil) }
+                .keyboardShortcut("p", modifiers: .command)
+            Button("Search Æther…") { shell?.searchAether(nil) }
                 .keyboardShortcut("t", modifiers: [.command, .option])
             Divider()
-            Button("Previous Tab") { shell.previousTab(nil) }
+            Button("Previous Tab") { shell?.previousTab(nil) }
                 .keyboardShortcut("[", modifiers: [.command, .shift])
-            Button("Next Tab") { shell.nextTab(nil) }
+            Button("Next Tab") { shell?.nextTab(nil) }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
         }
 
         // ── View ──
         CommandMenu("View") {
-            Button("Toggle File Browser") { shell.toggleFileBrowser(nil) }
+            Button("Toggle File Browser") { shell?.toggleFileBrowser(nil) }
                 .keyboardShortcut("1", modifiers: .command)
-            Button("Toggle Pythia") { shell.togglePythia(nil) }
+            Button("Toggle Pythia") { shell?.togglePythia(nil) }
                 .keyboardShortcut("2", modifiers: .command)
-            Button("Oracle Only") { shell.toggleOracleOnly(nil) }
+            Button("Oracle Only") { shell?.toggleOracleOnly(nil) }
                 .keyboardShortcut("3", modifiers: .command)
-            Button("Aegis Mirror") { shell.toggleAegis(nil) }
+            Button("Aegis Mirror") { shell?.toggleAegis(nil) }
                 .keyboardShortcut("a", modifiers: [.command, .shift])
             Divider()
-            Button("Soft Wrap") { shell.toggleWordWrap(nil) }
-                .keyboardShortcut("w", modifiers: [.control, .option])
-            Button("Line Numbers") { shell.toggleLineNumbers(nil) }
-            Button("Wrap Column") { shell.toggleWrapColumn(nil) }
+            Button("Soft Wrap") { shell?.toggleWordWrap(nil) }
+                .keyboardShortcut("w", modifiers: [.command, .option])
+            Button("Status Bar") { shell?.toggleStatusBar(nil) }
+            Button("Line Numbers") { shell?.toggleLineNumbers(nil) }
+            Button("Wrap Column") { shell?.toggleWrapColumn(nil) }
             Menu("Wrap Column Width") {
                 ForEach(EditorDisplaySettings.presets, id: \.self) { preset in
                     Button("\(preset)") { EditorDisplaySettings.shared.wrapColumn = preset }
                 }
                 Divider()
-                Button("Other…") { shell.setWrapColumnOther(nil) }
+                Button("Other…") { shell?.setWrapColumnOther(nil) }
             }
-            Button("Highlight Current Line") { shell.toggleHighlightCurrentLine(nil) }
-            Button("Show Invisibles") { shell.toggleInvisibles(nil) }
+            Button("Highlight Current Line") { shell?.toggleHighlightCurrentLine(nil) }
+            Button("Show Invisibles") { shell?.toggleInvisibles(nil) }
                 .keyboardShortcut("i", modifiers: [.control, .option])
             Divider()
             Button("Bigger") { actions.biggerFont() }
