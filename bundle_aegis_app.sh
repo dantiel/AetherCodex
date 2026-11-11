@@ -68,6 +68,14 @@ cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
     <true/>
     <key>CFBundleIconFile</key>
     <string>AetherAegis.icns</string>
+    <!-- Register the XPC mach service so AetherCodex can reach the shield via
+         NSXPCConnection(machServiceName:) — launchd checks this in when the app
+         launches. Without it the listener never accepts a connection. -->
+    <key>MachServices</key>
+    <dict>
+        <key>com.aethercodex.aegis</key>
+        <true/>
+    </dict>
     <!-- Screen Recording & Accessibility need usage strings to avoid a hard
          termination the first time the TCC prompt would appear. -->
     <key>NSScreenCaptureUsageDescription</key>
