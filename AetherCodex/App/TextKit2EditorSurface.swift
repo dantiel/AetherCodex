@@ -964,6 +964,11 @@ struct TextKit2ScrollSurface: View {
     let attributedString: NSAttributedString
     let backgroundColor: Color
     let gutter: EditorGutterStyle
+    /// Resolved opacity for the fixed line-number column surface. Kept as a
+    /// separate value (not read from `gutter.backgroundColor`) so the
+    /// `rulerBackgroundOpacity` override in ThemeSettings reaches the main gutter —
+    /// the same resolution the sidebar sheet + status strip already honour.
+    let gutterBackgroundOpacity: CGFloat
     let leadingChromeWidth: CGFloat
     let trailingChromeWidth: CGFloat
     /// Chrome rows (tab strip) sitting above the surface: their height is added
@@ -990,6 +995,7 @@ struct TextKit2ScrollSurface: View {
     let maxLineWidth: Int
 
     @State private var scrollOffset: CGPoint = .zero
+    @State private var revealAnchorScreenY: CGFloat = 0
     @State private var activeLine = 1
     @State private var selectedLineRange: ClosedRange<Int>? = nil
 
@@ -999,6 +1005,7 @@ struct TextKit2ScrollSurface: View {
          leadingChromeWidth: CGFloat,
          trailingChromeWidth: CGFloat,
          topChromeInset: CGFloat = 0,
+         gutterBackgroundOpacity: CGFloat = 0.55,
          sharedTextStorage: NSTextStorage? = nil,
          existingEditor: NSTextView? = nil,
          foldState: FoldState? = nil,
@@ -1012,6 +1019,7 @@ struct TextKit2ScrollSurface: View {
         self.attributedString = attributedString
         self.backgroundColor = backgroundColor
         self.gutter = gutter
+        self.gutterBackgroundOpacity = gutterBackgroundOpacity
         self.leadingChromeWidth = leadingChromeWidth
         self.trailingChromeWidth = trailingChromeWidth
         self.topChromeInset = topChromeInset
@@ -1058,6 +1066,7 @@ struct TextKit2ScrollSurface: View {
             let topContentInset: CGFloat = EditorChromeMetrics.baseContentInset
                 + (topChromeInset > 0 ? EditorChromeMetrics.tabBarContentClearance : 0)
             let topEdgeHeight = EditorChromeMetrics.scrollEdgeBarHeight(topInset: topChromeInset)
+            let bottomEdgeHeight = EditorChromeMetrics.scrollEdgeBlurDepth
             let visibleEditorWidth = max(proxy.size.width - leadingChromeWidth - trailingChromeWidth, 1)
             let viewportTextWidth = max(visibleEditorWidth - gutter.width, 1)
             // Live pitch from the adopted editor — keeps the scroll extent locked
@@ -1070,7 +1079,14 @@ struct TextKit2ScrollSurface: View {
             let docWidth = CGFloat(max(maxLineWidth, 1)) * charWidth
             let docHeight = CGFloat(max(lineCount, 1)) * effectiveLineHeight
             let textContentWidth = max(docWidth + 24, viewportTextWidth)
-            let renderedHeight = max(docHeight, proxy.size.height - topContentInset - topEdgeHeight)
+            let renderedHeight = max(docHeight, proxy.size.height - topContentInset - topEdgeHeight - bottomEdgeHeight)
+            // TextMate-style "scroll past end": reserve enough trailing room
+            // that the final line can ride up to just *under* the top safe-area
+            // bar — its top lands one bar-height below the window's top edge
+            // (`topEdgeHeight`) instead of hugging the very top and bleeding
+            // into the titlebar's blur zone.
+            let bottomOverscroll = max(0, proxy.size.height - topEdgeHeight
+                                       - bottomEdgeHeight - effectiveLineHeight)
             // Reach toward the floating sidebar sheet only when it is present.
             let leftOverhang: CGFloat = leadingChromeWidth > 0 ? gutter.leftOverhang : 0
             let numbersOnlyGutter = EditorGutterStyle(
@@ -1160,28 +1176,43 @@ struct TextKit2ScrollSurface: View {
                             .frame(width: 1, height: 1)
                             .id("quick-search-reveal")
                             .position(x: revealX, y: revealY)
+                            .onGeometryChange(for: CGFloat.self) { geo in
+                                geo.frame(in: .named("editor-scroll")).midY
+                            } action: { y in
+                                revealAnchorScreenY = y
+                            }
                         Color.clear
                             .frame(width: 1, height: 1)
                             .id("find-replace-reveal")
                             .position(x: scrollOffset.x + proxy.size.width / 2, y: findReplaceRevealY)
                     }
                     .padding(.top, topContentInset)
+                    .padding(.bottom, bottomOverscroll)
                     .frame(minWidth: visibleEditorWidth,
                            minHeight: max(0, proxy.size.height - topEdgeHeight),
                            alignment: .topLeading)
                 }
                 // Progressive blur lives on the *scroll content only* — the
                 // background color must stay solid to the very top of the window.
-                .scrollEdgeEffectStyle(.soft, for: [.top, .leading, .trailing])
+                .scrollEdgeEffectStyle(.soft, for: [.top, .leading, .trailing, .bottom])
                 .scrollEdgeEffectHidden(false, for: .top)
-                // Keep the native edge-effect owner adjacent to its scroll
-                // view. The outer full-bleed container ignores safe areas;
-                // relying on its bar made this relationship layout-dependent.
-                // Never change the editor's identity to refresh an effect.
+                .scrollEdgeEffectHidden(false, for: .bottom)
+                // Keep the edge-effect owner adjacent to its scroll view. The
+                // outer full-bleed container ignores safe areas; relying on its
+                // bar made this relationship layout-dependent. Never change the
+                // editor's identity to refresh an effect.
+                //
+                // The bar's content *is* the progressive blur: a clear
+                // placeholder gives the compositor nothing to blend with, so
+                // the band carries the ramp itself and the code scrolls beneath
+                // it into softness.
                 .safeAreaBar(edge: .top, spacing: 0) {
-                    Color.clear.frame(height: topEdgeHeight)
-                        .allowsHitTesting(false)
+                    ScrollEdgeBlur(edge: .top, length: topEdgeHeight)
                 }
+                .safeAreaBar(edge: .bottom, spacing: 0) {
+                    ScrollEdgeBlur(edge: .bottom, length: bottomEdgeHeight)
+                }
+                .coordinateSpace(name: "editor-scroll")
                 // Constrain the bar + viewport together, not the document.
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .scrollIndicators(.visible)
@@ -1200,6 +1231,8 @@ struct TextKit2ScrollSurface: View {
                                 for: .scrollIndicators)
                 .contentMargins(.trailing, trailingChromeWidth,
                                 for: .scrollIndicators)
+                .contentMargins(.bottom, 0,
+                                for: .scrollIndicators)
                 .onScrollGeometryChange(for: CGPoint.self) { geometry in
                     CGPoint(
                         x: max(geometry.contentOffset.x + geometry.contentInsets.leading, 0),
@@ -1211,7 +1244,23 @@ struct TextKit2ScrollSurface: View {
                 .onChange(of: searchModel.revealToken) { _, _ in
                     guard searchModel.pendingRevealLine != nil else { return }
                     DispatchQueue.main.async {
-                        scrollProxy.scrollTo("quick-search-reveal", anchor: .center)
+                        // Minimal reveal, not centring: only scroll when the match
+                        // sits outside the visible area (with two lines of slack),
+                        // so a hit already on screen never yanks the document.
+                        let margin = effectiveLineHeight * 2
+                        let topBoundary = topEdgeHeight + margin
+                        let bottomChrome = searchModel.isVisible
+                            ? EditorChromeMetrics.quickSearchBarHeight
+                              + EditorChromeMetrics.quickSearchBarLift : 0
+                        let bottomBoundary = proxy.size.height - bottomChrome - margin
+                        if revealAnchorScreenY < topBoundary {
+                            scrollProxy.scrollTo("quick-search-reveal",
+                                                 anchor: UnitPoint(x: 0.5, y: 0.12))
+                        } else if revealAnchorScreenY > bottomBoundary {
+                            scrollProxy.scrollTo("quick-search-reveal",
+                                                 anchor: UnitPoint(x: 0.5, y: 0.88))
+                        }
+                        // Already visible — leave the scroll alone.
                     }
                 }
                 .onChange(of: findReplace.revealToken) { _, _ in
@@ -1226,7 +1275,8 @@ struct TextKit2ScrollSurface: View {
                 // code. Only the numbers participate in the native progressive
                 // scroll-edge effect; the gutter background never disappears.
                 ZStack(alignment: .trailing) {
-                    EditorChromeSurface(color: gutter.backgroundColor ?? NSColor.clear)
+                    EditorChromeSurface(color: gutter.backgroundColor ?? NSColor.clear,
+                                        opacity: Double(gutterBackgroundOpacity))
                     if let separator = gutter.separatorColor {
                         // Rectangle (not Color) guarantees a full-height 1px rule;
                         // a bare Color.frame(width: 1) collapses to zero height and
@@ -1264,6 +1314,7 @@ struct TextKit2ScrollSurface: View {
                                          onFoldToggle: onFoldToggle)
                     .frame(width: gutter.width + leftOverhang, height: proxy.size.height, alignment: .top)
                     .offset(x: leadingChromeWidth - leftOverhang)
+
 
                 // The incremental quick-search bar (Ctrl+S) docks in the window's
                 // bottom safe-area band beside the status strip, and find & replace

@@ -18,6 +18,7 @@ final class ThemeSettings {
         case editorBackgroundOpacity
         case sidebarBackgroundOpacity
         case sidebarGlassBlurStrength
+        case rulerBackgroundOpacity
         case highlightCurrentLine
     }
 
@@ -260,10 +261,36 @@ final class ThemeSettings {
         }
     }
 
-    /// Resolved sidebar glass blur strength (override → theme). 0.0 = clear, 1.0 = max blur.
+    /// Resolved sidebar glass blur strength (override → theme, capped lighter).
+    /// Sidebars default lighter than the editor so scrolled code stays visible
+    /// through the panels; "Material weight" overrides the cap.
     func resolvedSidebarGlassBlurStrength(for theme: SyntaxTheme) -> CGFloat {
         if let v = sidebarGlassBlurStrengthOverride { return CGFloat(v) }
-        return theme.glassBlurStrength
+        return min(theme.glassBlurStrength, 0.3)
+    }
+
+    // ── Gutter / Ruler Background Transparency ──
+
+    var rulerBackgroundOpacityOverride: Double? {
+        get {
+            guard defaults.object(forKey: Key.rulerBackgroundOpacity.rawValue) != nil
+            else { return nil }
+            return defaults.double(forKey: Key.rulerBackgroundOpacity.rawValue)
+        }
+        set {
+            if let v = newValue { defaults.set(v, forKey: Key.rulerBackgroundOpacity.rawValue) }
+            else { defaults.removeObject(forKey: Key.rulerBackgroundOpacity.rawValue) }
+            postChange()
+        }
+    }
+
+    /// Resolved gutter/ruler background opacity (override → translucent default).
+    /// The line-number column must stay translucent so scrolled code blurs through
+    /// it — the same scroll-edge mechanism as the sidebars.
+    func resolvedRulerBackgroundOpacity(for theme: SyntaxTheme) -> CGFloat {
+        if let v = rulerBackgroundOpacityOverride { return CGFloat(v) }
+        let themeAlpha = theme.rulerBackground.alphaComponent
+        return themeAlpha < 0.95 ? themeAlpha : 0.55
     }
 
     // ── Word Wrap ──

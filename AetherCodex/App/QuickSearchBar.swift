@@ -327,7 +327,6 @@ final class QuickSearchModel: ObservableObject {
 /// out with a scale + fade rather than reading as a full-width chrome band.
 struct QuickSearchBar: View {
     @ObservedObject var model: QuickSearchModel
-    let theme: SyntaxTheme
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -421,6 +420,26 @@ struct QuickSearchBar: View {
             // the responder chain — pull focus back into the field.
             DispatchQueue.main.async { focused = true }
         }
+    }
+}
+
+// MARK: - Floating dock
+
+/// The floating quick-search pill. It hovers over the code column — an overlay
+/// on the editor surface, never a reserved band — so the scroll view keeps its
+/// full height and the text travels beneath the pill's glass and the bottom
+/// edge blur. It stays mounted for the life of a code tab so the reveal can
+/// play in *and* out; folded, it takes no clicks.
+struct QuickSearchDock: View {
+    @ObservedObject var model: QuickSearchModel
+
+    var body: some View {
+        QuickSearchBar(model: model)
+            .frame(width: EditorChromeMetrics.quickSearchBarWidth,
+                   height: EditorChromeMetrics.quickSearchBarHeight)
+            .padding(.bottom, EditorChromeMetrics.quickSearchBarLift)
+            .frame(maxWidth: .infinity)
+            .allowsHitTesting(model.isVisible)
     }
 }
 

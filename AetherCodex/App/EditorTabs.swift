@@ -245,6 +245,17 @@ final class TabsModel: ObservableObject {
         refreshStatus()
     }
 
+    /// Find the tab already holding `url`, if any. Symlink + path normalization
+    /// so the same file reached via a different spelling (`./`, `..`, a symlink)
+    /// still dedupes onto one tab.
+    func tabForFile(_ url: URL) -> EditorTab? {
+        let target = url.standardizedFileURL.resolvingSymlinksInPath()
+        return tabs.first {
+            guard let f = $0.controller.currentFile else { return false }
+            return f.standardizedFileURL.resolvingSymlinksInPath() == target
+        }
+    }
+
     /// Reuse the active tab when it is a clean, untitled document (the first file
     /// you open fills the empty tab), otherwise open a fresh tab — the TextMate
     /// behaviour for a tabbed editor.

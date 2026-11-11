@@ -4,15 +4,16 @@ import XCTest
 
 @MainActor
 final class ThemeDecorationTests: XCTestCase {
-    func testBackdropSamplesDesktopAndUpdatesMaterial() {
-        let view = NSVisualEffectView()
-        WindowBackdrop(strength: 0.25).configure(view)
-        XCTAssertEqual(view.blendingMode, .behindWindow)
-        XCTAssertEqual(view.state, .active)
-        XCTAssertEqual(view.material, .popover)
-        WindowBackdrop(strength: 0.65).configure(view)
-        XCTAssertEqual(view.material, .sidebar)
-        XCTAssertEqual(view.blendingMode, .behindWindow)
+    /// The glass is SwiftUI-only: strength maps to a material *name* at the same
+    /// thresholds the SwiftUI `Material` mapping uses. No `NSVisualEffectView`
+    /// is involved anywhere in the chrome.
+    func testGlassMaterialNamesFollowStrengthThresholds() {
+        XCTAssertEqual(glassMaterialName(for: 0.0), "Ultra Thin")
+        XCTAssertEqual(glassMaterialName(for: 0.19), "Ultra Thin")
+        XCTAssertEqual(glassMaterialName(for: 0.25), "Thin")
+        XCTAssertEqual(glassMaterialName(for: 0.5), "Regular")
+        XCTAssertEqual(glassMaterialName(for: 0.65), "Thick")
+        XCTAssertEqual(glassMaterialName(for: 0.95), "Ultra Thick")
     }
 
     func testSyntaxRuleMapsAreLoadedFromYAML() throws {

@@ -23,6 +23,17 @@ final class EditorDisplaySettings: ObservableObject {
     @Published var wrapColumn: Int {
         didSet { defaults.set(wrapColumn, forKey: Keys.wrapColumn) }
     }
+    /// Mirrored code font size (pt). Drives the gutter recompute + the HUD —
+    /// `ThemeSettings` is a plain UserDefaults facade, so this observable is the
+    /// bridge that re-renders the SwiftUI chrome when ⌘+/⌘- changes the size.
+    @Published var fontSize: Double = 13
+    /// Bumps only when `fontSize` actually changes; the font-size HUD listens here.
+    @Published var fontSizeChangeToken: Int = 0
+
+    /// Current code font size as a percentage of the 13pt default (⌘0 → 100%).
+    var fontSizePercent: Int {
+        Int((fontSize / 13.0 * 100).rounded())
+    }
 
     private let defaults = UserDefaults.standard
 
@@ -43,6 +54,21 @@ final class EditorDisplaySettings: ObservableObject {
         wrapColumn = storedColumn > 0 ? storedColumn : 80
         showLineNumbers = defaults.bool(forKey: Keys.showLineNumbers)
         showWrapColumn = defaults.bool(forKey: Keys.showWrapColumn)
+        fontSize = ThemeSettings.shared.fontSize
+
+        // Mirror `ThemeSettings` changes into this observable. Any theme change
+        // re-solves the gutter (width + line pitch derive from the resolved base
+        // font); a font-*size* change additionally bumps the HUD token.
+        NotificationCenter.default.addObserver(
+            forName: ThemeSettings.didChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            let newSize = ThemeSettings.shared.fontSize
+            if newSize != self.fontSize {
+                self.fontSize = newSize
+                self.fontSizeChangeToken += 1
+            }
+        }
     }
 
     /// Presets surfaced in the View → Wrap Column Width menu.

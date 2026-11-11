@@ -4,11 +4,16 @@ import SwiftUI
 /// Keep it behind content so tint never washes out labels or controls.
 struct EditorChromeSurface: View {
     let color: NSColor
-    var opacity: Double = 0.86
+    /// Explicit tint opacity. `nil` (the default) honours the color's own alpha —
+    /// theme colors already encode their transparency (e.g. `rulerBackground`'s
+    /// 0.45 alpha). The old hardcoded 0.86 buried that and left the gutter opaque,
+    /// so scroll content could never blur through the line-number column.
+    var opacity: Double? = nil
 
     var body: some View {
+        let effective = opacity ?? Double(color.alphaComponent)
         Rectangle().fill(.ultraThinMaterial)
-            .overlay(Color(nsColor: color.withAlphaComponent(1)).opacity(opacity))
+            .overlay(Color(nsColor: color.withAlphaComponent(1)).opacity(effective))
             .allowsHitTesting(false)
     }
 }
@@ -17,13 +22,16 @@ struct EditorStatusSurface: View {
     let theme: SyntaxTheme
 
     var body: some View {
-        EditorChromeSurface(color: theme.rulerBackground, opacity: 0.55)
-            .overlay(alignment: .top) {
-                Rectangle()
-                    .fill(Color(nsColor: theme.rulerSeparator ?? .separatorColor))
-                    .frame(height: 1)
-            }
-            .allowsHitTesting(false)
+        EditorChromeSurface(
+            color: theme.rulerBackground,
+            opacity: Double(ThemeSettings.shared.resolvedRulerBackgroundOpacity(for: theme))
+        )
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color(nsColor: theme.rulerSeparator ?? .separatorColor))
+                .frame(height: 1)
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -88,8 +96,10 @@ struct EditorStatusBar: View {
 // MARK: - Bottom band
 
 /// The window's bottom safe-area band: only the always-present status strip.
-/// The quick-search pill floats above it as an overlay (see `QuickSearchDock`),
-/// so opening search never pushes the editor — the pill hovers, it doesn't dock.
+/// The quick-search pill is a *floating overlay* (see `QuickSearchDock` mounted
+/// by `EditorContainerView.overlay(alignment: .bottom)`), never a reserved band —
+/// opening search never pushes the editor, the pill hovers above the strip and
+/// the code scrolls beneath it through the bottom scroll-edge blur.
 struct EditorBottomBar: View {
     @ObservedObject var status: EditorStatusModel
     let theme: SyntaxTheme
@@ -100,25 +110,5 @@ struct EditorBottomBar: View {
         if showStatusBar {
             EditorStatusBar(status: status, theme: theme)
         }
-    }
-}
-
-/// The floating quick-search pill. It hovers over the code column (an overlay on
-/// the editor surface, never a reserved band) and dissolves in/out with the
-/// scale + fade + blur baked into `QuickSearchBar` itself. It stays mounted for
-/// the whole life of a code tab so the reveal can play in *and* out; folded, it
-/// takes no clicks.
-struct QuickSearchDock: View {
-    @ObservedObject var model: QuickSearchModel
-    let theme: SyntaxTheme
-
-    var body: some View {
-        QuickSearchBar(model: model, theme: theme)
-            .frame(maxWidth: 560)
-            .frame(height: EditorChromeMetrics.quickSearchBarHeight)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-            .frame(maxWidth: .infinity)
-            .allowsHitTesting(model.isVisible)
     }
 }

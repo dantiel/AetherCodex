@@ -144,6 +144,8 @@ struct ThemePreferencesView: View {
                          resolved: Double(settings.resolvedSidebarBackgroundOpacity(for: theme)))
                 override("Material weight", key: \.sidebarGlassBlurStrengthOverride,
                          resolved: Double(settings.resolvedSidebarGlassBlurStrength(for: theme)))
+                override("Line-number column opacity", key: \.rulerBackgroundOpacityOverride,
+                         resolved: Double(settings.resolvedRulerBackgroundOpacity(for: theme)))
                 Text("Material: \(glassMaterialName(for: settings.resolvedSidebarGlassBlurStrength(for: theme))). Scroll-edge blur remains automatic.")
                     .font(.caption).foregroundStyle(.secondary)
             }
