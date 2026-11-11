@@ -206,9 +206,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
     private var themeObserver: Any?
     private var chromeState: EditorChromeState!
 
-    private var lastSidebarExpanded = false
-    private var isAnimatingSidebar = false
-    private var isAnimatingPythia = false
+    /// Side panel state to restore after the card flips back to the editor.
+    private var pythiaVisibleBeforeFlip = false
+    /// Cancels a pending restore when the card is flipped again mid-animation.
+    private var oracleRestoreToken = 0
 
     /// The shell no longer creates its window — SwiftUI's `Window` scene does.
     /// It adopts the hosting `NSWindow` once the content has mounted, purely for
@@ -338,6 +339,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
         chromeState.onTogglePythia = { [weak self] in
             self?.togglePythia(nil)
         }
+        chromeState.onToggleOracleOnly = { [weak self] in
+            self?.toggleOracleOnly(nil)
+        }
 
         // Breadcrumb navigation: a folder peek drives the sidebar file browser;
         // a file selection opens it in a tab.
@@ -444,10 +448,8 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
             return
         }
         window = host
-        host.titleVisibility = .hidden
-        host.titlebarAppearsTransparent = true
-        host.isOpaque = false
-        host.backgroundColor = .clear
+        // Window chrome (transparent titlebar, opaque backing, native corners)
+        // is applied in `applyWindowRounding()` → `NativeWindowChrome.configure`.
         host.isMovableByWindowBackground = false
         host.delegate = self
 
@@ -469,6 +471,12 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
             // A fresh window opens clean: sidebars folded away, editor only.
             chromeState?.sidebarVisible = false
         }
+
+        // The AppKit pane container must start from the same truth as the
+        // SwiftUI band. Windows that begin collapsed never walk the toggle
+        // path, and a later ⌘1 must not reveal a pane whose content is still
+        // hidden (band wide, sheet empty).
+        sidebarContainer.setCollapsed(!(chromeState?.sidebarVisible ?? false))
     }
 
     /// Restore the previous session: open tabs, project folder, pane widths,
@@ -562,7 +570,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
         
         // ── Window appearance ──
         window?.appearance = NSAppearance(named: theme.appearance == .dark ? .darkAqua : .aqua)
-        window?.backgroundColor = .clear
+        // The window stays opaque + native background (NativeWindowChrome): the
+        // window server owns the unified corner radius and shadow. Do NOT clear
+        // the background here — that would drop the native rounding and leave the
+        // titlebar empty.
         
         let bgOpacity = settings.resolvedEditorBackgroundOpacity(for: theme)
         _ = theme.editorBackground.withAlphaComponent(bgOpacity)
@@ -872,23 +883,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
     
     @objc private func toggleFileBrowserAnimated(_ sender: Any?) {
         guard let chrome = chromeState else { return }
-        // Guard against overlapping animations — rapid ⌘1 spam could
-        // stack multiple show/dismiss groups and cause visual glitches.
-        guard !isAnimatingSidebar else { return }
-        isAnimatingSidebar = true
+        // Oracle-only hides all editor chrome; the toggle button is not on
+        // screen, so ⌘1 must not mutate invisible pane state either.
+        guard !chrome.oracleOnly else { return }
 
+        // Read the model once and flip it. No animation-time lock: a dropped
+        // second press (⌘1 spammed, or shortcut + click in quick succession)
+        // left the shortcut's target state out of sync with the pane the user
+        // saw. The band is state-driven, so every press must land.
         let willExpand = !chrome.sidebarVisible
-        lastSidebarExpanded = willExpand
-
         withAnimation(.easeInOut(duration: 0.2)) {
             chrome.sidebarVisible = willExpand
         }
         sidebarContainer.setCollapsed(!willExpand)
-
-        // Reset after animation completes (0.2s show / 0.18s dismiss).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            self?.isAnimatingSidebar = false
-        }
         saveSessionState()
     }
     
@@ -896,17 +903,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
     /// in from the trailing edge.
     @objc func togglePythia(_ sender: Any?) {
         guard let chrome = chromeState else { return }
-        // Guard against overlapping animations — mirror of sidebar guard.
-        guard !isAnimatingPythia else { return }
-        isAnimatingPythia = true
+        // Same rule as ⌘1: no visible Pythia pane exists on the reverse face.
+        guard !chrome.oracleOnly else { return }
 
+        // Same rule as ⌘1: flip the model on every press, never drop it
+        // because an earlier animation is still settling.
         let willExpand = !chrome.pythiaVisible
         withAnimation(.easeInOut(duration: 0.2)) {
             chrome.pythiaVisible = willExpand
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            self?.isAnimatingPythia = false
         }
         saveSessionState()
     }
@@ -944,14 +948,38 @@ final class MainWindowController: NSWindowController, NSWindowDelegate, Observab
     /// window turns over like a card — Pythia alone on the reverse face.
     @objc func toggleOracleOnly(_ sender: Any?) {
         guard let chrome = chromeState else { return }
-        // Folding the side panel away keeps only the reverse-face Pythia alive,
-        // so the shared chat model is never observed twice at rest.
+        // Any pending restore is obsolete the moment the card starts turning.
+        oracleRestoreToken &+= 1
+
         if !chrome.oracleOnly {
+            // Folding the side panel away keeps only the reverse-face Pythia
+            // alive, so the shared chat model is never observed twice at rest.
+            pythiaVisibleBeforeFlip = chrome.pythiaVisible
             chrome.pythiaVisible = false
+            withAnimation(.easeInOut(duration: 0.62)) {
+                chrome.oracleOnly = true
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.62)) {
+                chrome.oracleOnly = false
+            }
+            // Restore only once the card has landed — remounting the front
+            // face's Pythia pane behind a turning card doubles the hosting view.
+            if pythiaVisibleBeforeFlip {
+                let token = oracleRestoreToken
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.62) { [weak self] in
+                    guard let self,
+                          self.oracleRestoreToken == token,
+                          let chrome = self.chromeState,
+                          !chrome.oracleOnly else { return }
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        chrome.pythiaVisible = true
+                    }
+                    self.saveSessionState()
+                }
+            }
         }
-        withAnimation(.easeInOut(duration: 0.62)) {
-            chrome.oracleOnly.toggle()
-        }
+        saveSessionState()
     }
 }
 
@@ -1071,6 +1099,15 @@ extension MainWindowController {
     }
     
     @objc func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleFileBrowser(_:)) {
+            menuItem.state = (chromeState?.sidebarVisible ?? false) ? .on : .off
+        }
+        if menuItem.action == #selector(togglePythia(_:)) {
+            menuItem.state = (chromeState?.pythiaVisible ?? false) ? .on : .off
+        }
+        if menuItem.action == #selector(toggleStatusBar(_:)) {
+            menuItem.state = (chromeState?.statusBarVisible ?? false) ? .on : .off
+        }
         if menuItem.action == #selector(toggleWordWrap(_:)) {
             menuItem.state = (editorViewController?.effectiveWordWrap ?? false) ? .on : .off
         }
@@ -1262,23 +1299,6 @@ private final class OverlayFileBrowserPanel: NSObject {
 }
 
 // MARK: - Shared Glass Utilities
-
-/// Map blur strength to material.
-func glassMaterial(for strength: CGFloat) -> NSVisualEffectView.Material {
-    switch strength {
-    case 0.0..<0.1: return .hudWindow
-    case 0.1..<0.2: return .fullScreenUI
-    case 0.2..<0.3: return .popover
-    case 0.3..<0.4: return .menu
-    case 0.4..<0.5: return .toolTip
-    case 0.5..<0.6: return .underWindowBackground
-    case 0.6..<0.7: return .sidebar
-    case 0.7..<0.8: return .sheet
-    case 0.8..<0.9: return .windowBackground
-    case 0.9..<1.0: return .contentBackground
-    default:        return .contentBackground
-    }
-}
 
 /// Human-readable name for the SwiftUI material at a given blur strength.
 /// Mirrors the thresholds in `SyntaxTheme.editorMaterial`.

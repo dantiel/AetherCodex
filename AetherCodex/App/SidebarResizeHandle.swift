@@ -57,8 +57,10 @@ enum SidebarSheetGeometry {
     static let leading: CGFloat = 8
     static let trailing: CGFloat = 8
     /// The sheet floats inside the window on all four edges — a symmetric 8pt
-    /// margin so its left and bottom arcs sit clear of the window's rounded
-    /// silhouette instead of being clipped off at the corners.
+    /// margin so its arcs sit clear of the window's rounded silhouette while the
+    /// sheet itself rides full-bleed *behind* the transparent unified toolbar.
+    /// Pane headers clear the toolbar through their own top insets, not by
+    /// pushing the whole sheet down.
     static let top: CGFloat = 8
     static let bottom: CGFloat = 8
     static var horizontalInsets: CGFloat { leading + trailing }
@@ -66,6 +68,16 @@ enum SidebarSheetGeometry {
     /// Interior card radius, independent of the system-owned window silhouette.
     /// The sheet's clip and stroke both use this value.
     static let sheetCornerRadius: CGFloat = 18
+
+    /// Height of the folder-identity row inside the sheet's top edge. Mirror of
+    /// `tabBarBand` at the bottom: the header in `EditorContainerView` is laid
+    /// out inside exactly this band, and every sidebar pane reserves it, so the
+    /// name and the first scroll row cannot drift apart.
+    static let titleBand: CGFloat = 38
+    /// Window-space height a sidebar pane reserves for the title band — the
+    /// sheet's top margin plus the band itself. This is what a pane's top
+    /// safe-area bar consumes before its own controls start.
+    static var reservedTitleBand: CGFloat { top + titleBand }
 
     /// `sidebarWidth` denotes the usable sheet width. The safe-area column is
     /// wider because it also owns the requested outer window margins.

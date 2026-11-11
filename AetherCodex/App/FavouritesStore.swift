@@ -216,7 +216,7 @@ struct FavouritesView: View {
             VStack(spacing: 0) {
                 // Traffic lights + the shared folder row live in the enclosing
                 // sidebar safe-area bar; reserve that band.
-                Color.clear.frame(height: 46)
+                Color.clear.frame(height: SidebarSheetGeometry.reservedTitleBand)
                 HStack(spacing: 4) {
                     Text("Favourites")
                         .font(.system(size: 11, weight: .semibold))

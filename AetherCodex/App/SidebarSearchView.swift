@@ -81,7 +81,7 @@ struct SidebarSearchView: View {
             VStack(spacing: 0) {
                 // Traffic lights + the shared folder row live in the enclosing
                 // sidebar safe-area bar; this pane reserves that band.
-                Color.clear.frame(height: 46)
+                Color.clear.frame(height: SidebarSheetGeometry.reservedTitleBand)
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 11, weight: .medium))

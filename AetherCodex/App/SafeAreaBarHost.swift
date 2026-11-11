@@ -175,6 +175,10 @@ final class EditorChromeState: ObservableObject {
     /// Open/toggle Pythia through the controller's guarded path (⌘2). Keeps the
     /// animation guard + session save consistent with the menu entry.
     var onTogglePythia: (() -> Void)?
+    /// Flip the window into/out of oracle-only through the controller's path
+    /// (⌘3). The buttons must not set `oracleOnly` directly: the controller also
+    /// folds the side panel away and restores it on the way back.
+    var onToggleOracleOnly: (() -> Void)?
     
     init(sidebarTabs: [SidebarTab] = []) {
         self.sidebarTabs = sidebarTabs
@@ -258,6 +262,10 @@ struct EditorContainerView: View {
     @ObservedObject var chrome: EditorChromeState
     @ObservedObject var tabs: TabsModel
     @ObservedObject private var displaySettings = EditorDisplaySettings.shared
+    /// Transient TextMate-style readout of the last font-size change (⌘+/⌘-),
+    /// shown as a percentage of the 13pt default. Nil while hidden.
+    @State private var fontSizeHudPercent: Int? = nil
+    @State private var fontSizeHudTask: Task<Void, Never>? = nil
 
 
     /// Resolves the line-number gutter geometry + colors from the active theme
@@ -320,23 +328,6 @@ struct EditorContainerView: View {
         return Self.makeGutter(document: document, theme: chrome.theme).width
     }
 
-    /// Leading gutter width of the surface currently filling the main area. The
-    /// titlebar indents the title past it so the filename never sits on the line
-    /// numbers — and that column differs per view: the code gutter, the rich-text
-    /// ruler, or the diff's double line-number column.
-    private var activeSurfaceGutterWidth: CGFloat {
-        if let diff = tabs.activeDiffTab {
-            return DiffSurface.leadingGutterWidth(for: diff.document)
-        }
-        if tabs.activeEntityTab != nil {
-            return 0
-        }
-        guard let controller = tabs.activeTab?.controller else { return 0 }
-        if controller.imagePreview.isActive { return 0 }
-        if controller.htmlPreview.isActive { return 0 }
-        if controller.richDocument.active { return RichTextSurface.rulerColumnWidth }
-        return gutterWidth
-    }
 
     /// The active document's incremental-search model — `nil` whenever the
     /// visible surface owns no searchable text (entity/diff tabs, image, HTML,
@@ -351,22 +342,33 @@ struct EditorContainerView: View {
         return controller.quickSearch
     }
 
+    /// Flash the font-size readout for a beat, cancelling any in-flight hide so
+    /// rapid ⌘+/⌘- taps always show the freshest percentage.
+    private func flashFontSizeHud(_ percent: Int) {
+        fontSizeHudTask?.cancel()
+        withAnimation(.easeOut(duration: 0.12)) {
+            fontSizeHudPercent = percent
+        }
+        fontSizeHudTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.25)) {
+                fontSizeHudPercent = nil
+            }
+        }
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let widths = EditorPanelWidths(available: geometry.size.width,
                                            sidebar: chrome.sidebarVisible ? chrome.sidebarWidth : nil,
                                            inspector: chrome.pythiaVisible ? chrome.pythiaWidth : nil)
             let showsTabBar = self.showsTabBar
-            // Alignment to the document's line-number column: the title is pushed
-            // *past* the gutter (the per-view line-number/ruler column) so the
-            // filename never sits on the numbers, and the tab strip is pushed past
-            // the gutter so its first chip never sits on them either.
+            // Alignment to the document's line-number column: the tab strip is
+            // pushed past the gutter so its first chip never sits on the numbers.
+            // (The title now lives in the native toolbar, which clears the
+            // sidebar/gutter through `OracleFlipRoot.toolbarTitle`.)
             let gutter = gutterWidth
-            // Leading edge of the titlebar content. Collapsed: clear the traffic
-            // lights (~76pt) so the sidebar toggle sits right of them. Visible:
-            // clear the sidebar's full width so the row begins just past it. The
-            // gutter offset is applied only to the title so the filename never
-            // sits on the line numbers.
             let tabStripLeading: CGFloat = (chrome.sidebarVisible ? widths.leading : 0) + gutter
             ZStack {
                 if let diff = tabs.activeDiffTab {
@@ -390,12 +392,19 @@ struct EditorContainerView: View {
                 }
             }
             .ignoresSafeArea(.container, edges: [.top, .leading, .trailing])
+            // The quick-search pill floats over the code column — it never
+            // reserves a band, so the scroll surface keeps its full height and
+            // the text travels *under* the pill through the bottom edge blur.
+            // Declared before the bottom `safeAreaBar`, so the overlay is laid
+            // out inside the content region (above the status strip).
             .overlay(alignment: .bottom) {
-                // The quick-search pill floats over the code column (never a
-                // reserved band), centred above the status strip. Ctrl+S folds it
-                // in without pushing the editor.
                 if let quickSearch = activeQuickSearch {
-                    QuickSearchDock(model: quickSearch, theme: chrome.theme)
+                    QuickSearchDock(model: quickSearch)
+                        // Centre in the *code column*, not the full window: the
+                        // leading sidebar and trailing Pythia each own their own
+                        // band, so the pill floats over the text it searches.
+                        .padding(.leading, widths.leading)
+                        .padding(.trailing, widths.trailing)
                 }
             }
             .safeAreaBar(edge: .bottom, spacing: 0) {
@@ -422,7 +431,10 @@ struct EditorContainerView: View {
                     // Keep the base continuous where the status extension fades
                     // away; the left margin must not reveal a transparent notch.
                     ZStack(alignment: .bottom) {
-                        EditorChromeSurface(color: chrome.theme.rulerBackground)
+                        EditorChromeSurface(
+                            color: chrome.theme.rulerBackground,
+                            opacity: Double(ThemeSettings.shared.resolvedRulerBackgroundOpacity(for: chrome.theme))
+                        )
                             // The code gutter already renders into this margin.
                             // Leave its bands visible rather than painting over
                             // them with a second material surface.
@@ -481,9 +493,6 @@ struct EditorContainerView: View {
                             .position(x: sheet.midX, y: sheet.midY)
                     }
 
-                    // Folder identity is laid out in the native toolbar, not
-                    // underneath its navigation button in a separate overlay.
-
                     SidebarResizeHandle(width: Binding(
                         get: { widths.leading - SidebarSheetGeometry.horizontalInsets },
                         set: { chrome.sidebarWidth = $0 }),
@@ -501,20 +510,6 @@ struct EditorContainerView: View {
                 .opacity(chrome.sidebarVisible ? 1 : 0)
                 .allowsHitTesting(chrome.sidebarVisible)
                 .ignoresSafeArea(.container, edges: .top)
-            }
-            .safeAreaBar(edge: .top, spacing: 0) {
-                // The bar *grows* by the strip band while tabs are visible: the
-                // strip then lives inside the bar's blurred region and the
-                // editor content begins below it (the top inset the editor
-                // would otherwise add for the strip is now part of this bar).
-                // Controls now live in the real window toolbar. Keep the existing
-                // clear scroll-edge band so content still fades beneath chrome.
-                // The code ScrollView owns its bar directly, inside the
-                // full-bleed container. Other surfaces retain this outer bar.
-                Color.clear.frame(height: activeQuickSearch == nil
-                    ? EditorChromeMetrics.scrollEdgeBarHeight(
-                        topInset: EditorChromeMetrics.chromeInset(showsTabBar: showsTabBar))
-                    : 0)
             }
             .safeAreaBar(edge: .trailing, spacing: 0) {
                 // The background lives OUTSIDE the NSHostingView so the trailing
@@ -564,6 +559,10 @@ struct EditorContainerView: View {
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
+                        // The NSHostingView does not inherit the bar's top-edge
+                        // extension, so the content must ignore the window's top
+                        // safe area itself to sit behind the transparent toolbar.
+                        .ignoresSafeArea(edges: .top)
                         // Stop the inspector content one strip above the bottom
                         // edge, so the status surface painted beneath it stays
                         // visible instead of being covered by the input bar.
@@ -624,7 +623,37 @@ struct EditorContainerView: View {
                         .zIndex(2)
                 }
             }
+            // Font-size HUD (⌘+/⌘-/⌘0): a transient percentage readout centred
+            // over the editor. Inert — it must never steal a click or scroll.
+            .overlay {
+                if let percent = fontSizeHudPercent {
+                    Text("\(percent)%")
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.regularMaterial,
+                                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+                        }
+                        .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                        .allowsHitTesting(false)
+                }
+            }
+            .onChange(of: displaySettings.fontSizeChangeToken) { _, _ in
+                flashFontSizeHud(displaySettings.fontSizePercent)
+            }
         }
+        // The window is titled with a transparent, full-size titlebar, so its
+        // top safe area is the native titlebar row. The editor draws its own
+        // chrome in *window* coordinates — traffic lights float above the title
+        // row — therefore the whole container ignores that inset. Without this
+        // every band (title row, tab strip, sidebar sheet) shifts down by the
+        // titlebar height and the offsets below can never reach the top edge.
+        .ignoresSafeArea(.container, edges: [.top, .leading, .trailing])
     }
 }
 
@@ -634,10 +663,9 @@ struct EditorContainerView: View {
 /// (chrome and all); reverse face = Pythia alone. `oracleOnly` turns the card
 /// over: the editor does not slide or maximize, it *turns away*.
 ///
-/// The `.behindWindow` desktop backdrop (`WindowBackdrop`) is the one layer that
-/// must never be 3D-transformed — rotating it re-samples the desktop every frame
-/// and froze the app. It therefore lives *behind* the card, static and shared by
-/// both faces, while only the content (editor / Pythia) actually turns over.
+/// The editor-glass backdrop is the one layer that must never be 3D-transformed;
+/// it therefore lives *behind* the card, static and shared by both faces, while
+/// only the content (editor / Pythia) actually turns over.
 @available(macOS 26.0, *)
 struct OracleFlipRoot: View {
     let sidebar: NSView
@@ -664,16 +692,87 @@ struct OracleFlipRoot: View {
         return EditorContainerView.makeGutter(document: tab.document, theme: chrome.theme).width
     }
 
+    /// Title-row content for the native toolbar: the file/entity glyph + the
+    /// active document's name, cleared past the sidebar + gutter while the
+    /// sidebar is open so the filename never sits on the sidebar or the code
+    /// column's line numbers.
+    private var toolbarTitle: some View {
+        HStack(spacing: 6) {
+            if let entity = tabs.activeEntityTab {
+                Text(entity.kind.glyph).font(.system(size: 11))
+            } else {
+                Image(systemName: FileIcon.symbol(for: activeToolbarFileURL))
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(.secondary)
+            }
+            Text(chrome.title)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.leading, chrome.sidebarVisible ? toolbarGutterWidth + 16 : 8)
+    }
+
+    private var activeToolbarFileURL: URL? {
+        tabs.activeEntityTab == nil ? tabs.activeTab?.controller.currentFile : nil
+    }
+
+    /// The toolbar stays mounted outside the flip, so the return control must
+    /// live here (not on the hidden front face) while the window is turned.
+    private var oracleReturnButton: some View {
+        Button {
+            chrome.onToggleOracleOnly?()
+        } label: {
+            Image(systemName: "arrow.uturn.backward")
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 26, height: 24)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Return to Editor")
+    }
+
+    /// The Pythia companion glyph row, hosted in the native toolbar's centred
+    /// (principal) slot so the glyphs keep their breathing room instead of being
+    /// squeezed into the trailing corner cluster. Visible whenever Pythia is —
+    /// the trailing inspector, or the full-window oracle-only face.
+    private var toolbarCompanionPicker: some View {
+        CompanionPicker(model: pythiaModel)
+            .environment(\.pythiaPalette, ThemeRegistry.shared.current.pythia)
+            .frame(width: 156)
+    }
+
+    /// The three-face Pythia view switch, lifted out of the panel into the native
+    /// toolbar so the panel header stops pushing the chat content down. Bound to
+    /// the model through a manual binding — the flip card must not observe the
+    /// whole chat model or it re-mounts the editor on every turn.
+    private var toolbarModePicker: some View {
+        PanelModePicker(mode: Binding(
+            get: { pythiaModel.mode },
+            set: { pythiaModel.mode = $0 }
+        ))
+        .environment(\.pythiaPalette, ThemeRegistry.shared.current.pythia)
+    }
+
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                // Desktop glass — an isotropic frosted blur of what sits behind the
-                // window, so it correctly stays put while the window's *content*
-                // turns over above it. It must never be 3D-transformed: rotating
-                // the `.behindWindow` material re-samples the desktop every frame
-                // and froze the app.
-                WindowBackdrop(strength: ThemeSettings.shared.resolvedGlassBlurStrength(for: chrome.theme))
-                    .ignoresSafeArea()
+                // Window base
+                // `Material` of the theme's weight, so base and glass both answer
+                // to the theme. No `NSVisualEffectView`: the window is opaque
+                // (`NativeWindowChrome`), so an AppKit `.withinWindow` material
+                // could never sample the desktop — it only frosted the window's
+                // own background colour. Material over the theme ground gives the
+                // same frost the sidebars speak, and keeps the window from reading
+                // as system chrome wherever translucent content lets it through.
+                // It stays put while the window's *content* turns over above it
+                // and must never be 3D-transformed.
+                ZStack {
+                    Color(nsColor: chrome.theme.editorBackground)
+                    Rectangle().fill(chrome.theme.editorMaterial)
+                }
+                .ignoresSafeArea()
 
                 // This rotates content only. The native toolbar, frame and
                 // window-server shadow are outside this SwiftUI transform.
@@ -699,11 +798,34 @@ struct OracleFlipRoot: View {
                 .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { toolbarAvailableWidth = $0 }
+        // The toolbar is a *structural* presence only: it is what makes the
+        // window server round the window with the modern continuous radius. It
+        // must draw absolutely nothing — no bar material, no per-item glass
+        // capsule — so the editor's own glass and the top scroll-edge blur read
+        // through it. `toolbarBackgroundVisibility` hides the bar's material;
+        // `sharedBackgroundVisibility` (macOS 26) removes the capsule macOS puts
+        // behind each item.
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                HStack(spacing: 8) {
-                    Text(chrome.currentFolder?.lastPathComponent ?? "Kein Ordner")
+            if chrome.oracleOnly {
+                ToolbarItem(placement: .navigation) {
+                    oracleReturnButton
+                }
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarItem(placement: .primaryAction) {
+                    HStack(spacing: 10) {
+                        toolbarModePicker
+                        toolbarCompanionPicker
+                    }
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                // Breadcrumb + the single sliding sidebar toggle. Collapsed the
+                // slot is just the toggle (40pt); open it expands to ride the
+                // sheet's trailing edge so the button slides beside the
+                // breadcrumb at the sidebar's top-right corner.
+                ToolbarItem(placement: .navigation) {
+                    HStack(spacing: 8) {
+                        Text(chrome.currentFolder?.lastPathComponent ?? "Kein Ordner")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -712,56 +834,40 @@ struct OracleFlipRoot: View {
                             .frame(maxWidth: chrome.sidebarVisible ? .infinity : 0, alignment: .leading)
                             .clipped()
                             .accessibilityHidden(!chrome.sidebarVisible)
-                    SidebarToggleButton(chrome: chrome)
-                        .offset(y: chrome.sidebarVisible ? 4 : 0)
+                        SidebarToggleButton(chrome: chrome)
+                            .offset(y: chrome.sidebarVisible ? 4 : 0)
+                    }
+                    .frame(width: chrome.sidebarVisible ? max(32, toolbarSidebarWidth - 112) : 40)
+                    .padding(.trailing, chrome.sidebarVisible ? 8 : 0)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.86), value: chrome.sidebarVisible)
+                    .animation(.easeInOut(duration: 0.18), value: toolbarSidebarWidth)
                 }
-                // Keep one button mounted as the header expands/collapses.
-                // Reserve native controls on the left and the sheet's trailing
-                // breathing room on the right; do not move the traffic lights.
-                .frame(width: chrome.sidebarVisible ? max(32, toolbarSidebarWidth - 112) : 40)
-                .padding(.trailing, chrome.sidebarVisible ? 8 : 0)
-                .animation(.spring(response: 0.3, dampingFraction: 0.86), value: chrome.sidebarVisible)
-                .animation(.easeInOut(duration: 0.18), value: toolbarSidebarWidth)
-            }
-            .sharedBackgroundVisibility(.hidden)
-            ToolbarItem(placement: .navigation) {
-                HStack(spacing: 0) {
-                    HStack(spacing: 8) {
-                        Image(systemName: FileIcon.symbol(for: tabs.activeTab?.controller.currentFile))
-                            .foregroundStyle(.secondary)
-                        Text(chrome.title)
-                            .font(.system(size: 12, weight: .semibold))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .frame(maxWidth: 220, alignment: .leading)
-                    .padding(.leading, chrome.sidebarVisible ? toolbarGutterWidth + 16 : 8)
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarItem(placement: .navigation) {
+                    toolbarTitle
                 }
-            }
-            .sharedBackgroundVisibility(.hidden)
-            ToolbarItemGroup(placement: .primaryAction) {
-                EditorModeControls(tabs: tabs)
-            }
-            ToolbarItemGroup(placement: .primaryAction) {
-                if chrome.oracleOnly {
-                    Button(action: { chrome.oracleOnly = false }) {
-                        Label("Return to Editor", systemImage: "arrow.uturn.backward")
+                .sharedBackgroundVisibility(.hidden)
+                ToolbarItem(placement: .primaryAction) {
+                    HStack(spacing: 10) {
+                        EditorModeControls(tabs: tabs)
+                        if chrome.pythiaVisible {
+                            toolbarModePicker
+                            toolbarCompanionPicker
+                        }
+                        PythiaCornerControls(chrome: chrome)
                     }
-                    .help("Return to Editor")
-                } else {
-                    Button(action: { chrome.oracleOnly = true }) {
-                        Label("Open Pythia Full View", systemImage: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .help("Transform window into Pythia")
-                    Button(action: { chrome.onTogglePythia?() }) {
-                        Label(chrome.pythiaVisible ? "Close Pythia Sidebar" : "Open Pythia Sidebar",
-                              systemImage: "sidebar.right")
-                    }
-                    .help(chrome.pythiaVisible ? "Close Pythia sidebar" : "Open Pythia in the right sidebar")
                 }
+                .sharedBackgroundVisibility(.hidden)
             }
-            .sharedBackgroundVisibility(.hidden)
         }
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        // The toolbar is chrome the *window server* owns; the editor draws its
+        // own bands in window coordinates. Without ignoring the toolbar's safe
+        // area the whole content (sidebars, tab strip, code view) is pushed down
+        // by the toolbar height and the top scroll-edge blur is hidden behind
+        // the toolbar band instead of shining through it.
+        .ignoresSafeArea(.container, edges: [.top, .leading, .trailing])
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { toolbarAvailableWidth = $0 }
         .onChange(of: chrome.oracleOnly) { _, flipped in
             withAnimation(.easeInOut(duration: 0.62)) {
                 degrees = flipped ? 180 : 0
@@ -784,6 +890,9 @@ private struct OracleOnlyView: View {
             Color(nsColor: chrome.theme.pythia.background)
                 .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme))
 
+            // The way back to the editor now lives in the native toolbar (which
+            // stays mounted outside the flip), so this face hosts Pythia alone,
+            // its header cleared below the toolbar.
             PythiaPanel(model: pythiaModel)
                 .environment(\.markdownThemeName, chrome.theme.name)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -801,6 +910,10 @@ private struct EditorModeSurface: View {
     @ObservedObject var rich: RichTextDocument
     @ObservedObject var imageModel: ImagePreviewModel
     @ObservedObject var htmlModel: HTMLPreviewModel
+    /// Observed (not read) so the gutter re-solves when the code font size or
+    /// line-number visibility changes — `makeGutter` reads the shared base font,
+    /// and this child must re-run its body in the same pass the parent does.
+    @ObservedObject private var displaySettings = EditorDisplaySettings.shared
     var leading: CGFloat
     var trailing: CGFloat
     /// Extra scroll-content inset above the first line, for chrome rows that sit
@@ -841,6 +954,7 @@ private struct EditorModeSurface: View {
                                    gutter: EditorContainerView.makeGutter(document: document, theme: theme),
                                    leadingChromeWidth: leading, trailingChromeWidth: trailing,
                                    topChromeInset: topInset,
+                                   gutterBackgroundOpacity: ThemeSettings.shared.resolvedRulerBackgroundOpacity(for: theme),
                                    sharedTextStorage: editor.textStorage, existingEditor: editor.textView,
                                    searchModel: editor.quickSearch,
                                    findReplace: editor.findReplace,
@@ -1093,119 +1207,61 @@ private final class TitleMenuItem: NSMenuItem {
     @objc private func fire() { handler() }
 }
 
-// MARK: - Top bar
 
-/// Minimal toolbar-equivalent for the top `safeAreaBar`.
-/// SwiftUI materials provide the glass blur (replacing the AppKit NSToolbar
-/// title item + the removed floating-panel glass).
-struct TopBar: View {
+/// The Pythia pair — inspector toggle and full-window flip — now lives in the
+/// native toolbar's trailing (primaryAction) slot. The oracle-only face's way
+/// back is the toolbar's own return button, so this cluster renders nothing in
+/// that state.
+private struct PythiaCornerControls: View {
     @ObservedObject var chrome: EditorChromeState
-    @ObservedObject var tabs: TabsModel
-    /// Left edge of the titlebar content, in window coordinates. Collapsed: the
-    /// sidebar toggle starts just past the traffic lights. Visible: the whole row
-    /// begins at the sidebar's right edge.
-    var leadingInset: CGFloat = 76
-    /// Extra leading pad on the title so the filename never sits on line numbers.
-    var gutterInset: CGFloat = 0
+
+    private enum Metric {
+        static let glyph: CGFloat = 26
+        static let height: CGFloat = 24
+        static let pad: CGFloat = 2
+        static let gap: CGFloat = 8
+    }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            HStack(spacing: 6) {
-                titleGlyph
-                    .padding(.leading, gutterInset + 12)
-                titleLabel
-
-                Spacer(minLength: 0)
-            }
-            .padding(.leading, leadingInset)
-            .padding(.trailing, 160)
-            .frame(height: 44)
-            .frame(maxWidth: .infinity)
-
-            // One toggle, one truth. The button never mounts or unmounts — it
-            // only slides between "right of the traffic lights" (collapsed) and
-            // "beside the breadcrumb, inside the sheet" (open). A single moving
-            // button keeps the transition a continuous motion; the previous
-            // two-button swap cross-faded (two visible while closing, none while
-            // opening) and read as a duplicated, then vanished, control.
-            // Lowered only while the sheet is open (to clear its top edge);
-            // collapsed it rides centred on the traffic-light row.
-            sidebarToggle
-                .offset(x: toggleLeading, y: chrome.sidebarVisible ? 12 : 4)
-        }
-        .frame(maxWidth: .infinity)
-        .overlay(alignment: .trailing) {
-            trailingControls
-                .padding(.trailing, 12)
-        }
-    }
-
-    /// Horizontal position of the single sidebar toggle. Collapsed it sits right
-    /// of the traffic lights (leadingInset is 76 then); open it rides the sheet's
-    /// trailing edge and lands beside the breadcrumb — 52pt shy of the edge, the
-    /// same spot the old sidebar-header toggle held (16pt trailing pad + 36pt
-    /// button width).
-    private var toggleLeading: CGFloat {
-        chrome.sidebarVisible ? leadingInset - 52 : leadingInset
-    }
-
-    private var sidebarToggle: some View {
-        SidebarToggleButton(chrome: chrome)
-    }
-
-    /// The window title — always the active document's name; the breadcrumb never
-    /// replaces it.
-    private var titleLabel: some View {
-        Text(chrome.title)
-            .font(.system(size: 12, weight: .semibold))
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .padding(.leading, 8)
-    }
-
-    @ViewBuilder private var titleGlyph: some View {
-        if let entity = tabs.activeEntityTab {
-            Text(entity.kind.glyph).font(.system(size: 11))
-        } else {
-            Image(systemName: FileIcon.symbol(for: activeFileURL))
-                .font(.system(size: 12, weight: .regular))
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    /// Only a document tab has a file behind it; an entity tab (task/seal) has none.
-    private var activeFileURL: URL? {
-        tabs.activeEntityTab == nil ? tabs.activeTab?.controller.currentFile : nil
-    }
-
-    /// Right-aligned controls in the title row: "Open Pythia" while it is closed,
-    /// then its own maximize (flip) + hide (close) buttons once it is open — so
-    /// Pythia's chrome lives in the shared titlebar, above the tab strip.
-    @ViewBuilder private var trailingControls: some View {
-        HStack(spacing: 8) {
-            EditorModeControls(tabs: tabs)
-            if !chrome.pythiaVisible {
-                openPythiaButton
+        if !chrome.oracleOnly {
+            HStack(spacing: Metric.gap) {
+                cornerButton("arrow.up.left.and.arrow.down.right",
+                             accent: .secondary,
+                             help: "Transform window into Pythia") {
+                    chrome.onToggleOracleOnly?()
+                }
+                if chrome.pythiaVisible {
+                    cornerButton("sidebar.right",
+                                 accent: chrome.theme.pythia.accentColor,
+                                 help: "Close Pythia sidebar") {
+                        chrome.onTogglePythia?()
+                    }
+                } else {
+                    cornerButton("rectangle.righthalf.inset.filled",
+                                 accent: chrome.theme.pythia.accentColor,
+                                 help: "Open Pythia") {
+                        chrome.onTogglePythia?()
+                    }
+                }
             }
         }
     }
 
-    /// Minimal launcher shown in the titlebar only while Pythia is closed.
-    private var openPythiaButton: some View {
-        Button {
-            chrome.onTogglePythia?()
-        } label: {
-            Image(systemName: "rectangle.righthalf.inset.filled")
+    /// Shared capsule-styled icon button for the window corner.
+    private func cornerButton(_ system: String,
+                              accent: Color,
+                              help: String,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
                 .font(.system(size: 12, weight: .semibold))
-                .frame(width: 26, height: 24)
-                .contentShape(Circle())
+                .frame(width: Metric.glyph, height: Metric.height)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(chrome.theme.pythia.accentColor)
-        .help("Open Pythia")
-        .padding(2)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+        .foregroundStyle(accent)
+        .help(help)
+        .padding(Metric.pad)
     }
 }
 
@@ -1281,12 +1337,13 @@ private struct SidebarToggleButton: View {
             chrome.onToggleSidebar?()
         } label: {
             Image(systemName: "sidebar.left")
-                .font(.system(size: 15, weight: .semibold))
-                .frame(width: 32, height: 32)
-                .contentShape(Circle())
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 26, height: 24)
+                .contentShape(Capsule())
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: Circle())
         .foregroundStyle(Color(nsColor: chrome.theme.sidebarAccent))
         .accessibilityLabel("Toggle Sidebar")
         .help("Toggle Sidebar")

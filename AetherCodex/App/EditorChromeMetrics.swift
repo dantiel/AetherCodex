@@ -11,6 +11,10 @@ enum EditorChromeMetrics {
     /// Inside NSTextView, so selection and line bands can paint to the gutter.
     static let codeLeadingPadding: CGFloat = 10
     /// Height of the title row (window title on the left, controls on the right).
+    /// The title row now lives in the native toolbar, but the band it reserves
+    /// stays 44 — the transparent titlebar lets content ride *under* the toolbar,
+    /// so only the traffic-light row (~44) is cleared, not the full 52pt unified
+    /// toolbar.
     static let titleBarBand: CGFloat = 44
     /// Height of the editor tab strip row.
     static let tabBarBand: CGFloat = 32
@@ -37,9 +41,11 @@ enum EditorChromeMetrics {
     /// Applied on top of `tabStripBottom`; the no-tabbar case is flush to the top.
     static let pythiaBelowTabClearance: CGFloat = 20
 
-    /// Visible outer silhouette. NativeWindowChrome clips the enclosing frame
-    /// while retaining its real titlebar controls. This is not an NSWindow
-    /// corner-radius property; keep it separate from interior sheet rounding.
+    /// Legacy silhouette radius, now unused by the active window path. The main
+    /// window is opaque + titled (`.windowStyle(.titleBar)`) + unified toolbar,
+    /// so the window server owns the unified corner radius natively — no content
+    /// clip. Kept only for `WindowChrome.ShadowRoundedView` (the retired
+    /// borderless chrome).
     static let windowCornerRadius: CGFloat = 22
     /// Transparent rim around the content where the custom shadow has room to draw
     /// (a shadow cannot extend past its own window's bounds).
@@ -54,9 +60,19 @@ enum EditorChromeMetrics {
 
     /// Height of the bottom status strip — one row of 11pt secondary text.
     static let statusBarHeight: CGFloat = 24
-    /// Row reserved for the docked quick-search bar while it is open. The bar
-    /// itself is slightly shorter; the slack is the gap its shadow breathes in.
+    /// Depth of the bottom progressive-blur ramp over the code column: the last
+    /// lines dissolve into the status strip instead of being cut by it.
+    static let scrollEdgeBlurDepth: CGFloat = 52
+    /// Height of the floating quick-search pill's glass.
     static let quickSearchBarHeight: CGFloat = 36
+    /// Clearance under the pill, measured from the text viewport's bottom edge.
+    /// It lifts the pill above the horizontal scroller (which owns the last
+    /// few points of the viewport) and leaves its shadow room to breathe.
+    /// The pill floats — it never reserves a bar, so the code scrolls beneath it.
+    static let quickSearchBarLift: CGFloat = 44
+    /// Preferred width of the floating pill. Content stays readable and the
+    /// pill reads as a tool, not a band; it is centred in the code column.
+    static let quickSearchBarWidth: CGFloat = 300
 
     /// Extra scroll-content height for chrome rows (the tab strip) that sit above
     /// the surface. Zero when the strip is hidden.

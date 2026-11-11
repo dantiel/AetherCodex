@@ -485,6 +485,10 @@ final class PythiaUsageModel: ObservableObject {
 final class PythiaChatModel: ObservableObject {
     @Published var flow: [FlowEntry] = []
     @Published var companionID: String = "pythia"
+    /// Which face Pythia shows — the chat, Salomo's seal cabinet, or the Magnum
+    /// Opus. Lives on the model so the native toolbar's three-face switch and the
+    /// panel stay in lockstep without the flip card observing the whole model.
+    @Published var mode: PythiaMode = .pythia
     /// Companions veiled into the æther while talking to default Pythia. They
     /// answer in the chat (via `_say`) and offer follow-ups (`_suggest`), and
     /// contribute their specialist tools. Only these — the ones shown active in
@@ -1807,7 +1811,7 @@ final class PythiaChatModel: ObservableObject {
 
 /// The three faces of the trailing pane: Pythia's chat, Salomo's Siegel, and
 /// the Magnum Opus orchestration view.
-private enum PythiaMode { case pythia, siegel, magnumOpus }
+enum PythiaMode { case pythia, siegel, magnumOpus }
 
 struct PythiaPanel: View {
     @ObservedObject var model: PythiaChatModel
@@ -1815,14 +1819,23 @@ struct PythiaPanel: View {
     /// sits at the window top (oracle-only flip face); the trailing inspector
     /// passes a larger value that clears the full-width tab strip instead.
     var topClearance: CGFloat = 28
+    /// Absolute trailing inset for the header row, measured from the panel's
+    /// own trailing edge. The inspector is overlaid by the window-corner control
+    /// pair, so it reserves their footprint (not *additional* space on top of
+    /// the base 10pt inset — that would double-count and widen the gap). The
+    /// oracle face hosts the flip control in the row itself and passes 0.
+    var trailingClearance: CGFloat = 0
     /// Flip the whole window to oracle-only (fullscreen Pythia), when hosted by
     /// the editor chrome. Standalone windows leave these nil and show no controls.
     var onFlip: (() -> Void)? = nil
     /// Hide (collapse) the trailing Pythia inspector.
     var onClosePythia: (() -> Void)? = nil
+    /// Glyph + help for the flip control: the oracle-only face turns it into the
+    /// way back to the editor.
+    var flipGlyph: String = "arrow.up.left.and.arrow.down.right"
+    var flipHelp: String = "Oracle Only (fullscreen)"
     @ObservedObject private var aetherContext = AetherContext.shared
     @State private var themeRevision = 0
-    @State private var mode: PythiaMode = .pythia
     /// Measured height of the whole pane — the budget the unfolded Aegis mirror
     /// may draw from without starving the message list.
     @State private var paneHeight: CGFloat = 0
@@ -1834,9 +1847,9 @@ struct PythiaPanel: View {
         let palette = self.palette
         let _ = themeRevision
         Group {
-            if mode == .siegel {
+            if model.mode == .siegel {
                 SolomonPanel()
-            } else if mode == .magnumOpus {
+            } else if model.mode == .magnumOpus {
                 MagnumOpusPanel()
             } else {
                 MessageList(model: model)
@@ -1845,19 +1858,12 @@ struct PythiaPanel: View {
         }
         .safeAreaBar(edge: .top, spacing: 0) {
           VStack(spacing: 0) {
-            HStack(spacing: 6) {
-              PanelModePicker(mode: $mode)
-              if mode == .pythia {
-                  CompanionPicker(model: model)
-                      .frame(maxWidth: .infinity, alignment: .leading)
-              } else {
-                  Spacer(minLength: 0)
-              }
-              inspectorControls
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, topClearance)  // titlebar clearance (traffic lights row)
-            .padding(.bottom, 2)
+            // The three-face switch now lives in the native toolbar; this row
+            // only reserves the titlebar/traffic-light clearance so the content
+            // starts right beneath the transparent chrome instead of being
+            // pushed down by the old in-panel header.
+            Spacer(minLength: 0)
+              .frame(height: topClearance + 2)
 
             if aetherContext.root != nil {
                 HStack(spacing: 6) {
@@ -1874,7 +1880,7 @@ struct PythiaPanel: View {
           }
         }
         .safeAreaBar(edge: .bottom, spacing: 0) {
-          if mode == .pythia {
+          if model.mode == .pythia {
             VStack(spacing: 0) {
               if let card = model.recoverCard {
                 RecoverCardView(card: card, model: model)
@@ -1952,14 +1958,14 @@ struct PythiaPanel: View {
             HStack(spacing: 2) {
                 if let onFlip {
                     Button(action: onFlip) {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        Image(systemName: flipGlyph)
                             .font(.system(size: 12, weight: .semibold))
                             .frame(width: 28, height: 28)
                             .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(palette.accentColor)
-                    .help("Oracle Only (fullscreen)")
+                    .help(flipHelp)
                 }
                 if let onClosePythia {
                     Button(action: onClosePythia) {
@@ -1985,7 +1991,7 @@ struct PythiaPanel: View {
 
 /// A quiet three-face toggle: Pythia (the chat), Siegel (Salomo's temple) and
 /// the Magnum Opus (orchestration).
-private struct PanelModePicker: View {
+struct PanelModePicker: View {
     @Binding var mode: PythiaMode
     @Environment(\.pythiaPalette) private var palette
 
@@ -2051,7 +2057,7 @@ private struct ContextPill: View {
 
 // MARK: - Companion picker
 
-private struct CompanionPicker: View {
+struct CompanionPicker: View {
     @ObservedObject var model: PythiaChatModel
     @ObservedObject private var bridge = RubyBridge.shared
     @Environment(\.pythiaPalette) private var palette

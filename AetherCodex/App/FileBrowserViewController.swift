@@ -99,10 +99,10 @@ private struct FileBrowserScrollContent: View {
         }
         .safeAreaBar(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
-                // The breadcrumb + sidebar toggle live in the enclosing sidebar
-                // safe-area bar; this column reserves the traffic-light band
-                // and the header height so scroll rows begin below both.
-                Color.clear.frame(height: 46)
+                // The folder identity (and the traffic lights above it) live in
+                // the enclosing sidebar safe-area bar; this column reserves that
+                // band so scroll rows begin below both.
+                Color.clear.frame(height: SidebarSheetGeometry.reservedTitleBand)
                 HStack(spacing: 2) {
                     actionButton(model.showsHidden ? "eye" : "eye.slash",
                                  help: model.showsHidden ? "Hide hidden files" : "Show hidden files (the Veil)",
