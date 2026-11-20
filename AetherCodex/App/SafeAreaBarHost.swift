@@ -258,6 +258,43 @@ extension SyntaxTheme {
     }
 }
 
+// MARK: - Focus-stable Liquid Glass
+
+/// Frost and pigment, kept in two layers on purpose.
+///
+/// `glassEffect(.regular.tint(_:))` hands the colour to the *glass layer* itself,
+/// and macOS desaturates that layer while the window is not key. On reactivation
+/// the layer is not re-resolved — the pane keeps the drained one and reads
+/// colourless until something unrelated rebuilds it (and a forced rebuild via a
+/// fresh identity only repaints the same drained appearance). So the frost stays
+/// **untinted**, and the hue is drawn as an ordinary colour fill above it: a plain
+/// SwiftUI layer that no focus transition touches — the same reason the line-number
+/// gutter, drawn that way all along, never loses its pigment.
+///
+/// The glass is *not* overpainted: the pigment is a fraction of the accent
+/// (see `paneTintStrength`), so the frost, the refraction and the desktop behind
+/// it all still read through.
+@available(macOS 26.0, *)
+private struct PigmentedGlass<S: Shape>: ViewModifier {
+    let tint: Color
+    let shape: S
+
+    func body(content: Content) -> some View {
+        content
+            .glassEffect(.regular, in: shape)
+            .overlay { shape.fill(tint) }
+    }
+}
+
+@available(macOS 26.0, *)
+extension View {
+    /// One frost, one pigment layer that survives focus changes. See
+    /// `PigmentedGlass`.
+    func pigmentedGlass<S: Shape>(tint: Color, in shape: S) -> some View {
+        modifier(PigmentedGlass(tint: tint, shape: shape))
+    }
+}
+
 // MARK: - Editor container (safeAreaBar host)
 
 /// The window's content, expressed in SwiftUI so we can use the native
@@ -412,8 +449,7 @@ struct EditorContainerView: View {
                                        leading: widths.leading, trailing: widths.trailing,
                                        topInset: EditorChromeMetrics.chromeInset(showsTabBar: showsTabBar),
                                        showWrapColumn: displaySettings.showWrapColumn,
-                                       wrapColumn: displaySettings.wrapColumn,
-                                       title: chrome.title)
+                                       wrapColumn: displaySettings.wrapColumn)
                         .id(tab.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -463,8 +499,8 @@ struct EditorContainerView: View {
                             // backdrop) keeps the two panes true siblings.
                             Rectangle()
                                 .fill(.clear)
-                                .glassEffect(.regular.tint(chrome.theme.sidebarAccentTintColor),
-                                             in: Rectangle())
+                                .pigmentedGlass(tint: chrome.theme.sidebarAccentTintColor,
+                                                in: Rectangle())
                         }
                         if chrome.statusBarVisible {
                             EditorStatusSurface(theme: chrome.theme)
@@ -514,10 +550,10 @@ struct EditorContainerView: View {
                                 // beneath stays visible.
                                 Rectangle()
                                     .fill(.clear)
-                                    .glassEffect(.regular.tint(chrome.theme.sidebarAccentTintColor),
-                                                 in: RoundedRectangle(
-                                                    cornerRadius: SidebarSheetGeometry.sheetCornerRadius,
-                                                    style: .continuous))
+                                    .pigmentedGlass(tint: chrome.theme.sidebarAccentTintColor,
+                                                    in: RoundedRectangle(
+                                                        cornerRadius: SidebarSheetGeometry.sheetCornerRadius,
+                                                        style: .continuous))
                             }
                             // Round all four corners: the sheet is a complete
                             // floating card on every edge, so its right side keeps
@@ -575,8 +611,8 @@ struct EditorContainerView: View {
                     VStack(spacing: 0) {
                         Rectangle()
                             .fill(.clear)
-                            .glassEffect(.regular.tint(chrome.theme.pythiaGlassTintColor),
-                                         in: Rectangle())
+                            .pigmentedGlass(tint: chrome.theme.pythiaGlassTintColor,
+                                            in: Rectangle())
                         if chrome.statusBarVisible {
                             PythiaStatusBar(usage: pythiaModel.usage, theme: chrome.theme)
                         }
@@ -585,7 +621,7 @@ struct EditorContainerView: View {
                     HostedView {
                         ZStack(alignment: .leading) {
                             PythiaPanel(model: pythiaModel,
-                                       topClearance: 8)
+                                       topClearance: EditorChromeMetrics.titleBarBand)
                                 .environment(\.markdownThemeName, chrome.theme.name)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                                 .overlay(alignment: .leading) { Divider() }
@@ -734,11 +770,14 @@ struct OracleFlipRoot: View {
         return EditorContainerView.makeGutter(document: tab.document, theme: chrome.theme).width
     }
 
-    private var codeOwnsTitle: Bool {
-        guard tabs.activeEntityTab == nil, tabs.activeDiffTab == nil,
-              let controller = tabs.activeTab?.controller else { return false }
-        return !controller.richDocument.active && !controller.imagePreview.isActive
-            && !controller.htmlPreview.isActive
+    private var toolbarLayout: EditorToolbarLayout {
+        let panels = EditorPanelWidths(available: toolbarAvailableWidth,
+            sidebar: chrome.sidebarVisible ? chrome.sidebarWidth : nil,
+            inspector: chrome.pythiaVisible ? chrome.pythiaWidth : nil)
+        return EditorToolbarLayout(windowWidth: toolbarAvailableWidth,
+                                   leadingWidth: panels.leading,
+                                   trailingWidth: panels.trailing,
+                                   showsPythia: chrome.pythiaVisible || chrome.oracleOnly)
     }
 
     /// Title-row content for the native toolbar: the file/entity glyph + the
@@ -747,6 +786,12 @@ struct OracleFlipRoot: View {
     /// column's line numbers.
     private var toolbarTitle: some View {
         HStack(spacing: 6) {
+            if toolbarLayout.showsAppTitle {
+                Text("ÆtherCodex")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text("·").foregroundStyle(.tertiary)
+            }
             if let entity = tabs.activeEntityTab {
                 Text(entity.kind.glyph).font(.system(size: 11))
             } else {
@@ -759,6 +804,8 @@ struct OracleFlipRoot: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
+        .frame(width: toolbarLayout.titleWidth, alignment: .leading)
+        .clipped()
         .padding(.leading, chrome.sidebarVisible ? toolbarGutterWidth + 16 : 8)
     }
 
@@ -789,7 +836,7 @@ struct OracleFlipRoot: View {
     private var toolbarCompanionPicker: some View {
         CompanionPicker(model: pythiaModel)
             .environment(\.pythiaPalette, ThemeRegistry.shared.current.pythia)
-            .frame(width: 156)
+            .frame(width: toolbarLayout.companionWidth)
     }
 
     /// The three-face Pythia view switch, lifted out of the panel into the native
@@ -888,18 +935,29 @@ struct OracleFlipRoot: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .navigation) {
-                    if !codeOwnsTitle { toolbarTitle }
+                    toolbarTitle
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .primaryAction) {
-                    HStack(spacing: 10) {
-                        EditorModeControls(tabs: tabs)
-                        if chrome.pythiaVisible {
+                    EditorModeControls(tabs: tabs)
+                }
+                .sharedBackgroundVisibility(.hidden)
+                if chrome.pythiaVisible {
+                    ToolbarItem(placement: .primaryAction) {
+                        HStack(spacing: 8) {
                             toolbarModePicker
                             toolbarCompanionPicker
                         }
-                        PythiaCornerControls(chrome: chrome)
+                        .fixedSize()
                     }
+                    .sharedBackgroundVisibility(.hidden)
+                }
+                // Independent trailing item: companion content must never
+                // consume the corner buttons' layout allocation.
+                ToolbarItem(placement: .primaryAction) {
+                    PythiaCornerControls(chrome: chrome)
+                        .fixedSize()
+                        .layoutPriority(10)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
@@ -907,6 +965,9 @@ struct OracleFlipRoot: View {
         // Per-pane safe-area bars own the progressive effect. Suppress only
         // the native toolbar fill through SwiftUI, never its private layers.
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        // Our document title is a real toolbar item. Remove the automatic
+        // window/app title through SwiftUI rather than hiding AppKit subviews.
+        .toolbar(removing: .title)
         // The toolbar is chrome the *window server* owns; the editor draws its
         // own bands in window coordinates. Without ignoring the toolbar's safe
         // area the whole content (sidebars, tab strip, code view) is pushed down
@@ -967,11 +1028,10 @@ private struct EditorModeSurface: View {
     var topInset: CGFloat
     var showWrapColumn: Bool
     var wrapColumn: Int
-    var title: String
 
     init(editor: EditorViewController, theme: SyntaxTheme, document: EditorDocumentModel,
           leading: CGFloat = 0, trailing: CGFloat = 0, topInset: CGFloat = 0,
-          showWrapColumn: Bool = false, wrapColumn: Int = 80, title: String = "Untitled") {
+          showWrapColumn: Bool = false, wrapColumn: Int = 80) {
         self.editor = editor
         self.theme = theme
         self.document = document
@@ -983,7 +1043,6 @@ private struct EditorModeSurface: View {
         self.topInset = topInset
         self.showWrapColumn = showWrapColumn
         self.wrapColumn = wrapColumn
-        self.title = title
     }
 
     var body: some View {
@@ -1002,7 +1061,7 @@ private struct EditorModeSurface: View {
     }
 
     private var codeSurface: some View {
-        var surface = TextKit2ScrollSurface(attributedString: document.attributedString,
+        TextKit2ScrollSurface(attributedString: document.attributedString,
                                    backgroundColor: theme.editorBackgroundColor,
                                    gutter: EditorContainerView.makeGutter(document: document, theme: theme),
                                    leadingChromeWidth: leading, trailingChromeWidth: trailing,
@@ -1014,9 +1073,6 @@ private struct EditorModeSurface: View {
                                    showWrapColumn: showWrapColumn,
                                    wrapColumn: wrapColumn,
                                    lineCount: document.lineCount, maxLineWidth: document.maxLineWidth)
-        surface.topBarTitle = title
-        surface.topBarSymbol = FileIcon.symbol(for: editor.currentFile)
-        return surface
     }
 }
 

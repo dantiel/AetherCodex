@@ -948,27 +948,19 @@ struct GutterRenderRepresentable: NSViewRepresentable {
 
 // MARK: - SwiftUI-owned scroll surface
 
-/// The editor document, scrolled by SwiftUI. A vertical `ScrollView` owns the
-/// top scroll-edge blur for both the pinned gutter and the text; the text sits in
-/// a nested horizontal `ScrollView` so horizontal scrolling never moves the gutter.
-/// When sharedTextStorage is provided, the editor is editable and syncs with EditorViewController.
-struct CodeScrollHeader: View {
-    let title: String
-    let symbol: String
-    var leading: CGFloat = 16
-    var trailing: CGFloat = 16
+/// A layout-only text element registers the native scroll-edge region. Unlike
+/// Color.clear or a zero-width character, a space preserves the system's text
+/// header geometry without drawing another title below the native toolbar.
+struct CodeScrollEdgeBar: View {
     var height: CGFloat = EditorChromeMetrics.titleBarBand
 
     var body: some View {
-        (Text(Image(systemName: symbol)) + Text("  " + title))
-        .font(.system(size: 12, weight: .semibold))
-        .lineLimit(1)
-        .truncationMode(.tail)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.leading, leading)
-        .padding(.trailing, trailing)
-        .frame(height: EditorChromeMetrics.titleBarBand)
-        .frame(height: height, alignment: .top)
+        Text(" ")
+            .font(.system(size: 12))
+            .frame(maxWidth: .infinity)
+            .frame(height: height)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
     }
 }
 
@@ -1005,9 +997,6 @@ struct TextKit2ScrollSurface: View {
     /// or scroll frame is O(1) instead of O(document).
     let lineCount: Int
     let maxLineWidth: Int
-
-    var topBarTitle: String = "Untitled"
-    var topBarSymbol: String = "doc.text"
 
     @State private var scrollOffset: CGPoint = .zero
     @State private var activeLine = 1
@@ -1166,8 +1155,7 @@ struct TextKit2ScrollSurface: View {
             ZStack(alignment: .topLeading) {
                 Color(backgroundColor)
 
-                // A two-axis ScrollView does not install macOS's variable-blur
-                // edge filter. Give each axis its own native scroller instead.
+                // Give each axis its own native scroller.
                 // Pin the vertical viewport inside the wider horizontal document
                 // so its top bar and vertical indicator never travel sideways.
                 ScrollView(.horizontal, showsIndicators: true) {
@@ -1239,16 +1227,12 @@ struct TextKit2ScrollSurface: View {
                 // Progressive blur is the *native* edge effect: it frosts only
                 // the scroll content (the code) as it passes beneath the pinned
                 // band, never the fixed background colour behind the scroll view.
-                // The bar must contain the real header: an all-clear bar reserves
-                // space but macOS disables its variable-blur filter.
+                // Keep a text-layout placeholder in the bar: an all-clear Color
+                // reserves space but macOS disables its variable-blur filter.
                 .scrollEdgeEffectStyle(.soft, for: [.top, .leading, .trailing])
                 .scrollEdgeEffectHidden(false, for: .top)
                 .safeAreaBar(edge: .top, spacing: 0) {
-                    CodeScrollHeader(title: topBarTitle, symbol: topBarSymbol,
-                                     leading: leadingChromeWidth > 0
-                                        ? leadingChromeWidth + gutter.width + 16 : 144,
-                                     trailing: max(trailingChromeWidth, 160),
-                                     height: topEdgeHeight)
+                    CodeScrollEdgeBar(height: topEdgeHeight)
                 }
                 .coordinateSpace(name: "editor-scroll")
                 .frame(width: proxy.size.width, height: proxy.size.height)
@@ -1370,8 +1354,9 @@ struct TextKit2ScrollSurface: View {
                             }
                         } else {
                             // Punch the floating sheet's footprint out of the
-                            // unified band: the sheet carries its own glass tint
-                            // (`.glassEffect(.regular.tint(_:))`), so this band
+                            // unified band: the sheet carries its own glass and
+                            // its own accent pigment (`.pigmentedGlass`), so this
+                            // band
                             // must not frost the code a second time behind it — a
                             // second frost is exactly what buried the text under
                             // the panel. Even-odd: filled everywhere but the hole.
