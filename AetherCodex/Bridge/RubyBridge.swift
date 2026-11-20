@@ -232,6 +232,13 @@ class RubyBridge: ObservableObject {
     /// continuation is resumed exactly once — never double-resumed, never leaked.
     private let pendingLock = NSLock()
 
+    /// Guards `startupContinuation`, which is resumed from three independent
+    /// threads (the ready-frame reader, the timeout Task, and
+    /// `resumePendingWithError`). `CheckedContinuation` traps if resumed twice, so
+    /// every resume must go through `takeStartupContinuation()` — the atomic
+    /// read-and-clear guarantees exactly one caller wins.
+    private let startupLock = NSLock()
+
     /// Heartbeat of the shared daemon: the last instant any frame (stream, result,
     /// ready, …) crossed the reader. A slow-but-alive agentic turn keeps emitting
     /// and keeps this fresh; only a truly silent daemon goes stale and trips the
@@ -404,12 +411,14 @@ class RubyBridge: ObservableObject {
 
         // Await the ready frame (with a generous startup timeout).
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            startupLock.lock()
             startupContinuation = cont
+            startupLock.unlock()
             Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
-                guard let self, self.startupContinuation != nil else { return }
-                self.startupContinuation = nil
-                cont.resume(throwing: RubyBridgeError.processLaunchFailed("Timed out waiting for daemon ready"))
+                guard let self else { return }
+                self.takeStartupContinuation()?.resume(
+                    throwing: RubyBridgeError.processLaunchFailed("Timed out waiting for daemon ready"))
             }
         }
     }
@@ -665,13 +674,22 @@ class RubyBridge: ObservableObject {
         fireAndForget("interrupt")
     }
 
+    /// Atomically read and clear `startupContinuation`. The first caller gets the
+    /// continuation and every later caller gets `nil`, so the ready frame, the
+    /// timeout Task, and `resumePendingWithError` can never double-resume it.
+    private func takeStartupContinuation() -> CheckedContinuation<Void, Error>? {
+        startupLock.lock()
+        defer { startupLock.unlock() }
+        let cont = startupContinuation
+        startupContinuation = nil
+        return cont
+    }
+
     /// Fail every in-flight request (daemon exit / stop). A timed-out request's id
     /// was already removed from the map, so its late result frame finds no entry and
     /// is silently dropped by `handleLine` — no cross-request misdelivery.
     private func resumePendingWithError(_ error: RubyBridgeError) {
-        let startup = startupContinuation
-        startupContinuation = nil
-        startup?.resume(throwing: error)
+        takeStartupContinuation()?.resume(throwing: error)
 
         pendingLock.lock()
         let pendings = pendingContinuations
@@ -818,9 +836,7 @@ private func scheduleLogFlush() {
                     self?.companionRoster = parsed
                 }
             }
-            let cont = startupContinuation
-            startupContinuation = nil
-            cont?.resume(returning: ())
+            takeStartupContinuation()?.resume(returning: ())
 
         case "stream":
             let method = json["method"] as? String
@@ -1014,6 +1030,34 @@ private func scheduleLogFlush() {
             messages: [["role": "user", "content": user]],
             system: system
         )
+    }
+
+    /// Ask the Ruby-core `GitForge` to partition pending changes into an ordered
+    /// queue of atomic commit suggestions (flash model). Shared with the CLI, so
+    /// the same logic drives both the native shell and the terminal.
+    func gitForgeGenerate(root: String, atomicity: Int) async throws -> [GitForgeSuggestion] {
+        let response = try await send(command: "git_forge_generate", arguments: [
+            "root": root, "atomicity": atomicity
+        ])
+        if let error = response.error { throw RubyBridgeError.rubyError(error) }
+        guard let dict = response.resultDict else { return [] }
+        if let message = dict["error"] as? String, !message.isEmpty {
+            throw RubyBridgeError.rubyError(message)
+        }
+        let raw = dict["suggestions"] as? [[String: Any]] ?? []
+        guard let data = try? JSONSerialization.data(withJSONObject: raw) else { return [] }
+        return (try? JSONDecoder().decode([GitForgeSuggestion].self, from: data)) ?? []
+    }
+
+    /// Commit one `GitForge` suggestion atomically via the Ruby core. Raises on
+    /// daemon error; the Ruby side owns the stage + commit rite.
+    func gitForgeCommit(root: String, subject: String, body: String,
+                        files: [String], knownFiles: [String]) async throws {
+        let response = try await send(command: "git_forge_commit", arguments: [
+            "root": root, "subject": subject, "body": body,
+            "files": files, "known_files": knownFiles
+        ])
+        if let error = response.error { throw RubyBridgeError.rubyError(error) }
     }
 
     /// Multi-turn chat that also surfaces the model's `reasoning_content`, so
@@ -1374,6 +1418,14 @@ struct CompanionSay {
     let glyph: String
     let name: String
     let message: String
+}
+
+/// One atomic commit proposed by the Ruby-core `GitForge` (flash model). The
+/// Ruby side owns the partition logic; Swift only renders and advances the queue.
+struct GitForgeSuggestion: Codable, Sendable {
+    let subject: String
+    let body: String
+    let files: [String]
 }
 
 /// A decoded Oracle turn: the visible answer plus the model's private reasoning

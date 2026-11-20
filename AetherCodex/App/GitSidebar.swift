@@ -198,20 +198,12 @@ final class GitSidebarModel: ObservableObject {
         error = nil
         Task {
             do {
-                let ctx = try await Task.detached {
-                    let staged = try GitCommand.run(root, ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color"])
-                    let worktree = try GitCommand.run(root, ["diff", "--no-ext-diff", "--no-textconv", "--no-color"])
-                    let history = (try? GitCommand.run(root, ["log", "-15", "--format=%s", "--no-show-signature"])) ?? ""
-                    let stagedNames = try GitCommand.run(root, ["diff", "--cached", "--name-only"])
-                    let worktreeNames = try GitCommand.run(root, ["diff", "--name-only"])
-                    return (staged, worktree, history, stagedNames, worktreeNames)
-                }.value
-                let suggestions = try await conjureCommitSuggestions(
-                    staged: ctx.0, worktree: ctx.1, history: ctx.2,
-                    stagedNames: ctx.3, worktreeNames: ctx.4,
-                    atomicity: Int(atomicity)
+                let suggestions = try await RubyBridge.shared.gitForgeGenerate(
+                    root: root.path, atomicity: Int(atomicity)
                 )
-                self.commitSuggestions = suggestions
+                self.commitSuggestions = suggestions.map {
+                    AtomicCommitSuggestion(subject: $0.subject, body: $0.body, files: $0.files)
+                }
             } catch {
                 self.error = error.localizedDescription
             }
@@ -228,7 +220,10 @@ final class GitSidebarModel: ObservableObject {
         error = nil
         Task {
             do {
-                try await Self.commitSuggestion(head, in: root, changes: changes)
+                try await RubyBridge.shared.gitForgeCommit(
+                    root: root.path, subject: head.subject, body: head.body,
+                    files: head.files, knownFiles: knownPaths
+                )
                 commitSuggestions.removeFirst()
                 message = ""
                 busy = false
@@ -248,8 +243,12 @@ final class GitSidebarModel: ObservableObject {
         error = nil
         Task {
             do {
+                let known = knownPaths
                 while let head = commitSuggestions.first {
-                    try await Self.commitSuggestion(head, in: root, changes: changes)
+                    try await RubyBridge.shared.gitForgeCommit(
+                        root: root.path, subject: head.subject, body: head.body,
+                        files: head.files, knownFiles: known
+                    )
                     commitSuggestions.removeFirst()
                 }
                 message = ""
@@ -262,110 +261,11 @@ final class GitSidebarModel: ObservableObject {
         }
     }
 
-    /// Stage a suggestion's files and commit them with its subject + body. Files
-    /// are filtered to those the index actually knows; if none survive, the
-    /// commit is refused so unrelated staged work is never swept in.
-    private static func commitSuggestion(_ suggestion: AtomicCommitSuggestion, in root: URL,
-                                         changes: [GitChange]) async throws {
-        let known = Set(changes.map(\.path) + changes.compactMap(\.originalPath))
-        let files = suggestion.files.filter { known.contains($0) }
-        guard !files.isEmpty else {
-            throw NSError(domain: "Git", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Queue head names no file the index still knows — regenerate the queue."])
-        }
-        _ = try await Task.detached { try GitCommand.run(root, ["add", "--"] + files) }.value
-        let message = [suggestion.subject, suggestion.body].filter { !$0.isEmpty }.joined(separator: "\n\n")
-        _ = try await Task.detached { try GitCommand.run(root, ["commit", "-m", message]) }.value
+    /// The set of paths the index currently knows (tracked + renamed). The Ruby
+    /// core filters a suggestion's file list against this before staging.
+    private var knownPaths: [String] {
+        Array(Set(changes.map(\.path) + changes.compactMap(\.originalPath)))
     }
-
-    private func conjureCommitSuggestions(staged: String, worktree: String, history: String,
-                                          stagedNames: String, worktreeNames: String,
-                                          atomicity: Int) async throws -> [AtomicCommitSuggestion] {
-        let system = """
-        You are an expert Git commit-message author for a native macOS code editor.
-        Output ONLY a valid JSON array — no markdown fences, no prose, no commentary.
-        """
-
-        let files = """
-        STAGED FILES:
-        \(stagedNames.isEmpty ? "(none)" : stagedNames)
-
-        UNSTAGED FILES:
-        \(worktreeNames.isEmpty ? "(none)" : worktreeNames)
-
-        RECENT COMMIT SUBJECTS:
-        \(history.isEmpty ? "(none)" : history)
-        """
-
-        let user = """
-        \(files)
-
-        Atomicity level: \(atomicity) / 10 — \(Self.atomicityDescription(atomicity)).
-
-        Partition ALL pending changes (staged and unstaged) into an ordered list of
-        atomic commits, smallest change first. Element 0 is the NEXT commit to make
-        right now (it covers the staged changes, or the first coherent unit).
-
-        Each element MUST be a JSON object with exactly these keys:
-        {"subject": "concise conventional-commit subject", "body": "optional body or empty string", "files": ["relative/path", ...]}
-
-        STAGED DIFF (commit next):
-        \(String(staged.prefix(16_000)))\(staged.count > 16_000 ? "\n[diff truncated]" : "")
-
-        UNSTAGED DIFF (remaining work):
-        \(String(worktree.prefix(16_000)))\(worktree.count > 16_000 ? "\n[diff truncated]" : "")
-        """
-
-        let raw = try await RubyBridge.shared.conjureFlash(
-            messages: [["role": "user", "content": user]],
-            system: system
-        ) ?? ""
-        return Self.parseCommitSuggestions(raw)
-    }
-
-    static func parseCommitSuggestions(_ raw: String) -> [AtomicCommitSuggestion] {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        s = s.replacingOccurrences(of: "```json", with: "")
-        s = s.replacingOccurrences(of: "```", with: "")
-        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        func decode(_ data: Data) -> [AtomicCommitSuggestion] {
-            if let arr = try? JSONDecoder().decode([RawCommitSuggestion].self, from: data) {
-                return arr.map { AtomicCommitSuggestion(subject: $0.subject, body: $0.body ?? "", files: $0.files ?? []) }
-            }
-            return []
-        }
-
-        if let data = s.data(using: .utf8) {
-            let direct = decode(data)
-            if !direct.isEmpty { return direct }
-        }
-        // The model may have wrapped the array in prose or an object; recover the
-        // first bracketed JSON array from the payload.
-        if let start = s.firstIndex(of: "["), let end = s.lastIndex(of: "]"), start < end,
-           let data = String(s[start...end]).data(using: .utf8) {
-            let inner = decode(data)
-            if !inner.isEmpty { return inner }
-        }
-        return []
-    }
-
-    private static func atomicityDescription(_ level: Int) -> String {
-        switch level {
-        case 1...2: return "minimal granularity — collapse related changes into one or few large commits"
-        case 3...4: return "coarse — a handful of commits grouping related concerns"
-        case 5...6: return "balanced — logical feature / bugfix / chore units"
-        case 7...8: return "fine — small, focused, single-purpose commits"
-        default: return "maximal granularity — split aggressively, one concern per commit"
-        }
-    }
-}
-
-/// Minimal decodable shape for a flash-model commit suggestion.
-private struct RawCommitSuggestion: Decodable {
-    let subject: String
-    let body: String?
-    let files: [String]?
 }
 
 struct GitSidebarView: View {
