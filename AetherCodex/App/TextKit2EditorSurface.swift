@@ -792,14 +792,6 @@ final class GutterRenderView: NSView {
             }
         }
 
-        // ── Vertical divider: 1px rule between the number column and code ──
-        // Drawn here (not in the material surface) because this view is the one
-        // guaranteed to render; a trailing `Color.frame(width: 1)` inside the
-        // fixed material ZStack was collapsing to zero height and vanishing.
-        if let divider = gutter.separatorColor {
-            divider.setFill()
-            NSRect(x: contentWidth - 1, y: 0, width: 1, height: bounds.height).fill()
-        }
     }
 
     // MARK: - Fold interaction
@@ -960,6 +952,26 @@ struct GutterRenderRepresentable: NSViewRepresentable {
 /// top scroll-edge blur for both the pinned gutter and the text; the text sits in
 /// a nested horizontal `ScrollView` so horizontal scrolling never moves the gutter.
 /// When sharedTextStorage is provided, the editor is editable and syncs with EditorViewController.
+struct CodeScrollHeader: View {
+    let title: String
+    let symbol: String
+    var leading: CGFloat = 16
+    var trailing: CGFloat = 16
+    var height: CGFloat = EditorChromeMetrics.titleBarBand
+
+    var body: some View {
+        (Text(Image(systemName: symbol)) + Text("  " + title))
+        .font(.system(size: 12, weight: .semibold))
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.leading, leading)
+        .padding(.trailing, trailing)
+        .frame(height: EditorChromeMetrics.titleBarBand)
+        .frame(height: height, alignment: .top)
+    }
+}
+
 struct TextKit2ScrollSurface: View {
     let attributedString: NSAttributedString
     let backgroundColor: Color
@@ -994,8 +1006,10 @@ struct TextKit2ScrollSurface: View {
     let lineCount: Int
     let maxLineWidth: Int
 
+    var topBarTitle: String = "Untitled"
+    var topBarSymbol: String = "doc.text"
+
     @State private var scrollOffset: CGPoint = .zero
-    @State private var revealAnchorScreenY: CGFloat = 0
     @State private var activeLine = 1
     @State private var selectedLineRange: ClosedRange<Int>? = nil
 
@@ -1066,7 +1080,9 @@ struct TextKit2ScrollSurface: View {
             let topContentInset: CGFloat = EditorChromeMetrics.baseContentInset
                 + (topChromeInset > 0 ? EditorChromeMetrics.tabBarContentClearance : 0)
             let topEdgeHeight = EditorChromeMetrics.scrollEdgeBarHeight(topInset: topChromeInset)
-            let bottomEdgeHeight = EditorChromeMetrics.scrollEdgeBlurDepth
+            // No bottom progressive blur: the horizontal scroller sits flush
+            // against the status strip, so nothing reserves a ramp below the text.
+            let bottomEdgeHeight: CGFloat = 0
             let visibleEditorWidth = max(proxy.size.width - leadingChromeWidth - trailingChromeWidth, 1)
             let viewportTextWidth = max(visibleEditorWidth - gutter.width, 1)
             // Live pitch from the adopted editor — keeps the scroll extent locked
@@ -1106,33 +1122,57 @@ struct TextKit2ScrollSurface: View {
                 leftOverhang: leftOverhang
             )
 
-            // Vertical center of the search-reveal target, in the scroll content's
-            // own coordinate space (relative to the HStack top). The reveal anchor
-            // below is positioned here and scrolled into view on each match.
-            // Exact layout-manager Y when available; arithmetic estimate as a
-            // fallback while the adopted editor's layout is still warming up.
-            // Content-space center of the current match. X is measured from the
-            // live layout manager (so a hit on a long line centres the *match*,
-            // not the viewport) and offset past the sidebar+gutter spacer; Y is
-            // the line's measured mid-point. Arithmetic estimates only while the
-            // adopted editor's layout is still warming up.
-            let matchCenter = searchModel.currentMatchCenter
-            // Reveal centres the match *vertically* only. Horizontally the anchor
-            // sits at the viewport's current centre, so `scrollTo(.center)` never
-            // drifts the scroll sideways — a hit on a long line no longer shoves
-            // the view to the right. Mirrors the find/replace anchor below.
-            let revealX = scrollOffset.x + proxy.size.width / 2
-            let revealY = matchCenter?.y
-                ?? CGFloat((searchModel.pendingRevealLine ?? 1) - 1) * effectiveLineHeight
-                    + effectiveLineHeight / 2
-            let findReplaceRevealY = CGFloat((findReplace.pendingRevealLine ?? 1) - 1) * effectiveLineHeight
-                + effectiveLineHeight / 2
+            // Content-space center of the current match, taken from the rect the
+            // model measured for this very jump — never from a line estimate.
+            // A line number times the line height drifts the moment wrapping or
+            // folding breaks the 1:1 ratio, which is what made a reveal land at a
+            // near-random offset. No rect, no reveal: an unmeasured hit (text view
+            // not adopted yet, or the document changed under the scan) is simply
+            // not scrolled to.
+            let highlight = searchModel.highlight
+            // The band the eye can actually read: below the title/tab bar, above
+            // the floating quick-search pill. The pill floats, so the lines
+            // behind it are not visible — reserve a whole number of lines
+            // (derived from the live line height) rather than the pill's raw
+            // height, so "half a line peeking over the pill" counts as hidden.
+            let pillCover: CGFloat = searchModel.isVisible
+                ? EditorChromeMetrics.quickSearchBarHeight + EditorChromeMetrics.quickSearchBarLift
+                : 0
+            let hiddenLines = pillCover > 0
+                ? ceil(pillCover / max(effectiveLineHeight, 1))
+                : 0
+            let bottomReserve = min(hiddenLines * effectiveLineHeight,
+                                    proxy.size.height * 0.4)
+            let visibleTop = topEdgeHeight
+            let visibleBottom = max(proxy.size.height - bottomReserve,
+                                    visibleTop + effectiveLineHeight)
+            // Reveal centres the match in both axes. Horizontally the anchor sits
+            // at the hit's content centre (leading chrome + gutter + rect centre),
+            // so `scrollTo(.center)` scrolls left or right to bring an off-screen
+            // hit into view instead of pinning the viewport's current centre.
+            let revealX = leadingChromeWidth + gutter.width + (highlight?.rect.midX ?? 0)
+            // `scrollTo(.center)` centres the anchor in the scrollable region —
+            // the viewport *below* the top safe-area bar. The readable band is
+            // that same region cut short by the pill below, so its centre sits
+            // `bottomReserve / 2` above the scroll centre. Carry exactly that
+            // half-pill on the anchor; the top bar is already excluded by the
+            // scroll centre itself, so subtracting it again pushed every upward
+            // reveal back under the title band.
+            let revealY = (highlight?.rect.midY ?? 0) + bottomReserve / 2
+            // Same source as the halo: the hit measured by the model on the jump,
+            // so the anchor cannot scroll to a rect the layout never produced.
+            let findReplaceRevealY = findReplace.highlight?.rect.midY ?? 0
 
             ZStack(alignment: .topLeading) {
                 Color(backgroundColor)
 
+                // A two-axis ScrollView does not install macOS's variable-blur
+                // edge filter. Give each axis its own native scroller instead.
+                // Pin the vertical viewport inside the wider horizontal document
+                // so its top bar and vertical indicator never travel sideways.
+                ScrollView(.horizontal, showsIndicators: true) {
                 ScrollViewReader { scrollProxy in
-                ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                ScrollView(.vertical, showsIndicators: true) {
                     HStack(alignment: .top, spacing: 0) {
                         // These are real scroll-content spacers, rather than
                         // ScrollView content insets. At rest they reserve the
@@ -1169,6 +1209,14 @@ struct TextKit2ScrollSurface: View {
                                    height: renderedHeight)
                     }
                     .overlay(alignment: .topLeading) {
+                        // The current hit wears a halo stronger than the native
+                        // selection: tint, rim, glow, and a one-shot ripple that
+                        // replays on every jump (the token is the identity).
+                        if searchModel.isVisible, let hit = highlight {
+                            QuickSearchMatchHighlight(rect: hit.rect)
+                                .id(searchModel.revealToken)
+                                .offset(x: leadingChromeWidth + gutter.width)
+                        }
                         // Both reveal anchors centre the target vertically only:
                         // their X sits at the viewport's current horizontal centre
                         // so the scroll never drifts sideways.
@@ -1176,44 +1224,33 @@ struct TextKit2ScrollSurface: View {
                             .frame(width: 1, height: 1)
                             .id("quick-search-reveal")
                             .position(x: revealX, y: revealY)
-                            .onGeometryChange(for: CGFloat.self) { geo in
-                                geo.frame(in: .named("editor-scroll")).midY
-                            } action: { y in
-                                revealAnchorScreenY = y
-                            }
                         Color.clear
                             .frame(width: 1, height: 1)
                             .id("find-replace-reveal")
                             .position(x: scrollOffset.x + proxy.size.width / 2, y: findReplaceRevealY)
                     }
+                    .offset(x: -scrollOffset.x)
                     .padding(.top, topContentInset)
                     .padding(.bottom, bottomOverscroll)
                     .frame(minWidth: visibleEditorWidth,
                            minHeight: max(0, proxy.size.height - topEdgeHeight),
                            alignment: .topLeading)
                 }
-                // Progressive blur lives on the *scroll content only* — the
-                // background color must stay solid to the very top of the window.
-                .scrollEdgeEffectStyle(.soft, for: [.top, .leading, .trailing, .bottom])
+                // Progressive blur is the *native* edge effect: it frosts only
+                // the scroll content (the code) as it passes beneath the pinned
+                // band, never the fixed background colour behind the scroll view.
+                // The bar must contain the real header: an all-clear bar reserves
+                // space but macOS disables its variable-blur filter.
+                .scrollEdgeEffectStyle(.soft, for: [.top, .leading, .trailing])
                 .scrollEdgeEffectHidden(false, for: .top)
-                .scrollEdgeEffectHidden(false, for: .bottom)
-                // Keep the edge-effect owner adjacent to its scroll view. The
-                // outer full-bleed container ignores safe areas; relying on its
-                // bar made this relationship layout-dependent. Never change the
-                // editor's identity to refresh an effect.
-                //
-                // The bar's content *is* the progressive blur: a clear
-                // placeholder gives the compositor nothing to blend with, so
-                // the band carries the ramp itself and the code scrolls beneath
-                // it into softness.
                 .safeAreaBar(edge: .top, spacing: 0) {
-                    ScrollEdgeBlur(edge: .top, length: topEdgeHeight)
-                }
-                .safeAreaBar(edge: .bottom, spacing: 0) {
-                    ScrollEdgeBlur(edge: .bottom, length: bottomEdgeHeight)
+                    CodeScrollHeader(title: topBarTitle, symbol: topBarSymbol,
+                                     leading: leadingChromeWidth > 0
+                                        ? leadingChromeWidth + gutter.width + 16 : 144,
+                                     trailing: max(trailingChromeWidth, 160),
+                                     height: topEdgeHeight)
                 }
                 .coordinateSpace(name: "editor-scroll")
-                // Constrain the bar + viewport together, not the document.
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .scrollIndicators(.visible)
                 // The vertical scroller stops below the floating chrome (tab strip
@@ -1233,73 +1270,137 @@ struct TextKit2ScrollSurface: View {
                                 for: .scrollIndicators)
                 .contentMargins(.bottom, 0,
                                 for: .scrollIndicators)
-                .onScrollGeometryChange(for: CGPoint.self) { geometry in
-                    CGPoint(
-                        x: max(geometry.contentOffset.x + geometry.contentInsets.leading, 0),
-                        y: max(geometry.contentOffset.y + geometry.contentInsets.top, 0)
-                    )
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    max(geometry.contentOffset.y + geometry.contentInsets.top, 0)
                 } action: { _, newOffset in
-                    scrollOffset = newOffset
+                    scrollOffset.y = newOffset
                 }
-                .onChange(of: searchModel.revealToken) { _, _ in
-                    guard searchModel.pendingRevealLine != nil else { return }
-                    DispatchQueue.main.async {
-                        // Minimal reveal, not centring: only scroll when the match
-                        // sits outside the visible area (with two lines of slack),
-                        // so a hit already on screen never yanks the document.
-                        let margin = effectiveLineHeight * 2
-                        let topBoundary = topEdgeHeight + margin
-                        let bottomChrome = searchModel.isVisible
-                            ? EditorChromeMetrics.quickSearchBarHeight
-                              + EditorChromeMetrics.quickSearchBarLift : 0
-                        let bottomBoundary = proxy.size.height - bottomChrome - margin
-                        if revealAnchorScreenY < topBoundary {
-                            scrollProxy.scrollTo("quick-search-reveal",
-                                                 anchor: UnitPoint(x: 0.5, y: 0.12))
-                        } else if revealAnchorScreenY > bottomBoundary {
-                            scrollProxy.scrollTo("quick-search-reveal",
-                                                 anchor: UnitPoint(x: 0.5, y: 0.88))
+                .task(id: searchModel.revealToken) {
+                    guard let hit = searchModel.highlight else { return }
+                    // Where the hit sits *right now*, in surface coordinates.
+                    // `topEdgeHeight + content - scrollOffset` is the mapping the
+                    // chrome uses; insets are already folded into `scrollOffset`.
+                    let hitTop = topEdgeHeight + topContentInset + hit.rect.minY - scrollOffset.y
+                    let hitBottom = topEdgeHeight + topContentInset + hit.rect.maxY - scrollOffset.y
+                    // Horizontal position of the same hit: the text view sits after
+                    // the leading chrome + gutter spacer, so fold that offset in and
+                    // subtract the current horizontal scroll.
+                    let hitLeft = leadingChromeWidth + gutter.width + hit.rect.minX - scrollOffset.x
+                    let hitRight = leadingChromeWidth + gutter.width + hit.rect.maxX - scrollOffset.x
+                    let visibleLeft = leadingChromeWidth + gutter.width
+                    let visibleRight = proxy.size.width - trailingChromeWidth
+                    // Already fully readable — including clear of the title band,
+                    // the pill, and both horizontal edges — so leave the viewport
+                    // alone. A search must not jerk the document for a hit the eye
+                    // can see.
+                    let verticallyVisible = hitTop >= visibleTop && hitBottom <= visibleBottom
+                    let horizontallyVisible = hitLeft >= visibleLeft && hitRight <= visibleRight
+                    guard !(verticallyVisible && horizontallyVisible) else { return }
+                    let centreY = (hitTop + hitBottom) / 2
+                    let verticalDistance = abs(centreY - (visibleTop + visibleBottom) / 2)
+                    let centreX = (hitLeft + hitRight) / 2
+                    let horizontalDistance = abs(centreX - (visibleLeft + visibleRight) / 2)
+                    let distance = max(verticalDistance, horizontalDistance)
+                    // One frame for the anchor to take its new position: a
+                    // `scrollTo` in the same tick still targets the old hit,
+                    // which is what made consecutive jumps land elsewhere.
+                    try? await Task.sleep(for: .milliseconds(16))
+                    // Near hits glide, far jumps cut: duration follows distance,
+                    // and anything past three viewports lands instantly — a
+                    // kilometre-long ease reads as lag, not as motion.
+                    if distance > proxy.size.height * 3 || distance < 1 {
+                        scrollProxy.scrollTo("quick-search-reveal", anchor: .center)
+                    } else {
+                        let duration = min(0.38, max(0.12, Double(distance) / 3200))
+                        withAnimation(.easeInOut(duration: duration)) {
+                            scrollProxy.scrollTo("quick-search-reveal", anchor: .center)
                         }
-                        // Already visible — leave the scroll alone.
                     }
                 }
                 .onChange(of: findReplace.revealToken) { _, _ in
-                    guard findReplace.pendingRevealLine != nil else { return }
+                    guard findReplace.highlight != nil else { return }
                     DispatchQueue.main.async {
                         scrollProxy.scrollTo("find-replace-reveal", anchor: .center)
                     }
                 }
                 }
+                .offset(x: scrollOffset.x)
+                .frame(width: max(proxy.size.width,
+                                  leadingChromeWidth + gutter.width + textContentWidth + trailingChromeWidth),
+                       alignment: .leading)
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .contentMargins(.leading, leadingChromeWidth + gutter.width, for: .scrollIndicators)
+                .contentMargins(.trailing, trailingChromeWidth, for: .scrollIndicators)
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    max(geometry.contentOffset.x + geometry.contentInsets.leading, 0)
+                } action: { _, newOffset in
+                    scrollOffset.x = newOffset
+                }
 
-                // One uninterrupted fixed material surface above the scrolling
-                // code. Only the numbers participate in the native progressive
-                // scroll-edge effect; the gutter background never disappears.
-                ZStack(alignment: .trailing) {
-                    EditorChromeSurface(color: gutter.backgroundColor ?? NSColor.clear,
-                                        opacity: Double(gutterBackgroundOpacity))
-                    if let separator = gutter.separatorColor {
-                        // Rectangle (not Color) guarantees a full-height 1px rule;
-                        // a bare Color.frame(width: 1) collapses to zero height and
-                        // the divider silently disappears.
-                        Rectangle().fill(Color(nsColor: separator)).frame(width: 1)
-                    }
-                }
-                .frame(width: gutter.width + leftOverhang)
-                .frame(maxHeight: .infinity)
-                .mask {
-                    if leadingChromeWidth == 0 {
-                        VStack(spacing: 0) {
-                            Color.clear.frame(height: 28)
-                            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                                .frame(height: 44)
-                            Color.black
+                // ONE surface, owned here because only this layer sits between
+                // the scrolling code and the line numbers: the sidebar band
+                // (window edge through the sheet's margin) and the line-number
+                // column are a single rectangle of one material, one tint, one
+                // opacity. No divider, no second card, no rounded inset — a
+                // second surface at a different origin is precisely what read as
+                // a seam. Its extent is decided here (leading band + gutter
+                // width); the look is resolved upstream by the sidebar context.
+                EditorChromeSurface(color: gutter.backgroundColor ?? NSColor.clear,
+                                    opacity: Double(gutterBackgroundOpacity))
+                    .frame(width: max(leadingChromeWidth + gutter.width, 1),
+                           height: proxy.size.height, alignment: .topLeading)
+                    // Folded away, the sheet no longer covers the window
+                    // buttons — they float directly over this column. Fade its
+                    // top out so the glass and the numbers dissolve before they
+                    // collide with them; opened, the sheet's own band does that
+                    // and the surface stays continuous to the window edge.
+                    .mask {
+                        if leadingChromeWidth == 0 {
+                            // The traffic-light row owns the first `titleBarBand`
+                            // points. Folded away, nothing of this column may
+                            // surface there: the glass and the numbers both stay
+                            // clear for the full band and only ramp in below it.
+                            VStack(spacing: 0) {
+                                Color.clear.frame(height: EditorChromeMetrics.titleBarBand - 4)
+                                LinearGradient(colors: [.clear, .black],
+                                               startPoint: .top, endPoint: .bottom)
+                                    .frame(height: EditorChromeMetrics.titleBarBand)
+                                Color.black
+                            }
+                        } else {
+                            // Punch the floating sheet's footprint out of the
+                            // unified band: the sheet carries its own glass tint
+                            // (`.glassEffect(.regular.tint(_:))`), so this band
+                            // must not frost the code a second time behind it — a
+                            // second frost is exactly what buried the text under
+                            // the panel. Even-odd: filled everywhere but the hole.
+                            SidebarCardHole(
+                                hole: CGRect(
+                                    x: SidebarSheetGeometry.leading,
+                                    y: SidebarSheetGeometry.top,
+                                    width: max(leadingChromeWidth - SidebarSheetGeometry.horizontalInsets, 0),
+                                    height: max(proxy.size.height - SidebarSheetGeometry.top, 0)
+                                ),
+                                cornerRadius: SidebarSheetGeometry.sheetCornerRadius
+                            )
+                            .fill(style: FillStyle(eoFill: true))
                         }
-                    } else {
-                        Color.black
                     }
+                    .allowsHitTesting(false)
+
+                // Pinned column divider: a 1px rule between the number column and
+                // code, rooted to the window (top edge through the bottom of the
+                // scrollable area) instead of scrolling with the numbers. The
+                // numbers scroll with the document; the divider is chrome and
+                // stays put while content rides beneath it.
+                if let separator = gutter.separatorColor {
+                    Rectangle()
+                        .fill(Color(nsColor: separator))
+                        .frame(width: 1, height: proxy.size.height)
+                        .offset(x: leadingChromeWidth + gutter.width - 1)
+                        .allowsHitTesting(false)
                 }
-                .offset(x: leadingChromeWidth - leftOverhang)
-                .allowsHitTesting(false)
 
                 // The numbers must sit above the material (otherwise it blurs
                 // them away everywhere), while remaining vertically locked to
@@ -1307,7 +1408,7 @@ struct TextKit2ScrollSurface: View {
                 // through soft blur to sharp text only at the titlebar edge.
                 ProgressiveGutterNumbers(attributedString: attributedString,
                                          gutter: numbersOnlyGutter,
-                                         contentHeight: renderedHeight,
+                                         contentHeight: renderedHeight + bottomOverscroll,
                                          verticalOffset: topEdgeHeight + topContentInset - scrollOffset.y,
                                          sourceLayoutManager: existingEditor?.layoutManager,
                                          foldState: foldState,
@@ -1316,15 +1417,22 @@ struct TextKit2ScrollSurface: View {
                     .offset(x: leadingChromeWidth - leftOverhang)
 
 
-                // The incremental quick-search bar (Ctrl+S) docks in the window's
-                // bottom safe-area band beside the status strip, and find & replace
-                // (⌘F / ⌘⌥F) lives in its own TextMate-style window — neither
-                // floats over the code here. The surface keeps only what it alone
-                // can do: the reveal anchors above, scrolled on every
-                // `revealToken` bump.
+                // The incremental quick-search pill is attached to *this* surface
+                // further down, so it always centres in the code column it
+                // searches. Find & replace (⌘F / ⌘⌥F) lives in its own TextMate-
+                // style window. What stays here is what only the scroll surface
+                // can do: the reveal anchor, re-scrolled on every `revealToken`.
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
             .clipped()
+            // The pill belongs to the scroll surface, not to the window: it is
+            // centred in the code column this surface actually renders, so an
+            // open sidebar or Pythia can never shift it off the text it searches.
+            .overlay(alignment: .bottom) {
+                QuickSearchDock(model: searchModel)
+                    .padding(.leading, leadingChromeWidth + gutter.width)
+                    .padding(.trailing, trailingChromeWidth)
+            }
             .animation(.easeInOut(duration: 0.18), value: searchModel.isVisible)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1367,7 +1475,9 @@ private struct ProgressiveGutterNumbers: View {
     var foldState: FoldState? = nil
     var onFoldToggle: ((FoldRegion) -> Void)? = nil
 
-    private let transitionHeight: CGFloat = 72
+    /// One title band plus a ramp: the numbers stay invisible until the
+    /// traffic-light row ends, then arrive soft and sharpen by ~76pt.
+    private let transitionHeight: CGFloat = EditorChromeMetrics.titleBarBand + 32
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -1376,7 +1486,7 @@ private struct ProgressiveGutterNumbers: View {
                 .mask {
                     VStack(spacing: 0) {
                         LinearGradient(stops: [.init(color: .clear, location: 0),
-                                               .init(color: .clear, location: 0.50),
+                                               .init(color: .clear, location: 0.58),
                                                .init(color: .black, location: 1)],
                                        startPoint: .top, endPoint: .bottom)
                             .frame(height: transitionHeight)
@@ -1393,8 +1503,8 @@ private struct ProgressiveGutterNumbers: View {
                     VStack(spacing: 0) {
                         LinearGradient(stops: [
                             .init(color: .clear, location: 0),
-                            .init(color: .clear, location: 0.40),
-                            .init(color: .black, location: 0.68),
+                            .init(color: .clear, location: 0.56),
+                            .init(color: .black, location: 0.80),
                             .init(color: .clear, location: 1),
                         ], startPoint: .top, endPoint: .bottom)
                             .frame(height: transitionHeight)

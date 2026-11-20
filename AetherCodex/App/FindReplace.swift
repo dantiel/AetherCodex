@@ -69,9 +69,14 @@ final class FindReplaceModel: ObservableObject {
     /// Display rows for the find window's list — snapshot of each match's line.
     @Published private(set) var rows: [FindResultRow] = []
 
-    /// Line to scroll into view (1-based) + monotonically-increasing token so
-    /// SwiftUI reacts even when two consecutive matches land on one line.
-    @Published var pendingRevealLine: Int? = nil
+    /// Measured position of the current match, in the adopted text view's
+    /// coordinate space. The reveal anchor scrolls to this rect; the line number
+    /// alone drifted whenever wrapping or folding broke the 1:1 line-height ratio.
+    @Published private(set) var highlight: QuickMatchHighlight? = nil
+
+    /// Monotonically-increasing jump token — the only reveal signal. The surface
+    /// scrolls to `highlight` (so two hits on one line still replay); a nil
+    /// highlight means no jump rather than a line-number estimate.
     @Published var revealToken = 0
 
     weak var textView: NSTextView?
@@ -199,7 +204,7 @@ final class FindReplaceModel: ObservableObject {
         matches = []
         rows = []
         currentIndex = 0
-        pendingRevealLine = nil
+        highlight = nil
         resultSummary = ""
     }
 
@@ -238,7 +243,7 @@ final class FindReplaceModel: ObservableObject {
         currentIndex = 0
         rebuildRows(in: ns, matches: found)
         if found.isEmpty {
-            pendingRevealLine = nil
+            highlight = nil
             resultSummary = "No results"
             return
         }
@@ -264,8 +269,10 @@ final class FindReplaceModel: ObservableObject {
         let m = matches[currentIndex]
         if let tv = textView, NSMaxRange(m.range) <= tv.string.count {
             tv.setSelectedRange(m.range)
+            highlight = tv.matchHighlight(for: m.range, line: m.line)
+        } else {
+            highlight = nil
         }
-        pendingRevealLine = m.line
         revealToken += 1
     }
 
