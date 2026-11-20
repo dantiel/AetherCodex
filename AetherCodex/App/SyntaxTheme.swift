@@ -277,7 +277,7 @@ extension SyntaxTheme {
     /// Glass tint — subtle violet for dark themes, golden for light.
     var glassTintColor: NSColor { NSColor(red: 0.45, green: 0.35, blue: 0.60, alpha: 0.25) }
     var glassTint: CGFloat { 0.70 }
-    var glassBlurStrength: CGFloat { 0.50 }
+    var glassBlurStrength: CGFloat { 0.35 }
     var sidebarGlassMaterialName: String? { nil }
 
     // ── Pythia palette (derived) ──

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// Shared chrome paint, including the exposed margin beneath the sidebar sheet.
 /// Keep it behind content so tint never washes out labels or controls.
@@ -12,7 +13,12 @@ struct EditorChromeSurface: View {
 
     var body: some View {
         let effective = opacity ?? Double(color.alphaComponent)
-        Rectangle().fill(.ultraThinMaterial)
+        // Liquid Glass, not an AppKit material: one system blur that samples the
+        // window behind it, so the band, the line-number column and the sidebar
+        // sheet all resolve to the same glass instead of three weights of frost.
+        Rectangle()
+            .fill(.clear)
+            .glassEffect(.regular, in: Rectangle())
             .overlay(Color(nsColor: color.withAlphaComponent(1)).opacity(effective))
             .allowsHitTesting(false)
     }

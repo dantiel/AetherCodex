@@ -106,6 +106,23 @@ enum SidebarSheetGeometry {
     static var resizeStripWidth: CGFloat { trailing }
 }
 
+/// Even-odd mask shape: fills the full rect, leaves a rounded hole for the
+/// floating sidebar sheet. Applied to the unified gutter/band glass so it does
+/// not frost the sheet's footprint a second time — the sheet's own material
+/// blur is the only frost there, which is what keeps scrolled code readable
+/// through the panel instead of doubly obscured.
+struct SidebarCardHole: Shape {
+    let hole: CGRect
+    let cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.addRect(rect)
+        p.addPath(Path(roundedRect: hole, cornerRadius: cornerRadius))
+        return p
+    }
+}
+
 /// The canvas and both safe-area bars share exactly these widths. Reserve a
 /// usable editor when restoring oversized preferences or narrowing the window.
 struct EditorPanelWidths {

@@ -113,7 +113,7 @@ enum ThemeLoader {
         let sideBg     = parseColor(dict["sidebarBackground"])
         let sideOp     = (dict["sidebarBackgroundOpacity"] as? Double).map { CGFloat($0) }
         let glassTintStrength = parseAlphaValue(dict["glassTint"]) ?? 0.70
-        let glassBlurStrength = parseAlphaValue(dict["glassBlurStrength"]) ?? 0.50
+        let glassBlurStrength = parseAlphaValue(dict["glassBlurStrength"]) ?? 0.35
         let sideMat    = dict["sidebarGlassMaterial"] as? String
 
         // Pythia oracle chamber palette — merge first-class `pythia:` block over
@@ -486,7 +486,7 @@ extension ThemeLoader {
             lineSpacing: 4.0,
             glassTintColor: NSColor(white: 0.5, alpha: 0.15),
             glassTint: 0.70,
-            glassBlurStrength: 0.50,
+            glassBlurStrength: 0.35,
             sidebarGlassMaterialName: nil,
             pythia: PythiaPalette.derive(
                 background: NSColor(white: 0.08, alpha: 1.0),

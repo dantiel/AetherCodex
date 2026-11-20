@@ -10,6 +10,37 @@ struct QuickMatch: Equatable {
     let line: Int
 }
 
+/// Where the current hit actually sits, in the adopted text view's coordinate
+/// space (origin top-leading, `textContainerOrigin` and inset included).
+struct QuickMatchHighlight: Equatable {
+    let rect: CGRect
+    let line: Int
+}
+
+extension NSTextView {
+    /// Where `range` actually sits, in this text view's coordinate space.
+    /// Forces layout for the hit alone: a range outside the laid-out window
+    /// otherwise answers with a rect from whatever happened to be measured,
+    /// which is what makes a reveal land at a near-random offset. Shared by
+    /// incremental search and find/replace so no reveal can drift from its hit.
+    func matchHighlight(for range: NSRange, line: Int) -> QuickMatchHighlight? {
+        guard let lm = layoutManager, let tc = lm.textContainers.first,
+              range.location != NSNotFound,
+              NSMaxRange(range) <= string.count else { return nil }
+        lm.ensureLayout(forCharacterRange: range)
+        let glyphs = lm.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphs.length > 0 else { return nil }
+        let rect = lm.boundingRect(forGlyphRange: glyphs, in: tc)
+        guard rect.height > 0 else { return nil }
+        // Text-container space + origin (leading padding, container inset) lands
+        // in text-view space — the space the SwiftUI overlay draws in.
+        return QuickMatchHighlight(
+            rect: rect.offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y),
+            line: line
+        )
+    }
+}
+
 // MARK: - Model
 
 /// Single source of truth for TextMate-style Ctrl+S incremental search.
@@ -26,9 +57,15 @@ final class QuickSearchModel: ObservableObject {
     @Published private(set) var matches: [QuickMatch] = []
     @Published private(set) var currentIndex: Int = 0
 
-    /// Line to scroll into view (1-based), plus a monotonically-increasing token
-    /// so SwiftUI can react even when two consecutive matches land on one line.
-    @Published var pendingRevealLine: Int? = nil
+    /// Geometry of the current hit, measured once per jump. The surface hangs
+    /// both the reveal anchor and the attention halo off this single rect, so a
+    /// jump can never scroll to one place and glow at another. Never computed in
+    /// a view body: the layout query is the expensive part.
+    @Published private(set) var highlight: QuickMatchHighlight? = nil
+
+    /// The only reveal signal: a monotonic jump token. The surface scrolls to
+    /// `highlight` on each bump, so two consecutive hits on one line still
+    /// replay. No measured rect means no jump — never a line-number estimate.
     @Published var revealToken: Int = 0
 
     /// True while the search TextField owns focus. Drives Ctrl+S re-focus: when
@@ -137,7 +174,7 @@ final class QuickSearchModel: ObservableObject {
         }
         matches = []
         currentIndex = 0
-        pendingRevealLine = nil
+        highlight = nil
         isFieldFocused = false
         originRange = nil
         originRanges = nil
@@ -150,14 +187,14 @@ final class QuickSearchModel: ObservableObject {
         guard let tv = textView else {
             matches = []
             currentIndex = 0
-            pendingRevealLine = nil
+            highlight = nil
             return
         }
         let string = tv.string as NSString
         guard !query.isEmpty, string.length > 0 else {
             matches = []
             currentIndex = 0
-            pendingRevealLine = nil
+            highlight = nil
             return
         }
 
@@ -167,8 +204,8 @@ final class QuickSearchModel: ObservableObject {
 
         guard !matches.isEmpty else {
             currentIndex = 0
-            pendingRevealLine = nil
-            notFoundToken += 1          // typed query, nothing in the code → shake
+            highlight = nil
+            notFoundToken += 1
             return
         }
 
@@ -204,8 +241,10 @@ final class QuickSearchModel: ObservableObject {
         let m = matches[currentIndex]
         if let tv = textView, NSMaxRange(m.range) <= tv.string.count {
             tv.setSelectedRange(m.range)
+            highlight = tv.matchHighlight(for: m.range, line: m.line)
+        } else {
+            highlight = nil
         }
-        pendingRevealLine = m.line
         revealToken += 1
     }
 
@@ -269,31 +308,12 @@ final class QuickSearchModel: ObservableObject {
            let idx = matches.firstIndex(where: { $0.range.location >= first.range.location }) {
             currentIndex = idx
         }
-        pendingRevealLine = ordered[0].line
+        // The surface owns the scroll now: a `scrollRangeToVisible` here would
+        // race the animated centring and land somewhere between the two.
+        highlight = textView?.matchHighlight(for: ordered[0].range, line: ordered[0].line)
         revealToken += 1
-        tv.scrollRangeToVisible(ordered[0].range)
     }
 
-    /// Center of the current match, in the adopted text view's coordinate space
-    /// (origin top-leading; X = 0 at the text container's leading edge). Measured
-    /// from the live layout manager so both axes are immune to line-height drift,
-    /// soft-wrap folding, and font/size overrides. Nil while the layout is not
-    /// ready — callers fall back to arithmetic estimates.
-    var currentMatchCenter: CGPoint? {
-        guard !matches.isEmpty, currentIndex < matches.count,
-              let tv = textView, let lm = tv.layoutManager,
-              let tc = lm.textContainers.first else { return nil }
-        let m = matches[currentIndex]
-        guard NSMaxRange(m.range) <= tv.string.count else { return nil }
-        if lm.numberOfGlyphs == 0 { lm.ensureLayout(for: tc) }
-        let glyphRange = lm.glyphRange(forCharacterRange: m.range, actualCharacterRange: nil)
-        guard glyphRange.length > 0 else { return nil }
-        let rect = lm.boundingRect(forGlyphRange: glyphRange, in: tc)
-        guard rect.height > 0 else { return nil }
-        // The glyph rect is in text-container space; `textContainerOrigin` adds
-        // the code-leading padding so the sum lands in text-view space.
-        return CGPoint(x: tv.textContainerOrigin.x + rect.midX, y: rect.midY)
-    }
 
     /// Scans all matches and tracks 1-based line numbers in a single pass —
     /// O(document) total, never O(document × matches).
@@ -317,6 +337,49 @@ final class QuickSearchModel: ObservableObject {
             searchRange = NSRange(location: nextLoc, length: string.length - nextLoc)
         }
         return result
+    }
+}
+
+// MARK: - Attention halo
+
+/// The halo around the current incremental-search hit.
+///
+/// Deliberately stronger than the native selection: a tinted plate, a rim and a
+/// glow the system selection cannot produce, plus a one-shot ripple. The caller
+/// hands it `.id(revealToken)`, so every jump remounts the view and the ripple
+/// replays — the eye is pulled to the new hit instead of hunting for it.
+struct QuickSearchMatchHighlight: View {
+    let rect: CGRect
+    var tint: Color = .accentColor
+
+    @State private var ripple: CGFloat = 0
+    @State private var settle: CGFloat = 0
+
+    var body: some View {
+        let plate = RoundedRectangle(cornerRadius: 3, style: .continuous)
+
+        plate
+            .fill(tint.opacity(0.32))
+            .overlay(plate.strokeBorder(tint, lineWidth: 1.5))
+            .shadow(color: tint.opacity(0.9), radius: 6)
+            .overlay {
+                plate.strokeBorder(tint, lineWidth: 2)
+                    .scaleEffect(1 + 0.6 * ripple, anchor: .center)
+                    .opacity(0.95 * (1 - ripple))
+            }
+            .frame(width: max(rect.width, 2), height: max(rect.height, 2))
+            // Attention: the plate zooms *into* its exact size and place on every
+            // jump — a spring from slightly enlarged to exact — so the eye is led
+            // to the new hit rather than left to hunt for it.
+            .scaleEffect(1 + 0.3 * (1 - settle), anchor: .center)
+            .offset(x: rect.minX, y: rect.minY)
+            .allowsHitTesting(false)
+            .onAppear {
+                ripple = 0
+                settle = 0
+                withAnimation(.easeOut(duration: 0.55)) { ripple = 1 }
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) { settle = 1 }
+            }
     }
 }
 

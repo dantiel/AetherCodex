@@ -234,6 +234,28 @@ extension SyntaxTheme {
         default: return .ultraThick
         }
     }
+
+    /// Sidebar accent tint — the per-theme `sidebarAccent` hue, as *pigment*.
+    ///
+    /// The leading pane is the *only* surface that carries it; the line-number
+    /// gutter keeps its own `rulerBackground` so the two never read as one
+    /// painted column. Strength is a pigment fraction (`paneTintStrength`), never
+    /// the theme's surface opacity — that is a paint value and would bury the
+    /// glass beneath an opaque card.
+    var sidebarAccentTintColor: Color {
+        Color(nsColor: sidebarAccent)
+            .opacity(ThemeSettings.shared.resolvedSidebarAccentTint(for: self))
+    }
+
+    /// Pythia inspector glass tint — the chamber's own ground
+    /// (`pythia.background`, declared per theme), *not* a derived complementary
+    /// hue: a rotated hue reads as a colour foreign to the theme. Same pigment
+    /// fraction as the leading sheet, so the two panes frost identically and
+    /// differ only in hue.
+    var pythiaGlassTintColor: Color {
+        Color(nsColor: pythia.background)
+            .opacity(ThemeSettings.shared.resolvedPythiaGlassTint(for: self))
+    }
 }
 
 // MARK: - Editor container (safeAreaBar host)
@@ -301,6 +323,10 @@ struct EditorContainerView: View {
             ),
             textColor: theme.rulerForeground,
             separatorColor: theme.rulerSeparator,
+            // The gutter is its own themed surface — `rulerBackground`, never the
+            // sidebar accent. The accent belongs to the sidebar panel alone; the
+            // number column draws the theme's declared ruler pigment over the
+            // shared glass so scrolled code still blurs through it.
             backgroundColor: theme.rulerBackground,
             lineHighlightColor: theme.lineHighlight,
             activeLineForeground: theme.editorForeground,
@@ -386,27 +412,17 @@ struct EditorContainerView: View {
                                        leading: widths.leading, trailing: widths.trailing,
                                        topInset: EditorChromeMetrics.chromeInset(showsTabBar: showsTabBar),
                                        showWrapColumn: displaySettings.showWrapColumn,
-                                       wrapColumn: displaySettings.wrapColumn)
+                                       wrapColumn: displaySettings.wrapColumn,
+                                       title: chrome.title)
                         .id(tab.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .ignoresSafeArea(.container, edges: [.top, .leading, .trailing])
-            // The quick-search pill floats over the code column — it never
-            // reserves a band, so the scroll surface keeps its full height and
-            // the text travels *under* the pill through the bottom edge blur.
-            // Declared before the bottom `safeAreaBar`, so the overlay is laid
-            // out inside the content region (above the status strip).
-            .overlay(alignment: .bottom) {
-                if let quickSearch = activeQuickSearch {
-                    QuickSearchDock(model: quickSearch)
-                        // Centre in the *code column*, not the full window: the
-                        // leading sidebar and trailing Pythia each own their own
-                        // band, so the pill floats over the text it searches.
-                        .padding(.leading, widths.leading)
-                        .padding(.trailing, widths.trailing)
-                }
-            }
+            // The quick-search pill lives inside the code surface itself (see
+            // `TextKit2ScrollSurface`), where the real column geometry is known:
+            // anchoring it here to window-estimated widths is what let an open
+            // sidebar drag it off the text it searches.
             .safeAreaBar(edge: .bottom, spacing: 0) {
                 // Status strip only. Declared *first* (innermost) so its band
                 // spans only the code column: the leading sidebar and trailing
@@ -427,18 +443,29 @@ struct EditorContainerView: View {
                 // Pythia closes — the bars fought over the same layout pass).
                 // Collapsing preserves state and keeps both panels independent.
                 ZStack(alignment: .trailing) {
-                    // Continue the gutter through the sheet's shadow margin.
-                    // Keep the base continuous where the status extension fades
-                    // away; the left margin must not reveal a transparent notch.
+                    // The band+gutter plane is drawn by the code surface itself,
+                    // between the scrolling text and the numbers — the only place
+                    // it can sit. So the band must NOT paint a second surface:
+                    // two materials at two origins is exactly what read as a seam.
+                    // Surfaces that stop short of the band (diff, entity, image,
+                    // HTML, rich text) still need a backdrop here.
                     ZStack(alignment: .bottom) {
-                        EditorChromeSurface(
-                            color: chrome.theme.rulerBackground,
-                            opacity: Double(ThemeSettings.shared.resolvedRulerBackgroundOpacity(for: chrome.theme))
-                        )
-                            // The code gutter already renders into this margin.
-                            // Leave its bands visible rather than painting over
-                            // them with a second material surface.
-                            .padding(.trailing, activeQuickSearch != nil ? SidebarSheetGeometry.trailing : 0)
+                        if activeQuickSearch == nil {
+                            // The leading band carries the *accent* glass tint —
+                            // the same `.regular.tint` as the sheet's own surface
+                            // below. A flat `sidebarBackground` paint here was a
+                            // second, nearly opaque surface that drowned the accent
+                            // hue (Monokai's sidebarBackground is brownish `0x715758`,
+                            // while the accent is pink `0xFB9BBE`) — the sheet's
+                            // translucent glass sampled *that*, not the editor, so
+                            // the pane read brown instead of accent. Mirroring the
+                            // trailing inspector (complementary tint, no opaque
+                            // backdrop) keeps the two panes true siblings.
+                            Rectangle()
+                                .fill(.clear)
+                                .glassEffect(.regular.tint(chrome.theme.sidebarAccentTintColor),
+                                             in: Rectangle())
+                        }
                         if chrome.statusBarVisible {
                             EditorStatusSurface(theme: chrome.theme)
                                 .frame(height: EditorChromeMetrics.statusBarHeight)
@@ -447,7 +474,7 @@ struct EditorContainerView: View {
                                 // its far-left sliver is a pointless artifact at the
                                 // window corner, so fade it out toward the leading
                                 // edge instead of painting a full-width band.
-                                .mask {
+/*                                .mask {
                                     LinearGradient(stops: [
                                         .init(color: .clear, location: 0),
                                         .init(color: .clear, location: 0.65),
@@ -455,7 +482,7 @@ struct EditorContainerView: View {
                                         .init(color: .white, location: 1)
                                     ], startPoint: .leading, endPoint: .trailing)
                                 }
-                        }
+*/                        }
                     }
                     .allowsHitTesting(false)
                     GeometryReader { bounds in
@@ -472,10 +499,25 @@ struct EditorContainerView: View {
                             // a few pixels ever blur.
                             .ignoresSafeArea(.container, edges: .bottom)
                             .frame(width: sheet.width, height: sheet.height)
+                            // The sheet is its own floating card, as it always
+                            // was. The unified band+gutter plane lives *behind*
+                            // it (drawn by the code surface, with this card's
+                            // footprint punched out via SidebarCardHole), so the
+                            // card must not frost the code a second time: it
+                            // carries one glass and one accent tint — a distinct
+                            // hue lifted off the gutter's own ruler pigment.
                             .background {
-                                Rectangle().fill(chrome.theme.sidebarMaterial)
-                                    .overlay(Color(nsColor: chrome.theme.sidebarBackground ?? chrome.theme.rulerBackground)
-                                        .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme)))
+                                // Real Liquid Glass, not an AppKit `Material`: a
+                                // material sample of the sheet's own paint read as
+                                // a flat card. The theme's sidebar accent rides the
+                                // compositor's glass as a *tint* only — the frost
+                                // beneath stays visible.
+                                Rectangle()
+                                    .fill(.clear)
+                                    .glassEffect(.regular.tint(chrome.theme.sidebarAccentTintColor),
+                                                 in: RoundedRectangle(
+                                                    cornerRadius: SidebarSheetGeometry.sheetCornerRadius,
+                                                    style: .continuous))
                             }
                             // Round all four corners: the sheet is a complete
                             // floating card on every edge, so its right side keeps
@@ -532,9 +574,9 @@ struct EditorContainerView: View {
                     // above the window's bottom edge instead of reaching it.
                     VStack(spacing: 0) {
                         Rectangle()
-                            .fill(chrome.theme.sidebarMaterial)
-                            .overlay(Color(nsColor: chrome.theme.pythia.background)
-                                .opacity(ThemeSettings.shared.resolvedSidebarBackgroundOpacity(for: chrome.theme)))
+                            .fill(.clear)
+                            .glassEffect(.regular.tint(chrome.theme.pythiaGlassTintColor),
+                                         in: Rectangle())
                         if chrome.statusBarVisible {
                             PythiaStatusBar(usage: pythiaModel.usage, theme: chrome.theme)
                         }
@@ -692,6 +734,13 @@ struct OracleFlipRoot: View {
         return EditorContainerView.makeGutter(document: tab.document, theme: chrome.theme).width
     }
 
+    private var codeOwnsTitle: Bool {
+        guard tabs.activeEntityTab == nil, tabs.activeDiffTab == nil,
+              let controller = tabs.activeTab?.controller else { return false }
+        return !controller.richDocument.active && !controller.imagePreview.isActive
+            && !controller.htmlPreview.isActive
+    }
+
     /// Title-row content for the native toolbar: the file/entity glyph + the
     /// active document's name, cleared past the sidebar + gutter while the
     /// sidebar is open so the filename never sits on the sidebar or the code
@@ -798,13 +847,8 @@ struct OracleFlipRoot: View {
                 .frame(width: proxy.size.width, height: proxy.size.height)
             }
         }
-        // The toolbar is a *structural* presence only: it is what makes the
-        // window server round the window with the modern continuous radius. It
-        // must draw absolutely nothing — no bar material, no per-item glass
-        // capsule — so the editor's own glass and the top scroll-edge blur read
-        // through it. `toolbarBackgroundVisibility` hides the bar's material;
-        // `sharedBackgroundVisibility` (macOS 26) removes the capsule macOS puts
-        // behind each item.
+        // The native toolbar owns its controls and scrolling backdrop. Hide
+        // only the per-item capsules, not the system's effect-bearing layers.
         .toolbar {
             if chrome.oracleOnly {
                 ToolbarItem(placement: .navigation) {
@@ -844,7 +888,7 @@ struct OracleFlipRoot: View {
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .navigation) {
-                    toolbarTitle
+                    if !codeOwnsTitle { toolbarTitle }
                 }
                 .sharedBackgroundVisibility(.hidden)
                 ToolbarItem(placement: .primaryAction) {
@@ -860,6 +904,8 @@ struct OracleFlipRoot: View {
                 .sharedBackgroundVisibility(.hidden)
             }
         }
+        // Per-pane safe-area bars own the progressive effect. Suppress only
+        // the native toolbar fill through SwiftUI, never its private layers.
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         // The toolbar is chrome the *window server* owns; the editor draws its
         // own bands in window coordinates. Without ignoring the toolbar's safe
@@ -921,10 +967,11 @@ private struct EditorModeSurface: View {
     var topInset: CGFloat
     var showWrapColumn: Bool
     var wrapColumn: Int
+    var title: String
 
     init(editor: EditorViewController, theme: SyntaxTheme, document: EditorDocumentModel,
           leading: CGFloat = 0, trailing: CGFloat = 0, topInset: CGFloat = 0,
-          showWrapColumn: Bool = false, wrapColumn: Int = 80) {
+          showWrapColumn: Bool = false, wrapColumn: Int = 80, title: String = "Untitled") {
         self.editor = editor
         self.theme = theme
         self.document = document
@@ -936,6 +983,7 @@ private struct EditorModeSurface: View {
         self.topInset = topInset
         self.showWrapColumn = showWrapColumn
         self.wrapColumn = wrapColumn
+        self.title = title
     }
 
     var body: some View {
@@ -949,7 +997,12 @@ private struct EditorModeSurface: View {
             RichTextSurface(document: rich, theme: theme, sidebarClosed: leading == 0, topInset: topInset)
                 .padding(.leading, leading).padding(.trailing, trailing)
         } else {
-            TextKit2ScrollSurface(attributedString: document.attributedString,
+            codeSurface
+        }
+    }
+
+    private var codeSurface: some View {
+        var surface = TextKit2ScrollSurface(attributedString: document.attributedString,
                                    backgroundColor: theme.editorBackgroundColor,
                                    gutter: EditorContainerView.makeGutter(document: document, theme: theme),
                                    leadingChromeWidth: leading, trailingChromeWidth: trailing,
@@ -961,7 +1014,9 @@ private struct EditorModeSurface: View {
                                    showWrapColumn: showWrapColumn,
                                    wrapColumn: wrapColumn,
                                    lineCount: document.lineCount, maxLineWidth: document.maxLineWidth)
-        }
+        surface.topBarTitle = title
+        surface.topBarSymbol = FileIcon.symbol(for: editor.currentFile)
+        return surface
     }
 }
 

@@ -219,10 +219,20 @@ final class ThemeSettings {
         }
     }
 
-    /// Resolved editor background opacity (override → theme default). 0.0 = fully transparent, 1.0 = opaque.
+    /// Translucency ceiling for theme-declared surfaces.
+    ///
+    /// The themes were authored against an opaque editor: they declare paint
+    /// opacities of 0.76–0.87, which sit as a slab in front of the compositor's
+    /// glass — Liquid Glass then reads as flat paint instead of depth. A declared
+    /// paint is therefore capped at this ceiling: open enough for the blur to
+    /// breathe through, dense enough for text to stay legible. A user override is
+    /// honoured verbatim; the cap belongs to the *defaults*, not to the hand.
+    static let glassOpacityCeiling: CGFloat = 0.45
+
+    /// Resolved editor background opacity (override → capped theme default). 0.0 = fully transparent, 1.0 = opaque.
     func resolvedEditorBackgroundOpacity(for theme: SyntaxTheme) -> CGFloat {
         if let v = editorBackgroundOpacityOverride { return CGFloat(v) }
-        return theme.editorBackgroundOpacity
+        return min(theme.editorBackgroundOpacity, Self.glassOpacityCeiling)
     }
 
     // ── Sidebar Background Transparency ──
@@ -240,10 +250,40 @@ final class ThemeSettings {
         }
     }
 
-    /// Resolved sidebar background opacity (override → theme default → editor default).
+    /// Resolved sidebar background opacity (override → capped theme default → editor default).
     func resolvedSidebarBackgroundOpacity(for theme: SyntaxTheme) -> CGFloat {
         if let v = sidebarBackgroundOpacityOverride { return CGFloat(v) }
-        return theme.sidebarBackgroundOpacity ?? resolvedEditorBackgroundOpacity(for: theme)
+        guard let declared = theme.sidebarBackgroundOpacity else {
+            return resolvedEditorBackgroundOpacity(for: theme)
+        }
+        return min(declared, Self.glassOpacityCeiling)
+    }
+
+    /// Pigment fraction shared by both window panes.
+    ///
+    /// A pane's tint is never the theme's paint opacity: 0.87 is a *surface*, and
+    /// used as a tint it buries the glass beneath an opaque card. Both panes take
+    /// the same fraction of the theme's declared sidebar surface, so they frost
+    /// identically and differ only in hue — the sidebar accent on the leading
+    /// side, the chamber's own ground on the trailing side.
+    func paneTintStrength(for theme: SyntaxTheme) -> CGFloat {
+        let paint = theme.sidebarBackgroundOpacity
+            ?? resolvedSidebarBackgroundOpacity(for: theme)
+        return 0.30 * min(paint, 1)
+    }
+
+    /// Strength of the leading pane's `sidebarAccent` glass tint — the hue laid
+    /// over the pane's own glass. Deliberately *not* the global `glassTint`: that
+    /// knob belongs to the editor surface and can be dialled to zero, which erased
+    /// the accent hue and left both panes reading as one colourless glass.
+    func resolvedSidebarAccentTint(for theme: SyntaxTheme) -> CGFloat {
+        paneTintStrength(for: theme)
+    }
+
+    /// Strength of the trailing pane's chamber tint — the theme's declared
+    /// `pythia.background` laid over the same glass, at the same fraction.
+    func resolvedPythiaGlassTint(for theme: SyntaxTheme) -> CGFloat {
+        paneTintStrength(for: theme)
     }
 
     // ── Sidebar Glass Blur Strength ──
