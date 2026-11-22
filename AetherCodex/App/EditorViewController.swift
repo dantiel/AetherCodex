@@ -211,6 +211,11 @@ class EditorViewController: NSViewController {
     /// full attributed-string copy + layout on each keystroke.
     var onDocumentMetricsChange: ((Int, Int) -> Void)?
 
+    /// Set by `TabsModel` — publishes the resolved soft-wrap state so the
+    /// SwiftUI surface re-solves its geometry (container width, wrapped extent,
+    /// horizontal scroller) the moment View → Soft Wrap flips.
+    var onWordWrapChange: ((Bool) -> Void)?
+
     // MARK: - Hermetic Text Pipeline
 
     private var layoutManager: HighlightingLayoutManager?
@@ -959,6 +964,10 @@ class EditorViewController: NSViewController {
     /// at editor width. When OFF, horizontal scroll is enabled.
     func applyWordWrap() {
         let wrap = effectiveWordWrap
+        // Publish first: the SwiftUI surface owns the geometry, and it has no
+        // enclosing scroll view to configure (adopt() detaches the editor from
+        // the legacy NSScrollView). Everything below is the legacy AppKit path.
+        onWordWrapChange?(wrap)
         guard let tv = textView, let tc = tv.textContainer,
               let clipView = tv.enclosingScrollView?.contentView else { return }
         let oldWidth = tc.containerSize.width

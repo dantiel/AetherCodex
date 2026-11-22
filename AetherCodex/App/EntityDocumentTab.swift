@@ -48,8 +48,27 @@ extension Notification.Name {
 /// the tab remains a working surface — one may switch tasks/seals without leaving.
 struct EntityTabSurface: View {
     @ObservedObject var tab: EntityDocumentTab
+    /// Chrome height above the surface (the editor tab strip).
+    var topInset: CGFloat = 0
 
     var body: some View {
+        content
+            // The reused panels own plain `ScrollView`s and are mounted in the
+            // sidebar as well, so the bar is declared *here* rather than in them:
+            // an ancestor bar hands the inset down, the panels keep their own
+            // scrolling, and their content frosts beneath the same chrome the
+            // code surface uses — one bar, one edge effect, no per-panel copy.
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .scrollEdgeEffectHidden(false, for: .top)
+            .safeAreaBar(edge: .top, spacing: 0) {
+                CodeScrollEdgeBar(
+                    height: EditorChromeMetrics.scrollEdgeBarHeight(topInset: topInset)
+                )
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch tab.kind {
         case .opusTask(let id):
             // A task tab shows *only* that task — not the full sidebar panel with

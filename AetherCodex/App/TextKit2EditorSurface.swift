@@ -17,6 +17,10 @@ final class EditorDocumentModel: ObservableObject {
     /// keystroke never forces a full-document copy, split, or layout.
     @Published var lineCount: Int = 1
     @Published var maxLineWidth: Int = 0
+    /// Resolved soft-wrap state of the active editor. Published because the
+    /// surface geometry (container width, wrapped extent, horizontal scroller)
+    /// must re-solve in the same pass the View → Soft Wrap toggle flips.
+    @Published var wordWrap: Bool = false
 }
 
 // MARK: - Gutter style
@@ -31,6 +35,9 @@ struct EditorGutterStyle {
     /// line numbers with the selection background instead of the caret band.
     var selectedLineRange: ClosedRange<Int>? = nil
     var width: CGFloat = 0
+    /// When false the column keeps its width (folds, annotations, caret band)
+    /// but draws no digits — hiding numbers must not collapse the marker lane.
+    var showsNumbers: Bool = true
     var font: NSFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
     /// Height of one *code* line — the gutter highlight must never be shorter
     /// than this (and line origins are derived from it so numbers stay locked
@@ -68,6 +75,11 @@ extension EditorGutterStyle {
     /// right-aligned against the fold gutter, so widening this only grows the
     /// column's left side — the numbers never kiss the sidebar edge.
     static let numberLeftPadding: CGFloat = 12
+
+    /// Width of the column when line numbers are hidden. Keeps the fold lane
+    /// (14) plus the number gap (12) alive so fold triangles and future
+    /// annotation markers still have a column to live in.
+    static let markerColumnWidth: CGFloat = 26
 
     /// Resolve the gutter face for a code font. Tracks the per-filetype
     /// `.aether-properties` font size (`SyntaxOracle.shared.baseFont`) so the
@@ -116,6 +128,12 @@ enum TextKit2Layout {
     /// no layout cost and keeps vertical extent + horizontal scroll sane.
     static let largeFileLineThreshold = 20_000
 
+    /// Above this many lines the wrapped extent uses the arithmetic upper bound
+    /// instead of a full TextKit 2 layout: a keystroke in a wrapped document
+    /// re-measures the file, so the exact path is reserved for the sizes where
+    /// laying out costs less than a frame.
+    static let wrapLayoutLineThreshold = 2_000
+
     static func measure(_ attributedString: NSAttributedString,
                         containerWidth: CGFloat,
                         lineHeight: CGFloat = 17) -> CGSize {
@@ -151,6 +169,70 @@ enum TextKit2Layout {
             return true
         }
         return union.size
+    }
+
+    /// Wrapped document height for the soft-wrap surface.
+    ///
+    /// The surface body runs on every scroll tick, so laying the document out
+    /// there would reflow the whole file per frame. The result is memoised on
+    /// (storage identity, revision, width, pitch): scrolling is a cache hit, and
+    /// only a real edit — which bumps the revision — pays for one layout.
+    private static var wrappedHeightCache:
+        (id: ObjectIdentifier, revision: Int, width: CGFloat, lineHeight: CGFloat, height: CGFloat)?
+
+    static func wrappedHeight(_ attributedString: NSAttributedString,
+                              containerWidth: CGFloat,
+                              lineHeight: CGFloat,
+                              revision: Int) -> CGFloat {
+        guard containerWidth > 0 else { return 0 }
+        let id = ObjectIdentifier(attributedString)
+        if let cached = wrappedHeightCache,
+           cached.id == id, cached.revision == revision,
+           abs(cached.width - containerWidth) < 0.5,
+           abs(cached.lineHeight - lineHeight) < 0.5 {
+            return cached.height
+        }
+        let text = attributedString.string as NSString
+        let height: CGFloat
+        if lineCount(text) > wrapLayoutLineThreshold {
+            height = estimateWrappedHeight(text, containerWidth: containerWidth,
+                                           lineHeight: lineHeight,
+                                           attributedString: attributedString)
+        } else {
+            height = measure(attributedString, containerWidth: containerWidth,
+                             lineHeight: lineHeight).height
+        }
+        wrappedHeightCache = (id, revision, containerWidth, lineHeight, height)
+        return height
+    }
+
+    /// Upper bound for a very large wrapped document: character wrapping never
+    /// needs fewer rows than word wrapping, so the arithmetic bound can only
+    /// over-reserve. Over-reserving costs empty scroll room; under-reserving
+    /// would clip the tail of the file. No layout, no copy.
+    private static func estimateWrappedHeight(_ text: NSString,
+                                              containerWidth: CGFloat,
+                                              lineHeight: CGFloat,
+                                              attributedString: NSAttributedString) -> CGFloat {
+        var charWidth = max(lineHeight * 0.6, 1)
+        if text.length > 0,
+           let font = attributedString.attribute(.font, at: 0, effectiveRange: nil) as? NSFont {
+            let advance = ("0" as NSString).size(withAttributes: [.font: font]).width
+            if advance > 0 { charWidth = advance }
+        }
+        let perRow = max(Int(containerWidth / charWidth), 1)
+        var rows = 0
+        var lineStart = 0
+        var i = 0
+        while i <= text.length {
+            if i == text.length || text.character(at: i) == 0x0A {
+                let length = i - lineStart
+                rows += max(1, (length + perRow - 1) / perRow)
+                lineStart = i + 1
+            }
+            i += 1
+        }
+        return CGFloat(max(rows, 1)) * lineHeight
     }
 
     /// Linear-time measurement: count lines for height, scan for the widest line
@@ -288,8 +370,12 @@ final class TextKit2EditorView: NSView {
         editor.isEditable = true
         editor.allowsUndo = true
         textContainer.widthTracksTextView = false
+        // A different editor brings its own container: forget the memo so the
+        // wrap width is applied to *this* container on the next geometry pass.
+        appliedContainerWidth = .nan
         addSubview(editor)
         needsLayout = true
+        applyContainerGeometry()
     }
 
     deinit {
@@ -300,15 +386,50 @@ final class TextKit2EditorView: NSView {
         textView?.removeFromSuperview()
     }
 
+    /// Container width for soft wrap; `0` means "no wrap, scroll horizontally".
+    /// The surface measures the wrapped extent with this same width, so the text
+    /// view and the scroll content can never disagree about where a line breaks.
+    var wrapWidth: CGFloat = 0 {
+        didSet {
+            guard abs(oldValue - wrapWidth) > 0.5 else { return }
+            needsLayout = true
+            applyContainerGeometry()
+        }
+    }
+
     override func layout() {
         super.layout()
         textView.frame = bounds
+        applyContainerGeometry()
+    }
 
-        // Update textContainer size to match view
-        textContainer.containerSize = NSSize(
-            width: CGFloat.greatestFiniteMagnitude,
-            height: CGFloat.greatestFiniteMagnitude
-        )
+    /// One place where the container width is decided. Wrapped: the container is
+    /// pinned to the view width (minus the horizontal text inset on both sides),
+    /// so glyphs reflow instead of overflowing. Unwrapped: infinite width and the
+    /// text view grows past the viewport for horizontal scrolling.
+    ///
+    /// The width is memoised because `NSTextContainer.size` invalidates the whole
+    /// layout on every write — assigning the same value from `layout()` would
+    /// reflow the document on each geometry pass.
+    private var appliedContainerWidth: CGFloat = .nan
+
+    private func applyContainerGeometry() {
+        guard let tv = textView, let tc = textContainer else { return }
+        if wrapWidth > 0 {
+            let width = max(wrapWidth - 2 * EditorChromeMetrics.codeLeadingPadding, 1)
+            tv.isHorizontallyResizable = false
+            tc.widthTracksTextView = false
+            guard appliedContainerWidth.isNaN || abs(appliedContainerWidth - width) > 0.5 else { return }
+            appliedContainerWidth = width
+            tc.containerSize = NSSize(width: width,
+                                      height: CGFloat.greatestFiniteMagnitude)
+        } else {
+            tv.isHorizontallyResizable = true
+            guard appliedContainerWidth != .greatestFiniteMagnitude else { return }
+            appliedContainerWidth = .greatestFiniteMagnitude
+            tc.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                      height: CGFloat.greatestFiniteMagnitude)
+        }
     }
 
     /// Make textView first responder when clicked
@@ -771,7 +892,11 @@ final class GutterRenderView: NSView {
                 // stays the dim ruler color — it is a marker, not a line number.
                 numberAttributes[.foregroundColor] = gutter.textColor
             }
-            text.draw(at: NSPoint(x: x, y: y), withAttributes: numberAttributes)
+            // Hidden numbers keep the column (and its bands) but draw no glyphs:
+            // the lane stays reserved for folds and future annotation markers.
+            if gutter.showsNumbers {
+                text.draw(at: NSPoint(x: x, y: y), withAttributes: numberAttributes)
+            }
         }
 
         // ── Pass 3: fold toggles ──
@@ -878,30 +1003,32 @@ struct TextKit2EditorRepresentable: NSViewRepresentable {
     let attributedString: NSAttributedString
     let sharedTextStorage: NSTextStorage?
     var existingEditor: NSTextView? = nil
+    /// Soft-wrap container width; `0` keeps the unwrapped horizontal-scroll mode.
+    var wrapWidth: CGFloat = 0
 
     func makeNSView(context: Context) -> TextKit2EditorView {
         let view = TextKit2EditorView(frame: .zero)
         if let existingEditor {
             view.adopt(existingEditor)
+            view.wrapWidth = wrapWidth
             return view
         }
         view.sharedTextStorage = sharedTextStorage
-        // Initial render
-        if sharedTextStorage == nil {
-            // Fallback: render without shared storage
-        }
+        view.wrapWidth = wrapWidth
         return view
     }
 
     func updateNSView(_ nsView: TextKit2EditorView, context: Context) {
         if let existingEditor {
             nsView.adopt(existingEditor)
-            return
-        }
-        // Sync textStorage if provided
-        if let storage = sharedTextStorage {
+        } else if let storage = sharedTextStorage {
+            // Sync textStorage if provided
             nsView.sharedTextStorage = storage
         }
+        // Adopt() resets the editor to horizontal-resizable; the wrap width is
+        // applied *after* it so the container always ends up at the surface's
+        // measured width.
+        nsView.wrapWidth = wrapWidth
     }
 
     /// Coordinator to handle first responder
@@ -997,6 +1124,12 @@ struct TextKit2ScrollSurface: View {
     /// or scroll frame is O(1) instead of O(document).
     let lineCount: Int
     let maxLineWidth: Int
+    /// Soft wrap: the container is pinned to the viewport so glyphs reflow.
+    /// When false the surface keeps its horizontal-scroll geometry untouched.
+    let wordWrap: Bool
+    /// Document revision — keys the wrapped-height memo so scrolling never
+    /// re-lays out the file.
+    let revision: Int
 
     @State private var scrollOffset: CGPoint = .zero
     @State private var activeLine = 1
@@ -1018,7 +1151,9 @@ struct TextKit2ScrollSurface: View {
          showWrapColumn: Bool = false,
          wrapColumn: Int = 80,
          lineCount: Int = 1,
-         maxLineWidth: Int = 0) {
+         maxLineWidth: Int = 0,
+         wordWrap: Bool = false,
+         revision: Int = 0) {
         self.attributedString = attributedString
         self.backgroundColor = backgroundColor
         self.gutter = gutter
@@ -1036,6 +1171,40 @@ struct TextKit2ScrollSurface: View {
         self.wrapColumn = wrapColumn
         self.lineCount = lineCount
         self.maxLineWidth = maxLineWidth
+        self.wordWrap = wordWrap
+        self.revision = revision
+    }
+
+    /// Shared fade for the leading column — the unified band *and* every layer
+    /// that lives on it. Folded away (no sidebar), nothing of the column may
+    /// surface through the traffic-light row, so glass, tint and rule all ramp
+    /// in below `titleBarBand`; opened, the floating sheet's footprint is
+    /// punched out because the sheet carries its own glass and pigment.
+    /// Any layer that skips this mask keeps full strength exactly where its
+    /// background has already dissolved — that is what a stray gutter divider
+    /// looks like against a faded band.
+    @ViewBuilder
+    private func leadingColumnFade(height: CGFloat) -> some View {
+        if leadingChromeWidth == 0 {
+            VStack(spacing: 0) {
+                Color.clear.frame(height: EditorChromeMetrics.titleBarBand - 4)
+                LinearGradient(colors: [.clear, .black],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: EditorChromeMetrics.titleBarBand)
+                Color.black
+            }
+        } else {
+            SidebarCardHole(
+                hole: CGRect(
+                    x: SidebarSheetGeometry.leading,
+                    y: SidebarSheetGeometry.top,
+                    width: max(leadingChromeWidth - SidebarSheetGeometry.horizontalInsets, 0),
+                    height: max(height - SidebarSheetGeometry.top, 0)
+                ),
+                cornerRadius: SidebarSheetGeometry.sheetCornerRadius
+            )
+            .fill(style: FillStyle(eoFill: true))
+        }
     }
 
     /// Advance width of the document's monospaced face (the code editor uses one
@@ -1082,8 +1251,20 @@ struct TextKit2ScrollSurface: View {
             let charWidth = Self.monospaceAdvance(for: attributedString,
                                                   fallbackLineHeight: gutter.lineHeight)
             let docWidth = CGFloat(max(maxLineWidth, 1)) * charWidth
-            let docHeight = CGFloat(max(lineCount, 1)) * effectiveLineHeight
-            let textContentWidth = max(docWidth + 24, viewportTextWidth)
+            // Soft wrap reflows inside the viewport, so the document is exactly
+            // as wide as the column and only its *height* can grow. The wrapped
+            // extent is measured at the same container width the text view uses
+            // (frame minus the horizontal container inset on both sides).
+            let wrapContainerWidth = max(viewportTextWidth - 2 * EditorChromeMetrics.codeLeadingPadding, 1)
+            let docHeight = wordWrap
+                ? TextKit2Layout.wrappedHeight(attributedString,
+                                               containerWidth: wrapContainerWidth,
+                                               lineHeight: effectiveLineHeight,
+                                               revision: revision)
+                : CGFloat(max(lineCount, 1)) * effectiveLineHeight
+            let textContentWidth = wordWrap
+                ? viewportTextWidth
+                : max(docWidth + 24, viewportTextWidth)
             let renderedHeight = max(docHeight, proxy.size.height - topContentInset - topEdgeHeight - bottomEdgeHeight)
             // TextMate-style "scroll past end": reserve enough trailing room
             // that the final line can ride up to just *under* the top safe-area
@@ -1173,7 +1354,10 @@ struct TextKit2ScrollSurface: View {
 
                         ZStack(alignment: .topLeading) {
                             if let storage = sharedTextStorage {
-                                TextKit2EditorRepresentable(attributedString: attributedString, sharedTextStorage: storage, existingEditor: existingEditor)
+                                TextKit2EditorRepresentable(attributedString: attributedString,
+                                                           sharedTextStorage: storage,
+                                                           existingEditor: existingEditor,
+                                                           wrapWidth: wordWrap ? textContentWidth : 0)
                                     .frame(width: textContentWidth, height: renderedHeight)
                             } else {
                                 TextKit2RenderRepresentable(attributedString: attributedString)
@@ -1339,39 +1523,7 @@ struct TextKit2ScrollSurface: View {
                     // top out so the glass and the numbers dissolve before they
                     // collide with them; opened, the sheet's own band does that
                     // and the surface stays continuous to the window edge.
-                    .mask {
-                        if leadingChromeWidth == 0 {
-                            // The traffic-light row owns the first `titleBarBand`
-                            // points. Folded away, nothing of this column may
-                            // surface there: the glass and the numbers both stay
-                            // clear for the full band and only ramp in below it.
-                            VStack(spacing: 0) {
-                                Color.clear.frame(height: EditorChromeMetrics.titleBarBand - 4)
-                                LinearGradient(colors: [.clear, .black],
-                                               startPoint: .top, endPoint: .bottom)
-                                    .frame(height: EditorChromeMetrics.titleBarBand)
-                                Color.black
-                            }
-                        } else {
-                            // Punch the floating sheet's footprint out of the
-                            // unified band: the sheet carries its own glass and
-                            // its own accent pigment (`.pigmentedGlass`), so this
-                            // band
-                            // must not frost the code a second time behind it — a
-                            // second frost is exactly what buried the text under
-                            // the panel. Even-odd: filled everywhere but the hole.
-                            SidebarCardHole(
-                                hole: CGRect(
-                                    x: SidebarSheetGeometry.leading,
-                                    y: SidebarSheetGeometry.top,
-                                    width: max(leadingChromeWidth - SidebarSheetGeometry.horizontalInsets, 0),
-                                    height: max(proxy.size.height - SidebarSheetGeometry.top, 0)
-                                ),
-                                cornerRadius: SidebarSheetGeometry.sheetCornerRadius
-                            )
-                            .fill(style: FillStyle(eoFill: true))
-                        }
-                    }
+                    .mask { leadingColumnFade(height: proxy.size.height) }
                     .allowsHitTesting(false)
 
                 // Pinned column divider: a 1px rule between the number column and
@@ -1379,10 +1531,14 @@ struct TextKit2ScrollSurface: View {
                 // scrollable area) instead of scrolling with the numbers. The
                 // numbers scroll with the document; the divider is chrome and
                 // stays put while content rides beneath it.
+                // It rides the same fade as the band it divides: a rule that
+                // keeps full strength through the traffic-light row would hang
+                // in the air once its background has dissolved.
                 if let separator = gutter.separatorColor {
                     Rectangle()
                         .fill(Color(nsColor: separator))
                         .frame(width: 1, height: proxy.size.height)
+                        .mask { leadingColumnFade(height: proxy.size.height) }
                         .offset(x: leadingChromeWidth + gutter.width - 1)
                         .allowsHitTesting(false)
                 }

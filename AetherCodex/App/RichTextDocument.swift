@@ -406,84 +406,120 @@ final class RichTextDocument: NSObject, ObservableObject, NSTextViewDelegate {
 struct RichTextSurface: View {
     @ObservedObject var document: RichTextDocument
     let theme: SyntaxTheme
-    /// Whether the file-browser sidebar is closed — when true, the ruler is the
-    /// leftmost surface and fades in under the transparent titlebar, matching
-    /// the code editor's gutter.
-    var sidebarClosed: Bool = false
+    /// Sidebar band width. The surface spans the window (the band behind the
+    /// floating sheet is part of its leading column) instead of being inset.
+    var leading: CGFloat = 0
+    var trailing: CGFloat = 0
     /// Extra chrome height above the surface (the editor tab strip) that pushes
     /// the controls bar and scroll content down when the tab bar is visible.
     var topInset: CGFloat = 0
     /// Active paragraph level for the segmented style control (Body/H1–H3).
     @State private var paragraphLevel = 0
 
-    /// Real scroll-content breathing room below the floating controls bar.
-    /// It scrolls away with the text (like the source surface), so the native
-    /// `.scrollEdgeEffectStyle` from `EditorContainerView` progressively blurs
-    /// the document as it travels beneath the transparent top bar.
-    private var topContentInset: CGFloat { 96 + topInset }
+    /// Real scroll-content breathing room below the controls bar. It scrolls
+    /// away with the text (like the source surface), so the doc breathes but
+    /// never reserves chrome. The bar itself is a `safeAreaBar` now — that is
+    /// what gives the scroll a top edge for the native progressive blur.
+    private var topContentInset: CGFloat { EditorChromeMetrics.baseContentInset }
 
-    /// Fixed leading margin strip (the "side ruler") flush against the left
-    /// sidebar. Mirrors the line-number gutter's glass surface and colors,
-    /// minus the numbers.
-    /// Leading "measurement" ruler column width, shared so the titlebar can
-    /// indent the title past it exactly like the code gutter and diff columns.
+    /// Fixed leading margin strip (the "side ruler"). It is the code gutter's
+    /// column — same glass, same pigment, same fade, same divider — carrying
+    /// measure ticks instead of numbers.
     static let rulerColumnWidth: CGFloat = 28
-    private let rulerWidth: CGFloat = 28
+
+    /// Nominal height of the transparent controls row docked in the top bar
+    /// (8pt vertical padding around the small controls, plus the measure
+    /// canvas). Only used to size the scroll content — the row itself sizes
+    /// naturally inside the bar.
+    static let controlsBarHeight: CGFloat = 50
 
     var body: some View {
         GeometryReader { proxy in
-            let viewportTextWidth = max(proxy.size.width - rulerWidth, 1)
+            let column = Self.rulerColumnWidth
+            let viewportTextWidth = max(proxy.size.width - leading - column - trailing, 1)
             let measured = document.contentHeight(forWidth: viewportTextWidth)
-            let renderedHeight = max(measured, proxy.size.height - topContentInset)
+            // The scroll view's top safe-area bar owns the whole chrome stack:
+            // title band + tab strip + this surface's controls row. Content is
+            // inset by exactly that, so the first line starts under the row and
+            // the doc travels beneath it into the edge effect.
+            let topEdgeHeight = EditorChromeMetrics.scrollEdgeBarHeight(topInset: topInset)
+            let renderedHeight = max(measured, proxy.size.height - topEdgeHeight - Self.controlsBarHeight)
             let baseFont = MarkdownRichCodec.font(level: 0)
             let lineHeight = baseFont.ascender - baseFont.descender + baseFont.leading + 2
             let textTopInset = document.textView.textContainerInset.height
 
             ZStack(alignment: .topLeading) {
+                // The paper starts where the text starts. Stretched across the
+                // window it lay *under* the ruler column's glass, so the sidebar
+                // band read as a second sheet instead of as the tail of the same
+                // column the code surface draws.
                 (document.markdown ? theme.editorBackgroundColor : Color(nsColor: document.paperColor))
+                    .frame(width: max(proxy.size.width - leading - column, 1),
+                           height: proxy.size.height)
+                    .offset(x: leading + column)
 
-                // Fixed gutter surface — pinned BEHIND the scroll content. It never
-                // scrolls, so it must never blur; only the measure ticks (which sit
-                // above it inside the scroll) participate in the top scroll-edge blur.
-                RichTextRulerBackground(theme: theme, width: rulerWidth, sidebarClosed: sidebarClosed)
-                    .frame(width: rulerWidth, height: proxy.size.height,
-                           alignment: .topLeading)
-                    .allowsHitTesting(false)
+                // ONE leading column: sidebar band + measure column, the code
+                // surface's own recipe. Pinned BEHIND the scroll content, so it
+                // never scrolls and must never blur; only the ticks, which live
+                // inside the scroll, participate in the top edge effect.
+                LeadingChromeColumn(
+                    leading: leading,
+                    width: column,
+                    height: proxy.size.height,
+                    color: theme.rulerBackground,
+                    opacity: Double(ThemeSettings.shared.resolvedRulerBackgroundOpacity(for: theme)),
+                    separator: theme.rulerSeparator
+                ) { EmptyView() }
 
                 // SwiftUI owns the scroll — no AppKit NSScrollView. The measure ticks
                 // live inside the scroll content beside the text, so they travel *with*
                 // it (one frame of reference) and blur under the top bar together,
-                // while the fixed gutter surface behind them stays crisp.
+                // while the fixed column behind them stays crisp.
                 ScrollView(.vertical, showsIndicators: true) {
                     HStack(alignment: .top, spacing: 0) {
-                        RichTextRuler(theme: theme, width: rulerWidth,
+                        RichTextRuler(theme: theme, width: column,
                                       height: renderedHeight,
                                       lineHeight: lineHeight, topInset: textTopInset)
+                            .padding(.leading, leading)
                         RichTextEditorRepresentable(document: document, width: viewportTextWidth)
                             .frame(width: viewportTextWidth, height: renderedHeight)
+                        Color.clear.frame(width: trailing)
                     }
                     .padding(.top, topContentInset)
                     .frame(minHeight: proxy.size.height, alignment: .topLeading)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .scrollIndicators(.visible)
-                // Stop the vertical scroller below the floating chrome (tab strip
-                // when visible, title row otherwise), mirroring the code surface.
-                .contentMargins(.top, EditorChromeMetrics.scrollIndicatorTopInset(showsTabBar: topInset > 0),
-                                for: .scrollIndicators)
+                // The local safe-area bar already reserves title band, tab strip
+                // and the controls row — don't apply that height a second time.
+                .contentMargins(.top, 0, for: .scrollIndicators)
+                .contentMargins(.leading, leading + column, for: .scrollIndicators)
+                .contentMargins(.trailing, trailing, for: .scrollIndicators)
+                // The code surface's recipe: the edge effect frosts only the
+                // scroll content (paper, text, ruler ticks) as it passes beneath
+                // the bar — the fixed column and the sheet never blur.
                 .scrollEdgeEffectStyle(.soft, for: .top)
+                .scrollEdgeEffectHidden(false, for: .top)
+                .safeAreaBar(edge: .top, spacing: 0) {
+                    topBar(topEdgeHeight: topEdgeHeight)
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
-        .overlay(alignment: .top) {
-            // The controls bar must never impose its natural minimum width on the
-            // editor column: when the pane is narrower than the full toolbar, the
-            // `ViewThatFits` fallback scrolls it instead of widening the surface.
-            // `.clipped()` keeps any overflow (wide toolbar in a narrow pane) from
-            // spilling outside the editor column and breaking the HStack layout.
+    }
+
+    /// Title band + tab strip + controls row as ONE bar, so the progressive
+    /// blur ramps across the whole chrome stack instead of stopping at the
+    /// controls. Same shape as the diff's command bar.
+    private func topBar(topEdgeHeight: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            CodeScrollEdgeBar(height: topEdgeHeight)
+            // The controls row must never impose its natural minimum width on the
+            // editor column: its leading group is a horizontal `ScrollView`, so a
+            // narrow pane scrolls the controls instead of widening the surface.
             chrome
-                .padding(.top, 40 + topInset)
-                .clipped()
+                .padding(.leading, leading)
+                .padding(.trailing, trailing)
         }
     }
 
@@ -839,49 +875,6 @@ private struct RichTextRuler: View {
                 y += step
                 line += 1
             }
-        }
-    }
-}
-
-/// The *fixed* part of the ruler: the line-number gutter surface and separator,
-/// pinned outside the scroll content at the leading edge. It is static by design,
-/// so it must stay crisp — never scrolled, never progressively blurred.
-private struct RichTextRulerBackground: View {
-    let theme: SyntaxTheme
-    let width: CGFloat
-    var sidebarClosed: Bool = false
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            // Match the code editor's gutter: a frosted material beneath the ruler
-            // tint (at reduced opacity) so the richtext ruler reads as the same glass
-            // surface — not a darker opaque band. The code gutter composites
-            // `.ultraThinMaterial` + `backgroundColor.withAlphaComponent(1)`
-            // at 0.86 opacity; keep that exact recipe here.
-            Rectangle().fill(.ultraThinMaterial)
-            Color(nsColor: theme.rulerBackground.withAlphaComponent(1)).opacity(0.86)
-            Color(nsColor: theme.rulerSeparator).frame(width: 1).frame(maxHeight: .infinity)
-        }
-        .frame(width: width)
-        .frame(maxHeight: .infinity)
-        .mask { edgeMask }
-        .allowsHitTesting(false)
-    }
-
-    /// Matches the code editor's gutter: with the file browser closed the ruler
-    /// becomes the leftmost surface and fades in beneath the transparent titlebar;
-    /// with the sidebar open it stays solid for continuity with that surface.
-    @ViewBuilder
-    private var edgeMask: some View {
-        if sidebarClosed {
-            VStack(spacing: 0) {
-                Color.clear.frame(height: 28)
-                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 44)
-                Color.black
-            }
-        } else {
-            Color.black
         }
     }
 }

@@ -260,6 +260,65 @@ extension SyntaxTheme {
 
 // MARK: - Focus-stable Liquid Glass
 
+/// Window key state, published into the view tree.
+///
+/// Liquid Glass has an *inactive* appearance: while the window is not key its
+/// frost turns lighter and drains toward grey. A low-alpha pigment laid over that
+/// frost survives, but the hue is washed out — the pane reads colourless exactly
+/// when the window loses focus. Knowing the state lets the pigment answer.
+private struct WindowIsKeyKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var windowIsKey: Bool {
+        get { self[WindowIsKeyKey.self] }
+        set { self[WindowIsKeyKey.self] = newValue }
+    }
+}
+
+/// Reports the hosting window's key state (and keeps reporting it).
+struct WindowKeyObserver: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = ProbeView()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? ProbeView)?.onChange = onChange
+        (nsView as? ProbeView)?.report()
+    }
+
+    final class ProbeView: NSView {
+        var onChange: ((Bool) -> Void)?
+        private var observers: [NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+            guard let window else { report(); return }
+            let center = NotificationCenter.default
+            observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification,
+                                                object: window, queue: .main) { [weak self] _ in
+                self?.onChange?(true)
+            })
+            observers.append(center.addObserver(forName: NSWindow.didResignKeyNotification,
+                                                object: window, queue: .main) { [weak self] _ in
+                self?.onChange?(false)
+            })
+            report()
+        }
+
+        func report() {
+            onChange?(window?.isKeyWindow ?? true)
+        }
+    }
+}
+
 /// Frost and pigment, kept in two layers on purpose.
 ///
 /// `glassEffect(.regular.tint(_:))` hands the colour to the *glass layer* itself,
@@ -271,6 +330,11 @@ extension SyntaxTheme {
 /// SwiftUI layer that no focus transition touches — the same reason the line-number
 /// gutter, drawn that way all along, never loses its pigment.
 ///
+/// Order matters as much as separation: the frost is attached to its own overlay
+/// view, the pigment to the *next* overlay, so the hue is never a child of the
+/// glass-bearing view. And because an inactive window's frost lightens, the
+/// pigment gains weight while the window is not key instead of going pale.
+///
 /// The glass is *not* overpainted: the pigment is a fraction of the accent
 /// (see `paneTintStrength`), so the frost, the refraction and the desktop behind
 /// it all still read through.
@@ -279,10 +343,12 @@ private struct PigmentedGlass<S: Shape>: ViewModifier {
     let tint: Color
     let shape: S
 
+    @Environment(\.windowIsKey) private var windowIsKey
+
     func body(content: Content) -> some View {
         content
-            .glassEffect(.regular, in: shape)
-            .overlay { shape.fill(tint) }
+            .overlay { Color.clear.glassEffect(.regular, in: shape) }
+            .overlay { shape.fill(tint).opacity(windowIsKey ? 1 : 1.85) }
     }
 }
 
@@ -325,17 +391,23 @@ struct EditorContainerView: View {
     /// shown as a percentage of the 13pt default. Nil while hidden.
     @State private var fontSizeHudPercent: Int? = nil
     @State private var fontSizeHudTask: Task<Void, Never>? = nil
+    /// Whether the hosting window is key. Published into the tree so the pane
+    /// pigment can answer the glass's inactive (drained) appearance.
+    @State private var windowIsKey = true
 
 
     /// Resolves the line-number gutter geometry + colors from the active theme
     /// and the document's resolved editor font.
     static func makeGutter(document: EditorDocumentModel, theme: SyntaxTheme,
-                           baseFont: NSFont = SyntaxOracle.shared.baseFont) -> EditorGutterStyle {
+                           baseFont: NSFont = SyntaxOracle.shared.baseFont,
+                           lineCount override: Int? = nil) -> EditorGutterStyle {
         // Smaller than the editor face by default; themes may pin an absolute size.
         let numberFont = EditorGutterStyle.rulerFont(for: baseFont, pinnedSize: theme.rulerFontSize)
 
         // Lightweight cached line count — no full-string split on every keystroke.
-        let lineCount = max(document.lineCount, 1)
+        // The chrome passes its published mirror as `override`: it must see the
+        // same width the surface draws, even before the document notifies.
+        let lineCount = max(override ?? document.lineCount, 1)
         let digits = max(2, String(lineCount).count)
         let numberWidth = (String(repeating: "8", count: digits) as NSString)
             .size(withAttributes: [.font: numberFont]).width
@@ -343,13 +415,17 @@ struct EditorContainerView: View {
         // number gap (12) + fold gutter (14) to their right, plus a small left
         // inset so the widest number never kisses the sidebar edge. Grows with
         // the digit count of the largest line number.
-        // "Hide Line Numbers" collapses the whole gutter column to zero.
-        let width = EditorDisplaySettings.shared.showLineNumbers
+        // "Hide Line Numbers" keeps the marker lane (fold + annotation gutter)
+        // but stops drawing digits — the column must not collapse, or folds and
+        // future annotation markers would have nowhere to sit.
+        let showsNumbers = EditorDisplaySettings.shared.showLineNumbers
+        let width = showsNumbers
             ? ceil(EditorGutterStyle.numberLeftPadding + numberWidth + 12 + 14)
-            : 0
+            : EditorGutterStyle.markerColumnWidth
 
         return EditorGutterStyle(
             width: width,
+            showsNumbers: showsNumbers,
             font: numberFont,
             // Exact per-line pitch, measured from a real TextKit layout rather than
             // `defaultLineHeight + lineSpacing` (which is off by ~1pt/line for faces
@@ -386,11 +462,36 @@ struct EditorContainerView: View {
     /// edge. The title and the tab strip align relative to it, so both track the
     /// gutter as the digit count of the largest line number grows.
     private var gutterWidth: CGFloat {
-        guard EditorDisplaySettings.shared.showLineNumbers else { return 0 }
+        // The diff surface numbers twice (old + new side); its leading column is
+        // wider than any code gutter and grows with *its* line numbers.
+        if let diff = tabs.activeDiffTab {
+            return DiffSurface.leadingGutterWidth(for: diff.document)
+        }
+        // Rich text and images own a ruler column of their own: the chrome must
+        // clear it exactly like a number gutter.
+        if let controller = tabs.activeTab?.controller {
+            if controller.imagePreview.isActive { return ImagePreviewSurface.rulerColumnWidth }
+            if controller.richDocument.active { return RichTextSurface.rulerColumnWidth }
+        }
+        guard EditorDisplaySettings.shared.showLineNumbers else {
+            // The marker lane survives hidden numbers — the title/tab strip keep
+            // aligning to the column that is still there.
+            return EditorGutterStyle.markerColumnWidth
+        }
         guard let document = tabs.activeDocument else { return 44 }
-        return Self.makeGutter(document: document, theme: chrome.theme).width
+        return Self.makeGutter(document: document, theme: chrome.theme,
+                               lineCount: max(tabs.activeLineCount, document.lineCount)).width
     }
 
+
+    /// Surfaces that paint the sidebar band themselves: the diff, the rich-text
+    /// ruler column and the image ruler column all span the window edge like the
+    /// code surface does. Frosting that band a second time would grey the accent.
+    private var surfaceDrawsOwnLeadingBand: Bool {
+        if tabs.activeDiffTab != nil { return true }
+        guard let controller = tabs.activeTab?.controller else { return false }
+        return controller.richDocument.active || controller.imagePreview.isActive
+    }
 
     /// The active document's incremental-search model — `nil` whenever the
     /// visible surface owns no searchable text (entity/diff tabs, image, HTML,
@@ -441,7 +542,10 @@ struct EditorContainerView: View {
                         .id(diff.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let entity = tabs.activeEntityTab {
-                    EntityTabSurface(tab: entity)
+                    EntityTabSurface(
+                        tab: entity,
+                        topInset: EditorChromeMetrics.chromeInset(showsTabBar: showsTabBar)
+                    )
                         .id(entity.id)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let tab = tabs.activeTab {
@@ -486,7 +590,18 @@ struct EditorContainerView: View {
                     // Surfaces that stop short of the band (diff, entity, image,
                     // HTML, rich text) still need a backdrop here.
                     ZStack(alignment: .bottom) {
-                        if activeQuickSearch == nil {
+                        // The code surface and the diff surface each draw the
+                        // band+gutter plane themselves, between the scrolling
+                        // content and the numbers. A second material here would be
+                        // the seam again — only surfaces that stop short of the
+                        // band (entity, image, HTML, rich text) need this backdrop.
+                        // The code surface, the diff, the rich-text ruler and
+                        // the image ruler each draw the band+gutter plane
+                        // themselves. Only surfaces that stop short of the band
+                        // (entity, HTML preview) still need this backdrop — a
+                        // second material under a surface that already carries
+                        // one is exactly the seam.
+                        if activeQuickSearch == nil && !surfaceDrawsOwnLeadingBand {
                             // The leading band carries the *accent* glass tint —
                             // the same `.regular.tint` as the sheet's own surface
                             // below. A flat `sidebarBackground` paint here was a
@@ -732,6 +847,13 @@ struct EditorContainerView: View {
         // every band (title row, tab strip, sidebar sheet) shifts down by the
         // titlebar height and the offsets below can never reach the top edge.
         .ignoresSafeArea(.container, edges: [.top, .leading, .trailing])
+        // Focus state for the pane pigment. Zero-sized, invisible, inert.
+        .background(WindowKeyObserver { key in
+            if windowIsKey != key { windowIsKey = key }
+        }
+        .frame(width: 0, height: 0)
+        .allowsHitTesting(false))
+        .environment(\.windowIsKey, windowIsKey)
     }
 }
 
@@ -765,9 +887,26 @@ struct OracleFlipRoot: View {
                           inspector: chrome.pythiaVisible ? chrome.pythiaWidth : nil).leading
     }
 
+    /// Width of the active surface's leading number column, in window
+    /// coordinates. The title starts past it, so it must be the same value the
+    /// surface draws — variable with the digit count, and doubled for diffs.
     private var toolbarGutterWidth: CGFloat {
-        guard let tab = tabs.activeTab else { return 0 }
-        return EditorContainerView.makeGutter(document: tab.document, theme: chrome.theme).width
+        if let diff = tabs.activeDiffTab {
+            return DiffSurface.leadingGutterWidth(for: diff.document)
+        }
+        if let controller = tabs.activeTab?.controller {
+            if controller.imagePreview.isActive { return ImagePreviewSurface.rulerColumnWidth }
+            if controller.richDocument.active { return RichTextSurface.rulerColumnWidth }
+        }
+        guard tabs.activeEntityTab == nil else { return 0 }
+        guard EditorDisplaySettings.shared.showLineNumbers else {
+            return EditorGutterStyle.markerColumnWidth
+        }
+        guard let document = tabs.activeDocument else { return 0 }
+        return EditorContainerView.makeGutter(
+            document: document, theme: chrome.theme,
+            lineCount: max(tabs.activeLineCount, document.lineCount)
+        ).width
     }
 
     private var toolbarLayout: EditorToolbarLayout {
@@ -806,7 +945,10 @@ struct OracleFlipRoot: View {
         }
         .frame(width: toolbarLayout.titleWidth, alignment: .leading)
         .clipped()
-        .padding(.leading, chrome.sidebarVisible ? toolbarGutterWidth + 16 : 8)
+        // Always clear the gutter, open or folded: the number column sits at the
+        // window's leading edge in both states and widens with the digits of the
+        // largest line number.
+        .padding(.leading, toolbarGutterWidth + (chrome.sidebarVisible ? 16 : 8))
     }
 
     private var activeToolbarFileURL: URL? {
@@ -829,14 +971,12 @@ struct OracleFlipRoot: View {
         .help("Return to Editor")
     }
 
-    /// The Pythia companion glyph row, hosted in the native toolbar's centred
-    /// (principal) slot so the glyphs keep their breathing room instead of being
-    /// squeezed into the trailing corner cluster. Visible whenever Pythia is —
-    /// the trailing inspector, or the full-window oracle-only face.
+    /// Bounded companion row in the right-hand native toolbar. Its horizontal
+    /// scroll view must not negotiate an unbounded height or crowd the corners.
     private var toolbarCompanionPicker: some View {
         CompanionPicker(model: pythiaModel)
             .environment(\.pythiaPalette, ThemeRegistry.shared.current.pythia)
-            .frame(width: toolbarLayout.companionWidth)
+            .frame(width: toolbarLayout.companionWidth, height: 28)
     }
 
     /// The three-face Pythia view switch, lifted out of the panel into the native
@@ -902,13 +1042,6 @@ struct OracleFlipRoot: View {
                     oracleReturnButton
                 }
                 .sharedBackgroundVisibility(.hidden)
-                ToolbarItem(placement: .primaryAction) {
-                    HStack(spacing: 10) {
-                        toolbarModePicker
-                        toolbarCompanionPicker
-                    }
-                }
-                .sharedBackgroundVisibility(.hidden)
             } else {
                 // Breadcrumb + the single sliding sidebar toggle. Collapsed the
                 // slot is just the toggle (40pt); open it expands to ride the
@@ -938,29 +1071,28 @@ struct OracleFlipRoot: View {
                     toolbarTitle
                 }
                 .sharedBackgroundVisibility(.hidden)
-                ToolbarItem(placement: .primaryAction) {
+                ToolbarItem(placement: .automatic) {
                     EditorModeControls(tabs: tabs)
                 }
                 .sharedBackgroundVisibility(.hidden)
-                if chrome.pythiaVisible {
-                    ToolbarItem(placement: .primaryAction) {
-                        HStack(spacing: 8) {
-                            toolbarModePicker
-                            toolbarCompanionPicker
-                        }
-                        .fixedSize()
-                    }
-                    .sharedBackgroundVisibility(.hidden)
-                }
-                // Independent trailing item: companion content must never
-                // consume the corner buttons' layout allocation.
-                ToolbarItem(placement: .primaryAction) {
-                    PythiaCornerControls(chrome: chrome)
-                        .fixedSize()
-                        .layoutPriority(10)
-                }
-                .sharedBackgroundVisibility(.hidden)
             }
+            // On macOS primaryAction is leading, not trailing. A native
+            // flexible space followed by one automatic item anchors this group
+            // at the window's right edge, independent of inspector width/state.
+            ToolbarSpacer(.flexible, placement: .automatic)
+            ToolbarItem(id: "pythia-window-corner", placement: .automatic) {
+                HStack(spacing: 8) {
+                    if chrome.pythiaVisible || chrome.oracleOnly {
+                        toolbarModePicker
+                    }
+                    if chrome.pythiaVisible && !chrome.oracleOnly {
+                        toolbarCompanionPicker
+                    }
+                    PythiaCornerControls(chrome: chrome)
+                }
+                .fixedSize()
+            }
+            .sharedBackgroundVisibility(.hidden)
         }
         // Per-pane safe-area bars own the progressive effect. Suppress only
         // the native toolbar fill through SwiftUI, never its private layers.
@@ -1047,14 +1179,16 @@ private struct EditorModeSurface: View {
 
     var body: some View {
         if imageModel.isActive {
-            ImagePreviewSurface(model: imageModel, theme: theme, topInset: topInset)
-                .padding(.leading, leading).padding(.trailing, trailing)
+            // Spans the window: the image surface owns its leading ruler column
+            // (band + glass + fade), so it must not be inset by the sidebar.
+            ImagePreviewSurface(model: imageModel, theme: theme,
+                                leading: leading, trailing: trailing, topInset: topInset)
         } else if htmlModel.isActive {
             HTMLPreviewSurface(model: htmlModel, theme: theme, topInset: topInset, onShowSource: editor.showHTMLSource)
                 .padding(.leading, leading).padding(.trailing, trailing)
         } else if rich.active {
-            RichTextSurface(document: rich, theme: theme, sidebarClosed: leading == 0, topInset: topInset)
-                .padding(.leading, leading).padding(.trailing, trailing)
+            RichTextSurface(document: rich, theme: theme,
+                            leading: leading, trailing: trailing, topInset: topInset)
         } else {
             codeSurface
         }
@@ -1072,7 +1206,8 @@ private struct EditorModeSurface: View {
                                    findReplace: editor.findReplace,
                                    showWrapColumn: showWrapColumn,
                                    wrapColumn: wrapColumn,
-                                   lineCount: document.lineCount, maxLineWidth: document.maxLineWidth)
+                                   lineCount: document.lineCount, maxLineWidth: document.maxLineWidth,
+                                   wordWrap: document.wordWrap, revision: document.revision)
     }
 }
 
@@ -1319,10 +1454,7 @@ private final class TitleMenuItem: NSMenuItem {
 }
 
 
-/// The Pythia pair — inspector toggle and full-window flip — now lives in the
-/// native toolbar's trailing (primaryAction) slot. The oracle-only face's way
-/// back is the toolbar's own return button, so this cluster renders nothing in
-/// that state.
+/// The Pythia pair is the last content in the native trailing toolbar group.
 private struct PythiaCornerControls: View {
     @ObservedObject var chrome: EditorChromeState
 
@@ -1334,14 +1466,14 @@ private struct PythiaCornerControls: View {
     }
 
     var body: some View {
-        if !chrome.oracleOnly {
+        Group {
             HStack(spacing: Metric.gap) {
-                cornerButton("arrow.up.left.and.arrow.down.right",
+                cornerButton(chrome.oracleOnly ? "arrow.uturn.backward" : "arrow.up.left.and.arrow.down.right",
                              accent: .secondary,
-                             help: "Transform window into Pythia") {
+                             help: chrome.oracleOnly ? "Return to Editor" : "Transform window into Pythia") {
                     chrome.onToggleOracleOnly?()
                 }
-                if chrome.pythiaVisible {
+                if chrome.pythiaVisible && !chrome.oracleOnly {
                     cornerButton("sidebar.right",
                                  accent: chrome.theme.pythia.accentColor,
                                  help: "Close Pythia sidebar") {
@@ -1351,7 +1483,8 @@ private struct PythiaCornerControls: View {
                     cornerButton("rectangle.righthalf.inset.filled",
                                  accent: chrome.theme.pythia.accentColor,
                                  help: "Open Pythia") {
-                        chrome.onTogglePythia?()
+                        if chrome.oracleOnly { chrome.onToggleOracleOnly?() }
+                        if !chrome.pythiaVisible { chrome.onTogglePythia?() }
                     }
                 }
             }

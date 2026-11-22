@@ -204,41 +204,85 @@ final class ImagePreviewModel: ObservableObject {
 struct ImagePreviewSurface: View {
     @ObservedObject var model: ImagePreviewModel
     let theme: SyntaxTheme
+    /// Sidebar band width. The surface spans the window so its ruler column can
+    /// carry the band itself, exactly like the code gutter.
+    var leading: CGFloat = 0
+    var trailing: CGFloat = 0
     /// Extra chrome height above the surface (the editor tab strip) that pushes
     /// the floating controls down when the tab bar is visible.
     var topInset: CGFloat = 0
+
+    /// Leading ruler column — shared with the window chrome so the title and the
+    /// tab strip clear it like a number gutter.
+    static let rulerColumnWidth: CGFloat = 46
 
     @State private var zoom: CGFloat = 1
     @State private var zoomBase: CGFloat = 1
     @State private var pan: CGSize = .zero
     @State private var panBase: CGSize = .zero
     @State private var cropMode = false
+    /// Ruler unit. Pixels are exact; millimetres are physical, at the image's
+    /// declared resolution when it has one, else the 96 dpi screen convention.
+    @State private var rulerUnit: ImageRulerUnit = .pixels
     @State private var cropRect: CGRect?
     @State private var dragStart: CGPoint?
     @State private var moveInitialRect: CGRect?
 
     var body: some View {
         GeometryReader { proxy in
-            let size = proxy.size
+            let column = Self.rulerColumnWidth
+            let size = CGSize(width: max(proxy.size.width - leading - column - trailing, 1),
+                              height: proxy.size.height)
             let fit = fitScale(for: size)
-            ZStack {
-                theme.editorBackgroundColor.ignoresSafeArea()
+            ZStack(alignment: .topLeading) {
+                // The field begins where the canvas begins. Under the ruler
+                // column it was a second surface beneath the band's glass — the
+                // sidebar region then read as its own pane.
+                theme.editorBackgroundColor
+                    .frame(width: max(proxy.size.width - leading - column, 1),
+                           height: proxy.size.height)
+                    .offset(x: leading + column)
 
-                if let image = model.image, let px = model.pixelSize, px.width > 0, px.height > 0 {
-                    if cropMode {
-                        cropLayer(image: image, pixel: px, size: size, fit: fit)
+                Group {
+                    if let image = model.image, let px = model.pixelSize, px.width > 0, px.height > 0 {
+                        if cropMode {
+                            cropLayer(image: image, pixel: px, size: size, fit: fit)
+                        } else {
+                            zoomLayer(image: image, pixel: px, size: size, fit: fit)
+                        }
                     } else {
-                        zoomLayer(image: image, pixel: px, size: size, fit: fit)
+                        errorState
+                            .frame(width: size.width, height: size.height)
                     }
-                } else {
-                    errorState
+                }
+                .frame(width: size.width, height: size.height)
+                .offset(x: leading + column)
+
+                // The leading column: sidebar band + measure column as one glass,
+                // the code surface's own recipe, with the image's rulers riding it.
+                LeadingChromeColumn(
+                    leading: leading,
+                    width: column,
+                    height: proxy.size.height,
+                    color: theme.rulerBackground,
+                    opacity: Double(ThemeSettings.shared.resolvedRulerBackgroundOpacity(for: theme)),
+                    separator: theme.rulerSeparator
+                ) {
+                    ImageRulerColumn(model: model, theme: theme, width: column,
+                                     height: proxy.size.height,
+                                     unit: rulerUnit,
+                                     zoom: zoom, pan: pan, fit: fit,
+                                     contentSize: size)
                 }
 
                 controls(size: size, fit: fit)
+                    .padding(.leading, leading + column)
+
                 if let notice = model.notice {
                     noticeBadge(notice)
                 }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
         .onChange(of: model.url) { _, _ in reset() }
     }
@@ -279,23 +323,19 @@ struct ImagePreviewSurface: View {
             .offset(pan)
     }
 
-    /// Opaque at the viewport edges, transparent toward the center — drives the
-    /// progressive blur so only the outer band shows the blurred image copy.
+    /// The code view's top ramp, applied to a blurred copy of the image: the
+    /// picture is fully frosted under the title/tab band, sharpens through the
+    /// band's own height, and is untouched below. Nothing blurs at the sides or
+    /// the bottom — this is the *scroll-edge* effect, not a vignette.
     private func edgeBlurMask(size: CGSize) -> some View {
-        let band: CGFloat = 64
-        return ZStack {
-            LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
-                .frame(height: band)
-                .frame(maxHeight: .infinity, alignment: .top)
-            LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
-                .frame(height: band)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-            LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-                .frame(width: band)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
-                .frame(width: band)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+        let ramp = EditorChromeMetrics.scrollEdgeBarHeight(topInset: topInset) + 36
+        return VStack(spacing: 0) {
+            LinearGradient(stops: [.init(color: .black, location: 0),
+                                   .init(color: .black, location: 0.34),
+                                   .init(color: .clear, location: 1)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(height: ramp)
+            Color.clear
         }
         .frame(width: size.width, height: size.height)
     }
@@ -405,6 +445,20 @@ struct ImagePreviewSurface: View {
                 Divider().frame(height: 16)
                 barButton("arrow.down.right.and.arrow.up.left", "Fit") { fitToScreen(fit: fit) }
                 barButton("1.square", "Actual size") { actualSize(fit: fit) }
+                Divider().frame(height: 16)
+                Menu {
+                    ForEach(ImageRulerUnit.allCases) { unit in
+                        Button(unit.label) { rulerUnit = unit }
+                    }
+                } label: {
+                    Image(systemName: "ruler")
+                        .font(.system(size: 12, weight: .medium))
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Ruler unit")
                 Divider().frame(height: 16)
                 barButton("crop", "Crop") { toggleCrop() }
                     .foregroundStyle(cropMode ? Color(nsColor: .controlAccentColor) : Color.secondary)
@@ -570,5 +624,105 @@ private struct CropMask: Shape {
         path.addRect(outer)
         path.addRect(rect)
         return path
+    }
+}
+// MARK: - Rulers
+
+/// What the image's side ruler counts.
+enum ImageRulerUnit: String, CaseIterable, Identifiable {
+    /// Device-independent points of the picture itself, i.e. image pixels.
+    case pixels
+    /// Physical millimetres at the image's resolution (96 dpi fallback).
+    case millimeters
+
+    var id: String { rawValue }
+    var label: String { self == .pixels ? "Pixels" : "Millimetres" }
+
+    /// A length in image pixels, rendered in this unit.
+    func value(forPixels pixels: CGFloat) -> CGFloat {
+        switch self {
+        case .pixels: return pixels
+        case .millimeters: return pixels * 25.4 / 96
+        }
+    }
+
+    func label(forPixels pixels: CGFloat) -> String {
+        let v = value(forPixels: pixels)
+        return v >= 100 ? String(format: "%.0f", v) : String(format: "%.0f", v)
+    }
+}
+
+/// The image's measure column: a tick ruler that follows the picture's own
+/// transform, so a tick always names the pixel it points at — even while the
+/// image is zoomed and panned. Rides the shared leading column, so it is the code
+/// gutter's glass and fade, with a ruler where the numbers would be.
+private struct ImageRulerColumn: View {
+    @ObservedObject var model: ImagePreviewModel
+    let theme: SyntaxTheme
+    let width: CGFloat
+    let height: CGFloat
+    let unit: ImageRulerUnit
+    let zoom: CGFloat
+    let pan: CGSize
+    let fit: CGFloat
+    let contentSize: CGSize
+
+    var body: some View {
+        Canvas { context, size in
+            guard let pixel = model.pixelSize, pixel.width > 0, pixel.height > 0,
+                  fit > 0, zoom > 0 else { return }
+            let scale = fit * zoom                       // points per image pixel
+            let imageHeight = pixel.height * scale
+            let originY = contentSize.height / 2 - imageHeight / 2 + pan.height
+
+            let minor = step(minimum: 7 / scale)          // unlabelled
+            let major = step(minimum: 44 / scale)         // labelled
+
+            let minorColor = Color(nsColor: theme.rulerForeground).opacity(0.20)
+            let majorColor = Color(nsColor: theme.rulerForeground).opacity(0.48)
+            let labelColor = Color(nsColor: theme.rulerForeground).opacity(0.62)
+
+            // Only the visible band of the picture is walked: a 6000 px scan at
+            // high zoom must not cost 6000 strokes.
+            let first = max(0, Int(floor((0 - originY) / (minor * scale))))
+            let last = min(Int(ceil(pixel.height / minor)),
+                           Int(ceil((size.height - originY) / (minor * scale))))
+
+            guard first <= last else { return }
+
+            for index in first...last {
+                let pixels = CGFloat(index) * minor
+                guard pixels <= pixel.height else { break }
+                let y = originY + pixels * scale
+                guard y >= -1, y <= size.height + 1 else { continue }
+
+                let isMajor = pixels.truncatingRemainder(dividingBy: major) < 0.001
+                let length: CGFloat = isMajor ? 12 : 5
+                var path = Path()
+                path.move(to: CGPoint(x: size.width - 2 - length, y: y))
+                path.addLine(to: CGPoint(x: size.width - 2, y: y))
+                context.stroke(path, with: .color(isMajor ? majorColor : minorColor),
+                               lineWidth: isMajor ? 1.1 : 1)
+
+                if isMajor {
+                    context.draw(
+                        Text(unit.label(forPixels: pixels))
+                            .font(.system(size: 8.5, design: .monospaced))
+                            .foregroundStyle(labelColor),
+                        at: CGPoint(x: size.width - 16, y: y),
+                        anchor: .trailing
+                    )
+                }
+            }
+        }
+        .frame(width: width, height: height)
+        .clipped()
+    }
+
+    /// Smallest "nice" step (1-2-5 series) at or above `minimum` image pixels.
+    private func step(minimum: CGFloat) -> CGFloat {
+        let series: [CGFloat] = [1, 2, 5, 10, 20, 25, 50, 100, 200, 250,
+                                 500, 1000, 2000, 2500, 5000, 10000]
+        return series.first { $0 >= minimum } ?? series[series.count - 1]
     }
 }

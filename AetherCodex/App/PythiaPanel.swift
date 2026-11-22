@@ -1818,7 +1818,7 @@ struct PythiaPanel: View {
     /// Top inset for the header row. 28 clears the traffic lights when Pythia
     /// sits at the window top (oracle-only flip face); the trailing inspector
     /// passes a larger value that clears the full-width tab strip instead.
-    var topClearance: CGFloat = 28
+    var topClearance: CGFloat = EditorChromeMetrics.titleBarBand
     /// Absolute trailing inset for the header row, measured from the panel's
     /// own trailing edge. The inspector is overlaid by the window-corner control
     /// pair, so it reserves their footprint (not *additional* space on top of
@@ -1863,7 +1863,7 @@ struct PythiaPanel: View {
             // starts right beneath the transparent chrome instead of being
             // pushed down by the old in-panel header.
             Spacer(minLength: 0)
-              .frame(height: topClearance + 2)
+              .frame(height: max(topClearance, EditorChromeMetrics.titleBarBand))
 
             if aetherContext.root != nil {
                 HStack(spacing: 6) {
@@ -1872,7 +1872,7 @@ struct PythiaPanel: View {
                     debugGlyphButton
                 }
                 .padding(.horizontal, 10)
-                .padding(.bottom, 2)
+                .padding(.vertical, 6)
             }
 
             Divider().opacity(0.4)

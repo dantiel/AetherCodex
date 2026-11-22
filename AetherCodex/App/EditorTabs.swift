@@ -29,10 +29,19 @@ final class EditorTab: Identifiable, ObservableObject {
     /// tab bar and the window title never fight over the same closure.
     var onTitleChange: ((String) -> Void)?
 
+    /// Forwarded to `TabsModel` for the *active* tab only. The window chrome
+    /// (title and tab-strip offsets) tracks the line-number gutter, whose width
+    /// follows the digit count of the largest number — the chrome does not observe
+    /// the document, so this is the signal that keeps it in step.
+    var onLineCountChange: ((Int) -> Void)?
+
     init() {
         controller = EditorViewController()
         document = EditorDocumentModel()
         _ = controller.view  // force-load so viewDidLoad wires the text view + storage
+        // Seed the resolved wrap state: viewDidLoad already ran applyWordWrap,
+        // before this closure could exist.
+        document.wordWrap = controller.effectiveWordWrap
 
         controller.onDocumentChange = { [weak self] attributedString in
             guard let self else { return }
@@ -45,8 +54,15 @@ final class EditorTab: Identifiable, ObservableObject {
             // whether or not the value changed, so assigning unconditionally
             // re-evaluated the whole editor surface (gutter, overlays, scroll
             // extent) per character. Publish only a real shape change.
-            if self.document.lineCount != lineCount { self.document.lineCount = lineCount }
+            if self.document.lineCount != lineCount {
+                self.document.lineCount = lineCount
+                self.onLineCountChange?(lineCount)
+            }
             if self.document.maxLineWidth != maxLineWidth { self.document.maxLineWidth = maxLineWidth }
+        }
+        controller.onWordWrapChange = { [weak self] wrap in
+            guard let self, self.document.wordWrap != wrap else { return }
+            self.document.wordWrap = wrap
         }
         controller.onTitleChange = { [weak self] title in
             self?.title = title
@@ -86,6 +102,11 @@ final class TabsModel: ObservableObject {
 
     /// Aggregated status of the active document — observed by the bottom strip.
     let status = EditorStatusModel()
+
+    /// Published mirror of the active document's line count: the window chrome
+    /// re-solves its gutter offsets when the file crosses 9, 99, 999 … lines
+    /// without observing every document in the tab list.
+    @Published private(set) var activeLineCount: Int = 1
 
     /// Pushed whenever the active tab's title changes or the active tab switches.
     var onActiveTitleChange: ((String) -> Void)?
@@ -276,6 +297,10 @@ final class TabsModel: ObservableObject {
             guard let self, self.activeTabId == tab.id else { return }
             self.onActiveTitleChange?(title)
         }
+        tab.onLineCountChange = { [weak self] count in
+            guard let self, self.activeTabId == tab.id else { return }
+            if self.activeLineCount != count { self.activeLineCount = count }
+        }
     }
 
     /// Mirror the *visible* document into the bottom status strip. Only the
@@ -283,6 +308,11 @@ final class TabsModel: ObservableObject {
     /// language and nothing else, and a hidden file tab keeps its hook unwired
     /// (its own `isDirty` still tracks, the strip simply does not listen).
     private func refreshStatus() {
+        // The active surface's line-number gutter is derived from this mirror.
+        if activeDiffTab == nil, activeEntityTab == nil {
+            let count = max(activeTab?.document.lineCount ?? 1, 1)
+            if activeLineCount != count { activeLineCount = count }
+        }
         if activeDiffTab != nil {
             status.set(language: "Diff")
             return
